@@ -3,8 +3,13 @@ venv/
 __pycache__/
 *.pyc
 db.sqlite3
-logs/
 
 # Django migrations
-**/migrations/*.py
+**/migrations/*
 !**/migrations/__init__.py
+
+# Log files and folders
+*.log
+logs/
+**/logs/
+

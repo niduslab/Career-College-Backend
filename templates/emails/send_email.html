@@ -1,0 +1,49 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            line-height: 1.6;
+            color: #333;
+        }
+        .container {
+            max-width: 600px;
+            margin: 0 auto;
+            padding: 20px;
+            border: 1px solid #ddd;
+            border-radius: 5px;
+        }
+        .otp-code {
+            font-size: 32px;
+            font-weight: bold;
+            color: #4CAF50;
+            letter-spacing: 5px;
+            text-align: center;
+            padding: 20px;
+            background-color: #f5f5f5;
+            border-radius: 5px;
+            margin: 20px 0;
+        }
+        .warning {
+            color: #ff5722;
+            font-size: 14px;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h2>{{ greeting }}</h2>
+        <p>Hello,</p>
+        <p>{{ message }}</p>
+        
+        <div class="otp-code">{{ otp_code }}</div>
+        
+        <p class="warning">⚠️ This OTP will expire in 2 minutes.</p>
+        
+        <p>If you didn't make this request, please ignore this email or contact support.</p>
+        
+        <p>Best regards,<br>NidusService Team</p>
+    </div>
+</body>
+</html>

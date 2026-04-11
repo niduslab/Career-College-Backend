@@ -19,33 +19,52 @@ Backend API project built with Django and Django REST Framework (DRF).
 ## Project Setup
 
 1. Clone the repository and open it in your terminal.
-2. Create a virtual environment:
+2. Run setup commands in Bash.
 
-   python -m venv .venv
+```bash
+# Create virtual environment
+python -m venv .venv
 
-3. Activate the virtual environment:
+# Activate virtual environment
+# Git Bash (Windows)
+source .venv/Scripts/activate
 
-   Windows (PowerShell):
-   .\.venv\Scripts\Activate.ps1
+# macOS/Linux Bash
+# source .venv/bin/activate
 
-   Git Bash:
-   source .venv/Scripts/activate
+# Install dependencies
+python -m pip install -r requirements.txt
 
-4. Install dependencies:
+# Apply migrations
+python manage.py migrate
 
-   python -m pip install -r requirements.txt
+# Run development server
+python manage.py runserver
+```
 
-5. Create environment file from sample:
+## .env Setup
 
-   Copy .env.example to .env
+1. Create a local environment file from the template:
 
-6. Apply migrations:
+```bash
+cp .env.example .env
+```
 
-   python manage.py migrate
+2. Open .env and set required values:
 
-7. Run the development server:
+- `SECRET_KEY`: use a long random string unique to your machine.
+- `DEBUG`: use `True` for local development.
+- `ALLOWED_HOSTS`: keep `127.0.0.1,localhost` for local development.
+- `DB_ENGINE` and `DB_NAME`: keep defaults for SQLite unless you are using another database.
+- `EMAIL_*` and `DEFAULT_FROM_EMAIL`: set your SMTP details if testing real email delivery.
+- `OTP_RATE_LIMIT`: keep default unless you need stricter/looser local limits.
 
-   python manage.py runserver
+3. Local email testing options:
+
+- Option 1 (real email): keep SMTP values from `.env.example` and fill credentials.
+- Option 2 (no real email): set `EMAIL_BACKEND=django.core.mail.backends.console.EmailBackend` to print OTP/email content in terminal.
+
+4. Never commit `.env`; only commit `.env.example` when keys change.
 
 ## Base API URL
 
@@ -105,16 +124,24 @@ Sample values are provided in .env.example.
 ## Useful Commands
 
 - Create migrations:
-  python manage.py makemigrations
+   ```bash
+   python manage.py makemigrations
+   ```
 
 - Apply migrations:
-  python manage.py migrate
+   ```bash
+   python manage.py migrate
+   ```
 
 - Create superuser:
-  python manage.py createsuperuser
+   ```bash
+   python manage.py createsuperuser
+   ```
 
 - Run checks:
-  python manage.py check
+   ```bash
+   python manage.py check
+   ```
 
 ## Notes
 

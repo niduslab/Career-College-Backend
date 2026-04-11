@@ -538,3 +538,213 @@ class ChangePasswordSerializer(serializers.Serializer):
             raise
         except Exception:
             raise serializers.ValidationError({'detail': 'Unable to update password right now.'})
+
+
+# ──────────────────────────────────────────────────────────────
+# Profile Serializers
+# ──────────────────────────────────────────────────────────────
+
+from auth.models import (
+    Education,
+    InstructorProfile,
+    LearnerProfile,
+    PartnerInstitutionProfile,
+    WorkExperience,
+)
+
+
+class EducationSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = Education
+        fields = [
+            'id', 'degree', 'field_of_study', 'institution',
+            'start_date', 'end_date', 'is_current',
+            'created_at', 'updated_at',
+        ]
+        read_only_fields = ['id', 'created_at', 'updated_at']
+
+    def validate(self, attrs):
+        is_current = attrs.get('is_current', getattr(self.instance, 'is_current', False))
+        end_date = attrs.get('end_date', getattr(self.instance, 'end_date', None))
+        start_date = attrs.get('start_date', getattr(self.instance, 'start_date', None))
+
+        if is_current and end_date:
+            raise serializers.ValidationError({'end_date': 'Current education should not have an end date.'})
+        if not is_current and not end_date:
+            raise serializers.ValidationError({'end_date': 'End date is required for completed education.'})
+        if end_date and start_date and end_date < start_date:
+            raise serializers.ValidationError({'end_date': 'End date cannot be before start date.'})
+        return attrs
+
+
+class WorkExperienceSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = WorkExperience
+        fields = [
+            'id', 'job_title', 'company', 'location',
+            'start_date', 'end_date', 'is_current',
+            'created_at', 'updated_at',
+        ]
+        read_only_fields = ['id', 'created_at', 'updated_at']
+
+    def validate(self, attrs):
+        is_current = attrs.get('is_current', getattr(self.instance, 'is_current', False))
+        end_date = attrs.get('end_date', getattr(self.instance, 'end_date', None))
+        start_date = attrs.get('start_date', getattr(self.instance, 'start_date', None))
+
+        if is_current and end_date:
+            raise serializers.ValidationError({'end_date': 'Current position should not have an end date.'})
+        if not is_current and not end_date:
+            raise serializers.ValidationError({'end_date': 'End date is required for past positions.'})
+        if end_date and start_date and end_date < start_date:
+            raise serializers.ValidationError({'end_date': 'End date cannot be before start date.'})
+        return attrs
+
+
+# ── Owner (private) profile serializers ──────────────────────
+
+class LearnerProfileSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = LearnerProfile
+        exclude = ['user']
+        read_only_fields = ['id', 'created_at', 'updated_at']
+
+
+class InstructorProfileSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = InstructorProfile
+        exclude = ['user']
+        read_only_fields = [
+            'id', 'created_at', 'updated_at',
+            'is_verified', 'affiliated_institution',
+            'affiliation_status', 'affiliated_at', 'onboarding_source',
+        ]
+
+
+class PartnerInstitutionProfileSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = PartnerInstitutionProfile
+        exclude = ['user']
+        read_only_fields = ['id', 'slug', 'created_at', 'updated_at', 'is_verified']
+
+
+class UserBasicSerializer(serializers.ModelSerializer):
+    """Minimal user info included in profile responses."""
+    class Meta:
+        model = User
+        fields = [
+            'id', 'email', 'full_name', 'name_slug', 'user_type',
+            'is_email_verified', 'is_verified', 'registration_date',
+        ]
+        read_only_fields = fields
+
+
+# ── Public profile serializers (read-only, limited fields) ───
+
+class PublicEducationSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = Education
+        fields = ['degree', 'field_of_study', 'institution', 'start_date', 'end_date', 'is_current']
+
+
+class PublicWorkExperienceSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = WorkExperience
+        fields = ['job_title', 'company', 'location', 'start_date', 'end_date', 'is_current']
+
+
+class PublicLearnerProfileSerializer(serializers.ModelSerializer):
+    full_name = serializers.CharField(source='user.full_name', read_only=True)
+    slug = serializers.CharField(source='user.name_slug', read_only=True)
+    education = serializers.SerializerMethodField()
+    work_experience = serializers.SerializerMethodField()
+
+    class Meta:
+        model = LearnerProfile
+        fields = [
+            'full_name', 'slug', 'profile_photo', 'headline', 'bio',
+            'city', 'state', 'country', 'experience_level',
+            'learning_goal', 'interests', 'preferred_language',
+            'linkedin_url', 'github_url', 'website_url',
+            'education', 'work_experience',
+        ]
+
+    def get_education(self, obj):
+        return PublicEducationSerializer(obj.user.education_history.all(), many=True).data
+
+    def get_work_experience(self, obj):
+        return PublicWorkExperienceSerializer(obj.user.work_history.all(), many=True).data
+
+
+class PublicInstructorProfileSerializer(serializers.ModelSerializer):
+    full_name = serializers.CharField(source='user.full_name', read_only=True)
+    slug = serializers.CharField(source='user.name_slug', read_only=True)
+    education = serializers.SerializerMethodField()
+    work_experience = serializers.SerializerMethodField()
+
+    class Meta:
+        model = InstructorProfile
+        fields = [
+            'full_name', 'slug', 'profile_photo', 'headline', 'bio',
+            'city', 'state', 'country',
+            'specialization', 'years_of_experience',
+            'current_title', 'current_organization',
+            'linkedin_url', 'github_url', 'website_url',
+            'is_verified', 'is_accepting_students',
+            'education', 'work_experience',
+        ]
+
+    def get_education(self, obj):
+        return PublicEducationSerializer(obj.user.education_history.all(), many=True).data
+
+    def get_work_experience(self, obj):
+        return PublicWorkExperienceSerializer(obj.user.work_history.all(), many=True).data
+
+
+class PublicPartnerInstitutionProfileSerializer(serializers.ModelSerializer):
+    slug = serializers.CharField(read_only=True)
+
+    class Meta:
+        model = PartnerInstitutionProfile
+        fields = [
+            'institution_name', 'slug', 'logo', 'cover_image',
+            'tagline', 'description', 'institution_type', 'founded_year',
+            'city', 'state', 'country',
+            'contact_email', 'website_url', 'linkedin_url',
+            'is_verified',
+        ]
+
+
+# ── List serializers (compact, for browse pages) ─────────────
+
+class LearnerListSerializer(serializers.ModelSerializer):
+    full_name = serializers.CharField(source='user.full_name', read_only=True)
+    slug = serializers.CharField(source='user.name_slug', read_only=True)
+
+    class Meta:
+        model = LearnerProfile
+        fields = [
+            'full_name', 'slug', 'profile_photo', 'headline',
+            'country', 'experience_level',
+        ]
+
+
+class InstructorListSerializer(serializers.ModelSerializer):
+    full_name = serializers.CharField(source='user.full_name', read_only=True)
+    slug = serializers.CharField(source='user.name_slug', read_only=True)
+
+    class Meta:
+        model = InstructorProfile
+        fields = [
+            'full_name', 'slug', 'profile_photo', 'headline',
+            'country', 'specialization', 'is_verified',
+        ]
+
+
+class InstitutionListSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = PartnerInstitutionProfile
+        fields = [
+            'institution_name', 'slug', 'logo', 'tagline',
+            'institution_type', 'country', 'is_verified',
+        ]

@@ -58,6 +58,7 @@ INSTALLED_APPS = [
     'django_filters',
     # Local
     'auth.apps.AuthConfig',
+    'id_verification',
 ]
 
 MIDDLEWARE = [

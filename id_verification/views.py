@@ -1,0 +1,11 @@
+from id_verification.all_views import (
+    VerificationCreateView,
+    VerificationUpdateView,
+    VerificationSubmitView,
+    VerificationListView,
+    VerificationDetailView,
+    AdminVerificationListView,
+    AdminVerificationDetailView,
+    AdminVerificationReviewView,
+)
+

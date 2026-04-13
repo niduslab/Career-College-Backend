@@ -7,6 +7,15 @@ from auth.all_views import (
     ForgotPasswordView,
     ResetPasswordView,
     ChangePasswordView,
+    MyProfileView,
+    EducationListCreateView,
+    EducationDetailView,
+    WorkExperienceListCreateView,
+    WorkExperienceDetailView,
+    PublicProfileDetailView,
+    PublicLearnerListView,
+    PublicInstructorListView,
+    PublicInstitutionListView,
 )
 
 __all__ = [
@@ -18,4 +27,13 @@ __all__ = [
     'ForgotPasswordView',
     'ResetPasswordView',
     'ChangePasswordView',
+    'MyProfileView',
+    'EducationListCreateView',
+    'EducationDetailView',
+    'WorkExperienceListCreateView',
+    'WorkExperienceDetailView',
+    'PublicProfileDetailView',
+    'PublicLearnerListView',
+    'PublicInstructorListView',
+    'PublicInstitutionListView',
 ]

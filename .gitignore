@@ -13,3 +13,6 @@ db.sqlite3
 logs/
 **/logs/
 
+# Media uploads
+media/
+

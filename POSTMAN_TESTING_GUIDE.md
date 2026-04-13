@@ -680,7 +680,7 @@ Authorization: Bearer <access_token>
 
 | Key             | Type | Value |
 |-----------------|------|-------|
-| `profile_photo` | Text | *(leave empty)* |
+| `profile_photo` | File | *(leave empty)* |
 
 > Send the field with an empty value to clear the photo.
 

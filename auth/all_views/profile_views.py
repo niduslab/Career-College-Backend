@@ -1,5 +1,6 @@
 import logging
 
+from django.core.exceptions import ObjectDoesNotExist
 from django.shortcuts import get_object_or_404
 from rest_framework import status
 from rest_framework.permissions import AllowAny, IsAuthenticated
@@ -48,7 +49,10 @@ def _get_profile(user):
     if entry is None:
         return None, None
     attr, serializer_cls = entry
-    profile = getattr(user, attr, None)
+    try:
+        profile = getattr(user, attr)
+    except ObjectDoesNotExist:
+        profile = None
     return profile, serializer_cls
 
 
@@ -110,7 +114,14 @@ class MyProfileView(APIView):
                 {'success': False, 'message': 'Validation failed.', 'errors': serializer.errors},
                 status=status.HTTP_400_BAD_REQUEST,
             )
-        serializer.save()
+        try:
+            serializer.save()
+        except Exception:
+            logger.exception('Failed to update profile for user %s', user.pk)
+            return Response(
+                {'success': False, 'message': 'Failed to update profile. Please try again.'},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            )
         return Response(
             {'success': True, 'message': 'Profile updated successfully.', 'data': serializer.data},
             status=status.HTTP_200_OK,
@@ -149,7 +160,14 @@ class EducationListCreateView(APIView):
                 {'success': False, 'message': 'Validation failed.', 'errors': serializer.errors},
                 status=status.HTTP_400_BAD_REQUEST,
             )
-        serializer.save(user=request.user)
+        try:
+            serializer.save(user=request.user)
+        except Exception:
+            logger.exception('Failed to create education entry for user %s', request.user.pk)
+            return Response(
+                {'success': False, 'message': 'Failed to create education entry. Please try again.'},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            )
         return Response(
             {'success': True, 'message': 'Education entry created.', 'data': serializer.data},
             status=status.HTTP_201_CREATED,
@@ -189,7 +207,14 @@ class EducationDetailView(APIView):
                 {'success': False, 'message': 'Validation failed.', 'errors': serializer.errors},
                 status=status.HTTP_400_BAD_REQUEST,
             )
-        serializer.save()
+        try:
+            serializer.save()
+        except Exception:
+            logger.exception('Failed to update education entry pk=%s', obj.pk)
+            return Response(
+                {'success': False, 'message': 'Failed to update education entry. Please try again.'},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            )
         return Response(
             {'success': True, 'message': 'Education entry updated.', 'data': serializer.data},
             status=status.HTTP_200_OK,
@@ -197,7 +222,14 @@ class EducationDetailView(APIView):
 
     def delete(self, request, pk):
         obj = self._get_object(request, pk)
-        obj.delete()
+        try:
+            obj.delete()
+        except Exception:
+            logger.exception('Failed to delete education entry pk=%s', obj.pk)
+            return Response(
+                {'success': False, 'message': 'Failed to delete education entry. Please try again.'},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            )
         return Response(
             {'success': True, 'message': 'Education entry deleted.'},
             status=status.HTTP_200_OK,
@@ -236,7 +268,14 @@ class WorkExperienceListCreateView(APIView):
                 {'success': False, 'message': 'Validation failed.', 'errors': serializer.errors},
                 status=status.HTTP_400_BAD_REQUEST,
             )
-        serializer.save(user=request.user)
+        try:
+            serializer.save(user=request.user)
+        except Exception:
+            logger.exception('Failed to create work experience entry for user %s', request.user.pk)
+            return Response(
+                {'success': False, 'message': 'Failed to create work experience entry. Please try again.'},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            )
         return Response(
             {'success': True, 'message': 'Work experience entry created.', 'data': serializer.data},
             status=status.HTTP_201_CREATED,
@@ -276,7 +315,14 @@ class WorkExperienceDetailView(APIView):
                 {'success': False, 'message': 'Validation failed.', 'errors': serializer.errors},
                 status=status.HTTP_400_BAD_REQUEST,
             )
-        serializer.save()
+        try:
+            serializer.save()
+        except Exception:
+            logger.exception('Failed to update work experience entry pk=%s', obj.pk)
+            return Response(
+                {'success': False, 'message': 'Failed to update work experience entry. Please try again.'},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            )
         return Response(
             {'success': True, 'message': 'Work experience entry updated.', 'data': serializer.data},
             status=status.HTTP_200_OK,
@@ -284,7 +330,14 @@ class WorkExperienceDetailView(APIView):
 
     def delete(self, request, pk):
         obj = self._get_object(request, pk)
-        obj.delete()
+        try:
+            obj.delete()
+        except Exception:
+            logger.exception('Failed to delete work experience entry pk=%s', obj.pk)
+            return Response(
+                {'success': False, 'message': 'Failed to delete work experience entry. Please try again.'},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            )
         return Response(
             {'success': True, 'message': 'Work experience entry deleted.'},
             status=status.HTTP_200_OK,
@@ -316,7 +369,10 @@ class PublicProfileDetailView(APIView):
             )
 
         if user.user_type == 'learner':
-            profile = getattr(user, 'learner_profile', None)
+            try:
+                profile = user.learner_profile
+            except ObjectDoesNotExist:
+                profile = None
             if profile is None or not profile.is_profile_public:
                 return Response(
                     {'success': False, 'message': 'Profile not found.'},
@@ -324,7 +380,10 @@ class PublicProfileDetailView(APIView):
                 )
             data = PublicLearnerProfileSerializer(profile).data
         elif user.user_type == 'instructor':
-            profile = getattr(user, 'instructor_profile', None)
+            try:
+                profile = user.instructor_profile
+            except ObjectDoesNotExist:
+                profile = None
             if profile is None:
                 return Response(
                     {'success': False, 'message': 'Profile not found.'},
@@ -332,8 +391,11 @@ class PublicProfileDetailView(APIView):
                 )
             data = PublicInstructorProfileSerializer(profile).data
         elif user.user_type == 'partner_institution':
-            profile = getattr(user, 'partner_institution_profile', None)
-            if profile is None:
+            try:
+                profile = user.partner_institution_profile
+            except ObjectDoesNotExist:
+                profile = None
+            if profile is None or not profile.is_active:
                 return Response(
                     {'success': False, 'message': 'Profile not found.'},
                     status=status.HTTP_404_NOT_FOUND,

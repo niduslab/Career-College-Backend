@@ -419,11 +419,13 @@ class _PaginatedListMixin:
     def paginate(self, request, queryset, serializer_cls):
         paginator = StandardResultsSetPagination()
         page = paginator.paginate_queryset(queryset, request)
-        if page is not None:
-            serializer = serializer_cls(page, many=True)
-            return paginator.get_paginated_response(serializer.data)
-        serializer = serializer_cls(queryset, many=True)
-        return Response({'success': True, 'data': serializer.data}, status=status.HTTP_200_OK)
+        serializer = serializer_cls(page, many=True)
+        paginated_response = paginator.get_paginated_response(serializer.data)
+        paginated_response.data = {
+            'success': True,
+            'data': paginated_response.data,
+        }
+        return paginated_response
 
 
 class PublicLearnerListView(_PaginatedListMixin, APIView):

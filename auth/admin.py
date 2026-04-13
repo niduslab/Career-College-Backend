@@ -1,4 +1,3 @@
-from django import forms
 from django.contrib import admin
 from django.contrib.auth.admin import UserAdmin as BaseUserAdmin
 from django.contrib.auth.forms import UserChangeForm, UserCreationForm
@@ -68,6 +67,9 @@ class UserAdmin(BaseUserAdmin):
     search_fields = ('email', 'full_name', 'name_slug')
     readonly_fields = ('registration_date', 'updated_at', 'deleted_at')
     inlines = (EducationInline, WorkExperienceInline)
+
+    def get_queryset(self, request):
+        return User.objects.all_with_deleted()
 
     fieldsets = (
         ('Credentials', {'fields': ('email', 'password')}),

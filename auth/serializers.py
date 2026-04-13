@@ -10,6 +10,13 @@ from rest_framework import serializers
 from rest_framework_simplejwt.tokens import RefreshToken
 
 from auth.utils import validate_custom_password_strength
+from auth.models import (
+    Education,
+    InstructorProfile,
+    LearnerProfile,
+    PartnerInstitutionProfile,
+    WorkExperience,
+)
 
 User = get_user_model()
 
@@ -538,20 +545,6 @@ class ChangePasswordSerializer(serializers.Serializer):
             raise
         except Exception:
             raise serializers.ValidationError({'detail': 'Unable to update password right now.'})
-
-
-# ──────────────────────────────────────────────────────────────
-# Profile Serializers
-# ──────────────────────────────────────────────────────────────
-
-from auth.models import (
-    Education,
-    InstructorProfile,
-    LearnerProfile,
-    PartnerInstitutionProfile,
-    WorkExperience,
-)
-
 
 class EducationSerializer(serializers.ModelSerializer):
     class Meta:

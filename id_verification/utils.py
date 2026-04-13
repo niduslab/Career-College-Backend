@@ -21,3 +21,7 @@ def id_document_back_path(instance, filename):
 
 def selfie_path(instance, filename):
     return _slugify_upload(instance, filename, 'id_verification/selfies')
+
+
+def resume_path(instance, filename):
+    return _slugify_upload(instance, filename, 'id_verification/resumes')

@@ -9,6 +9,13 @@ import random
 import secrets
 import logging
 
+from auth.utils.upload_helpers import (
+    institution_cover_path,
+    institution_logo_path,
+    instructor_photo_path,
+    learner_photo_path,
+)
+
 logger = logging.getLogger(__name__)
 
 
@@ -40,6 +47,7 @@ class CustomUserManager(BaseUserManager):
         extra_fields.setdefault('is_staff', True)
         extra_fields.setdefault('is_superuser', True)
         extra_fields.setdefault('is_active', True)
+        extra_fields.setdefault('is_email_verified', True)
         extra_fields.setdefault('user_type', 'admin')
         extra_fields.setdefault('full_name', 'Super Admin')
         
@@ -375,7 +383,7 @@ class LearnerProfile(models.Model):
 
     # ── Personal info ──
     profile_photo = models.ImageField(
-        upload_to='learner_profiles/photos/', blank=True, null=True
+        upload_to=learner_photo_path, blank=True, null=True
     )
     headline = models.CharField(
         max_length=255, blank=True, default='',
@@ -431,6 +439,7 @@ class LearnerProfile(models.Model):
         db_table = 'learner_profiles'
         verbose_name = 'Learner Profile'
         verbose_name_plural = 'Learner Profiles'
+        ordering = ['-created_at']
         indexes = [
             # Public profile listings filtered by country
             models.Index(fields=['is_profile_public', 'country'], name='idx_learner_public_country'),
@@ -561,7 +570,7 @@ class InstructorProfile(models.Model):
 
     # ── Personal info ──
     profile_photo = models.ImageField(
-        upload_to='instructor_profiles/photos/', blank=True, null=True
+        upload_to=instructor_photo_path, blank=True, null=True
     )
     headline = models.CharField(
         max_length=255, blank=True, default='',
@@ -640,6 +649,7 @@ class InstructorProfile(models.Model):
         db_table = 'instructor_profiles'
         verbose_name = 'Instructor Profile'
         verbose_name_plural = 'Instructor Profiles'
+        ordering = ['-created_at']
         indexes = [
             # Verified instructor listings
             models.Index(fields=['is_verified', 'is_accepting_students'], name='idx_instr_verified_accept'),
@@ -679,10 +689,10 @@ class PartnerInstitutionProfile(models.Model):
 
     # ── Branding ──
     logo = models.ImageField(
-        upload_to='partner_institutions/logos/', blank=True, null=True
+        upload_to=institution_logo_path, blank=True, null=True
     )
     cover_image = models.ImageField(
-        upload_to='partner_institutions/covers/', blank=True, null=True
+        upload_to=institution_cover_path, blank=True, null=True
     )
     institution_name = models.CharField(max_length=255)
     slug = models.SlugField(max_length=255, unique=True, blank=True, db_index=True)
@@ -732,6 +742,7 @@ class PartnerInstitutionProfile(models.Model):
         db_table = 'partner_institution_profiles'
         verbose_name = 'Partner Institution Profile'
         verbose_name_plural = 'Partner Institution Profiles'
+        ordering = ['-created_at']
         indexes = [
             # Active verified institution listings
             models.Index(fields=['is_verified', 'is_active'], name='idx_partner_verified_active'),

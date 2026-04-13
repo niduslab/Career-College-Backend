@@ -19,6 +19,7 @@ class VerificationCreateSerializer(serializers.ModelSerializer):
             'document_front',
             'document_back',
             'selfie',
+            'resume',
         )
         extra_kwargs = {f: {'required': False} for f in fields}
 
@@ -44,6 +45,7 @@ class VerificationUpdateSerializer(serializers.ModelSerializer):
             'document_front',
             'document_back',
             'selfie',
+            'resume',
         )
         extra_kwargs = {f: {'required': False} for f in fields}
 
@@ -66,6 +68,7 @@ class VerificationDetailSerializer(serializers.ModelSerializer):
             'document_front',
             'document_back',
             'selfie',
+            'resume',
             'status',
             'rejection_reason',
             'action_required_reason',
@@ -120,6 +123,7 @@ class AdminVerificationDetailSerializer(serializers.ModelSerializer):
             'document_front',
             'document_back',
             'selfie',
+            'resume',
             'status',
             'rejection_reason',
             'action_required_reason',

@@ -8,6 +8,7 @@ from django.utils import timezone
 from id_verification.utils import (
     id_document_front_path,
     id_document_back_path,
+    resume_path,
     selfie_path,
 )
 
@@ -82,6 +83,12 @@ class IdentityVerification(models.Model):
         upload_to=selfie_path,
         blank=True,
         help_text='Selfie holding the identity document',
+    )
+    resume = models.FileField(
+        upload_to=resume_path,
+        blank=True,
+        null=True,
+        help_text='Resume / CV document (PDF recommended)',
     )
 
     # ── Status lifecycle ──

@@ -26,6 +26,39 @@ def _require_instructor(request):
     return None
 
 
+def _check_profile_completeness(user):
+    """
+    Check if instructor profile is complete.
+    Returns (is_complete: bool, missing_fields: list).
+    """
+    try:
+        profile = user.instructor_profile
+    except Exception:
+        return False, ['Profile does not exist. Please create your profile first.']
+
+    required_fields = {
+        'headline': 'Headline is required.',
+        'bio': 'Bio is required.',
+        'specialization': 'At least one specialization is required.',
+        'years_of_experience': 'Years of experience is required.',
+        'current_title': 'Current title is required.',
+    }
+    missing = {}
+
+    for field, message in required_fields.items():
+        value = getattr(profile, field, None)
+        if field == 'years_of_experience':
+            if value is None or value <= 0:
+                missing[field] = message
+        elif isinstance(value, list):
+            if len(value) == 0:
+                missing[field] = message
+        elif not value or (isinstance(value, str) and not value.strip()):
+            missing[field] = message
+
+    return len(missing) == 0, missing
+
+
 class VerificationCreateView(APIView):
     """
     POST → Create a new draft verification request.
@@ -116,6 +149,18 @@ class VerificationSubmitView(APIView):
         err = _require_instructor(request)
         if err:
             return err
+
+        # Check if instructor profile is complete
+        is_complete, missing_fields = _check_profile_completeness(request.user)
+        if not is_complete:
+            return Response(
+                {
+                    'success': False,
+                    'message': 'Your profile must be complete before submitting for verification.',
+                    'errors': {'profile': missing_fields},
+                },
+                status=status.HTTP_400_BAD_REQUEST,
+            )
 
         verification = get_object_or_404(
             IdentityVerification,

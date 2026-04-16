@@ -31,7 +31,15 @@ class VerifyOTPView(APIView):
     
     def post(self, request):
         serializer = VerifyOTPSerializer(data=request.data)
-        serializer.is_valid(raise_exception=True)
+        if not serializer.is_valid():
+            return Response(
+                {
+                    'success': False,
+                    'message': 'OTP verification failed.',
+                    'errors': serializer.errors,
+                },
+                status=status.HTTP_400_BAD_REQUEST,
+            )
 
         try:
             result = serializer.save()
@@ -60,7 +68,7 @@ class VerifyOTPView(APIView):
             return Response(response_data, status=status.HTTP_200_OK)
         except serializers.ValidationError as exc:
             return Response({
-                'error': True,
+                'success': False,
                 'message': exc.detail
             }, status=status.HTTP_400_BAD_REQUEST)
 
@@ -72,7 +80,15 @@ class ResendOTPView(APIView):
     
     def post(self, request):
         serializer = ResendOTPSerializer(data=request.data)
-        serializer.is_valid(raise_exception=True)
+        if not serializer.is_valid():
+            return Response(
+                {
+                    'success': False,
+                    'message': 'OTP resend failed.',
+                    'errors': serializer.errors,
+                },
+                status=status.HTTP_400_BAD_REQUEST,
+            )
 
         try:
             serializer.save()

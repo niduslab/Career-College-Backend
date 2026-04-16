@@ -1,4 +1,59 @@
-# Postman Testing Guide — Registration, Login, Forgot Password, Reset Password & Profiles
+# Postman Testing Guide — Registration, Login, Forgot Password, Reset Password, Profiles & ID Verification
+
+## Table of Contents
+
+### Authentication
+- [1. Register — Learner](#1-register--learner)
+- [2. Register — Instructor](#2-register--instructor)
+- [3. Register — Partner Institution](#3-register--partner-institution)
+- [4. Register — Validation Error Cases](#4-register--validation-error-cases)
+- [5. Verify OTP](#5-verify-otp-required-before-login)
+- [6. Resend OTP](#6-resend-otp)
+- [7. Login](#7-login)
+- [8. Refresh Token](#8-refresh-token)
+- [9. Logout](#9-logout)
+
+### Password Management
+- [10. Forgot Password](#10-forgot-password-send-password-reset-otp)
+- [11. Verify OTP for Password Reset](#11-verify-otp-for-password-reset)
+- [12. Reset Password](#12-reset-password)
+
+### Profile Management
+- [13. My Profile — Get](#13-my-profile--get)
+- [14. My Profile — Update (PATCH)](#14-my-profile--update-patch)
+- [15. Education — List & Create](#15-education--list--create)
+- [16. Education — Update & Delete](#16-education--update--delete)
+- [17. Work Experience — List & Create](#17-work-experience--list--create)
+- [18. Work Experience — Update & Delete](#18-work-experience--update--delete)
+
+### Public Profiles
+- [19. Public Profile — View by Slug](#19-public-profile--view-by-slug)
+- [20. Public Profile Lists — Browse Learners](#20-public-profile-lists--browse-learners)
+- [21. Public Profile Lists — Browse Instructors](#21-public-profile-lists--browse-instructors)
+- [22. Public Profile Lists — Browse Institutions](#22-public-profile-lists--browse-institutions)
+
+### Instructor ID Verification
+- [23. Create Draft Verification](#23-create-draft-verification)
+- [24. Update Draft Verification](#24-update-draft-verification)
+- [25. Submit Verification](#25-submit-verification)
+- [26. List My Verifications](#26-list-my-verifications)
+- [27. View Single Verification](#27-view-single-verification)
+
+### Admin — Verification Management
+- [28. Admin — List All Verifications](#28-admin--list-all-verifications)
+- [29. Admin — View Verification Detail](#29-admin--view-verification-detail)
+- [30. Admin — Review Verification](#30-admin--review-verification)
+
+### Quick Test Flows
+- [Registration / Login](#quick-test-flow--registrationlogin)
+- [Forgot / Reset Password](#quick-test-flow--forgotreset-password)
+- [Profile Management](#quick-test-flow--profile-management)
+- [Public Browsing](#quick-test-flow--public-browsing)
+- [Instructor ID Verification (Full Cycle)](#quick-test-flow--instructor-id-verification-full-cycle)
+- [Rejection & Resubmission](#quick-test-flow--rejection--resubmission)
+- [Action Required & Resubmit](#quick-test-flow--action-required--resubmit)
+
+---
 
 **Base URL:** `http://127.0.0.1:8000/api/v1/auth`
 
@@ -305,7 +360,50 @@
 
 ---
 
-## 8. Logout
+## 8. Refresh Token
+
+**POST** `/token/refresh/`
+
+> Use this to get a new access token when the current one expires. No `Authorization` header required.
+
+**Body:**
+```json
+{
+    "refresh": "<refresh_token>"
+}
+```
+
+**Expected 200:**
+```json
+{
+    "success": true,
+    "message": "Token refreshed successfully.",
+    "tokens": {
+        "access": "<new_access_token>",
+        "refresh": "<new_refresh_token>"
+    }
+}
+```
+
+### Refresh token error cases
+
+**Expired or already-used refresh token:**
+```json
+{
+    "refresh": "<expired_or_used_token>"
+}
+```
+**Expected 401:** `{ "success": false, "message": "Token is invalid or expired" }`
+
+**Missing refresh field:**
+```json
+{}
+```
+**Expected 400:** `{ "success": false, "message": "Token refresh failed.", "errors": { "refresh": ["This field is required."] } }`
+
+---
+
+## 9. Logout
 
 **POST** `/logout/`
 
@@ -331,7 +429,7 @@ Authorization: Bearer <access_token>
 
 ---
 
-## 9. Forgot Password (send password reset OTP)
+## 10. Forgot Password (send password reset OTP)
 
 **POST** `/password/forgot/`
 
@@ -374,7 +472,7 @@ Authorization: Bearer <access_token>
 
 ---
 
-## 10. Verify OTP for Password Reset
+## 11. Verify OTP for Password Reset
 
 **POST** `/otp/verify/`
 
@@ -406,7 +504,7 @@ Authorization: Bearer <access_token>
 
 ---
 
-## 11. Reset Password
+## 12. Reset Password
 
 **POST** `/password/reset/`
 
@@ -477,7 +575,7 @@ Authorization: Bearer <access_token>
 
 ---
 
-## 12. My Profile — Get
+## 13. My Profile — Get
 
 **GET** `/profile/me/`
 
@@ -537,7 +635,7 @@ Authorization: Bearer <access_token>
 
 ---
 
-## 13. My Profile — Update (PATCH)
+## 14. My Profile — Update (PATCH)
 
 **PATCH** `/profile/me/`
 
@@ -694,7 +792,7 @@ Authorization: Bearer <access_token>
 
 ---
 
-## 14. Education — List & Create
+## 15. Education — List & Create
 
 ### 14a. List My Education
 
@@ -806,7 +904,7 @@ Authorization: Bearer <access_token>
 
 ---
 
-## 15. Education — Update & Delete
+## 16. Education — Update & Delete
 
 ### 15a. Update Education Entry (PATCH)
 
@@ -851,7 +949,7 @@ Authorization: Bearer <access_token>
 
 ---
 
-## 16. Work Experience — List & Create
+## 17. Work Experience — List & Create
 
 ### 16a. List My Work Experience
 
@@ -931,7 +1029,7 @@ Authorization: Bearer <access_token>
 
 ---
 
-## 17. Work Experience — Update & Delete
+## 18. Work Experience — Update & Delete
 
 ### 17a. Update Work Experience (PATCH)
 
@@ -976,7 +1074,7 @@ Authorization: Bearer <access_token>
 
 ---
 
-## 18. Public Profile — View by Slug
+## 19. Public Profile — View by Slug
 
 **GET** `/profiles/<slug>/`
 
@@ -1039,7 +1137,7 @@ Authorization: Bearer <access_token>
 
 ---
 
-## 19. Public Profile Lists — Browse Learners
+## 20. Public Profile Lists — Browse Learners
 
 **GET** `/profiles/learners/`
 
@@ -1078,7 +1176,7 @@ Authorization: Bearer <access_token>
 
 ---
 
-## 20. Public Profile Lists — Browse Instructors
+## 21. Public Profile Lists — Browse Instructors
 
 **GET** `/profiles/instructors/`
 
@@ -1116,7 +1214,7 @@ Authorization: Bearer <access_token>
 
 ---
 
-## 21. Public Profile Lists — Browse Institutions
+## 22. Public Profile Lists — Browse Institutions
 
 **GET** `/profiles/institutions/`
 
@@ -1179,6 +1277,710 @@ Authorization: Bearer <access_token>
 
 ## Postman Tips
 
-- Set **Content-Type** to `application/json` on all requests
-- Create an environment variable `base_url` = `http://127.0.0.1:8000/api/v1/auth`
+- Set **Content-Type** to `application/json` on all requests (except file uploads — use form-data)
+- Create environment variables:
+  - `base_url` = `http://127.0.0.1:8000/api/v1/auth`
+  - `verification_url` = `http://127.0.0.1:8000/api/v1/verification`
 - After login, save `access` token to environment and use `Bearer {{access_token}}` in the Authorization tab for authenticated endpoints
+
+---
+
+# Instructor Identity Verification
+
+**Base URL:** `http://127.0.0.1:8000/api/v1/verification`
+
+> Only instructors with verified email can use these endpoints. Login as an instructor first.
+
+### Prerequisites
+
+1. Register an instructor (step 2)
+2. Verify OTP (step 5)
+3. Login as the instructor (step 7) — save the `access` token
+
+### Verification Lifecycle
+
+```
+draft → submitted → under_review → approved
+                                  → rejected
+                                  → action_required → submitted (resubmit)
+```
+
+- **draft**: Instructor is filling in details (can edit freely)
+- **submitted**: Waiting for admin to pick up
+- **under_review**: Admin is reviewing
+- **approved**: Instructor is now verified
+- **rejected**: Denied with a reason
+- **action_required**: Admin asked instructor to fix something (instructor can edit and resubmit)
+
+### document_type options:
+| Value              | Label              |
+|--------------------|--------------------|
+| `national_id`      | National ID Card   |
+| `passport`         | Passport           |
+| `drivers_license`  | Driver's License   |
+| `residence_permit` | Residence Permit   |
+
+---
+
+## 23. Create Draft Verification
+
+**POST** `/create/`
+
+**Headers:**
+```
+Authorization: Bearer <instructor_access_token>
+```
+
+> All fields are optional at this stage. You can create an empty draft and fill in details later.
+
+### 22a. Create empty draft
+
+```json
+{}
+```
+
+**Expected 201:**
+```json
+{
+    "success": true,
+    "message": "Draft verification created.",
+    "data": {
+        "id": 1,
+        "document_type": "",
+        "document_number": "",
+        "issuing_country": "",
+        "expiry_date": null,
+        "document_front": null,
+        "document_back": null,
+        "selfie": null,
+        "resume": null,
+        "status": "draft",
+        "rejection_reason": "",
+        "action_required_reason": "",
+        "reviewed_by_email": null,
+        "reviewed_at": null,
+        "created_at": "...",
+        "submitted_at": null,
+        "updated_at": "..."
+    }
+}
+```
+
+### 22b. Create draft with partial data
+
+```json
+{
+    "document_type": "passport",
+    "issuing_country": "USA"
+}
+```
+
+**Expected 201:** Same structure with those fields filled in.
+
+### Create verification error cases
+
+**Non-instructor user:**
+**Expected 403:** Only instructors can access this resource.
+
+**Already has an active request:**
+
+> If you already have a verification in `draft`, `submitted`, `under_review`, or `action_required` status:
+
+**Expected 400:**
+```json
+{
+    "success": false,
+    "message": "Validation failed.",
+    "errors": {
+        "non_field_errors": ["You already have a verification request in progress."]
+    }
+}
+```
+
+**Email not verified:**
+**Expected 403:** Your email must be verified before accessing this resource.
+
+---
+
+## 24. Update Draft Verification
+
+**PATCH** `/1/update/`
+
+> Replace `1` with your verification ID. Only works when status is `draft` or `action_required`.
+
+**Headers:**
+```
+Authorization: Bearer <instructor_access_token>
+```
+
+### 23a. Update text fields (JSON)
+
+```json
+{
+    "document_type": "national_id",
+    "document_number": "AB1234567",
+    "issuing_country": "Bangladesh",
+    "expiry_date": "2030-12-31"
+}
+```
+
+**Expected 200:**
+```json
+{
+    "success": true,
+    "message": "Verification updated.",
+    "data": {
+        "id": 1,
+        "document_type": "national_id",
+        "document_number": "AB1234567",
+        "issuing_country": "Bangladesh",
+        "expiry_date": "2030-12-31",
+        "...other fields..."
+    }
+}
+```
+
+### 23a-resume. Update with resume (optional)
+
+```json
+{
+    "document_type": "national_id",
+    "document_number": "AB1234567",
+    "issuing_country": "Bangladesh"
+}
+```
+
+> Resume can be uploaded separately using form-data (section 23b).
+
+### 23b. Upload documents (form-data)
+
+> File uploads must use **form-data** (not raw JSON).
+
+**PATCH** `/1/update/`
+
+| Key              | Type | Value                                  |
+|------------------|------|----------------------------------------|
+| `document_front` | File | *(select front image of your ID)*      |
+| `document_back`  | File | *(select back image, if applicable)*   |
+| `selfie`         | File | *(select selfie holding your ID)*      |
+| `resume`         | File | *(select resume/CV, optional)*         |
+
+**Expected 200:** Same structure with file URLs populated.
+
+### 23c. Full update with PUT (all fields required)
+
+**PUT** `/1/update/`
+
+> Use **form-data** to include both text and file fields.
+
+| Key              | Type | Value                          |
+|------------------|------|--------------------------------|
+| `document_type`  | Text | `passport`                     |
+| `document_number`| Text | `AB1234567`                    |
+| `issuing_country`| Text | `Bangladesh`                   |
+| `expiry_date`    | Text | `2030-12-31`                   |
+| `document_front` | File | *(select front image)*         |
+| `selfie`         | File | *(select selfie image)*        |
+| `resume`         | File | *(select resume/CV, optional)* |
+
+### Update verification error cases
+
+**Verification not in editable status (e.g., already submitted):**
+**Expected 404:** Not found.
+
+**Another user's verification:**
+**Expected 404:** Not found.
+
+**Expired document:**
+```json
+{
+    "expiry_date": "2020-01-01"
+}
+```
+**Expected 400:** `expiry_date` — Document has already expired.
+
+---
+
+## 25. Submit Verification
+
+**POST** `/1/submit/`
+
+> Replace `1` with your verification ID. Transitions from `draft` → `submitted` or `action_required` → `submitted`.
+
+**Headers:**
+```
+Authorization: Bearer <instructor_access_token>
+```
+
+**Body:** *(empty — no body needed)*
+
+### Prerequisites
+
+Before submitting, **two sets of requirements** must be satisfied:
+
+**1. Instructor profile must be complete** — these profile fields must be filled:
+
+| Field                 | Description                              |
+|-----------------------|------------------------------------------|
+| `headline`            | Professional tagline                     |
+| `bio`                 | Professional biography (non-empty)       |
+| `specialization`      | At least one area of expertise           |
+| `years_of_experience` | Must be greater than 0                   |
+| `current_title`       | Current job title                        |
+
+> Update your profile first via **PATCH** `/api/v1/auth/profile/me/` (step 13b).
+
+**2. Verification document fields must be filled:**
+
+| Field            | Required |
+|------------------|----------|
+| `document_type`  | Yes      |
+| `document_number`| Yes      |
+| `issuing_country`| Yes      |
+| `document_front` | Yes      |
+| `selfie`         | Yes      |
+| `document_back`  | No       |
+| `expiry_date`    | No       |
+| `resume`         | No       |
+
+**Expected 200:**
+```json
+{
+    "success": true,
+    "message": "Verification submitted successfully.",
+    "data": {
+        "id": 1,
+        "status": "submitted",
+        "submitted_at": "2026-04-13T...",
+        "...other fields..."
+    }
+}
+```
+
+### Submit error cases
+
+**Incomplete instructor profile:**
+```json
+{
+    "success": false,
+    "message": "Your profile must be complete before submitting for verification.",
+    "errors": {
+        "profile": {
+            "headline": "Headline is required.",
+            "specialization": "At least one specialization is required."
+        }
+    }
+}
+```
+
+**Missing required document fields:**
+
+**Expected 400:**
+```json
+{
+    "success": false,
+    "message": "['document_front: This field is required before submitting.', 'selfie: This field is required before submitting.']"
+}
+```
+
+**Verification already submitted:**
+**Expected 404:** Not found. *(Only `draft` and `action_required` can be submitted)*
+
+---
+
+## 26. List My Verifications
+
+**GET** `/my/`
+
+**Headers:**
+```
+Authorization: Bearer <instructor_access_token>
+```
+
+**Expected 200:**
+```json
+{
+    "success": true,
+    "data": [
+        {
+            "id": 1,
+            "document_type": "national_id",
+            "document_number": "AB1234567",
+            "issuing_country": "Bangladesh",
+            "expiry_date": "2030-12-31",
+            "document_front": "/id_verification/documents/front/...",
+            "document_back": null,
+            "selfie": "/id_verification/selfies/...",
+            "status": "submitted",
+            "rejection_reason": "",
+            "action_required_reason": "",
+            "reviewed_by_email": null,
+            "reviewed_at": null,
+            "created_at": "...",
+            "submitted_at": "...",
+            "updated_at": "..."
+        }
+    ]
+}
+```
+
+> Returns all verifications for the logged-in instructor (most recent first).
+
+---
+
+## 27. View Single Verification
+
+**GET** `/my/1/`
+
+> Replace `1` with the verification ID.
+
+**Headers:**
+```
+Authorization: Bearer <instructor_access_token>
+```
+
+**Expected 200:**
+```json
+{
+    "success": true,
+    "data": {
+        "id": 1,
+        "document_type": "national_id",
+        "status": "submitted",
+        "...all fields..."
+    }
+}
+```
+
+### Error cases
+
+**Verification belongs to another user:**
+**Expected 404:** Not found.
+
+---
+
+# Admin — Verification Management
+
+> These endpoints require an admin (staff) user. Login as a superuser or staff account.
+
+**Create a superuser if needed:**
+```
+python manage.py createsuperuser
+```
+
+---
+
+## 28. Admin — List All Verifications
+
+**GET** `/admin/list/`
+
+**Headers:**
+```
+Authorization: Bearer <admin_access_token>
+```
+
+**Expected 200 (paginated):**
+```json
+{
+    "count": 1,
+    "next": null,
+    "previous": null,
+    "results": [
+        {
+            "id": 1,
+            "instructor_name": "Sarah Williams",
+            "instructor_email": "sarah.instructor@example.com",
+            "document_type": "national_id",
+            "issuing_country": "Bangladesh",
+            "status": "submitted",
+            "submitted_at": "..."
+        }
+    ]
+}
+```
+
+### Filter by status
+
+`GET /admin/list/?status=submitted` — Show only submitted requests.
+
+| Status Value       | Description                  |
+|--------------------|------------------------------|
+| `draft`            | Not yet submitted            |
+| `submitted`        | Waiting for admin review     |
+| `under_review`     | Admin is reviewing           |
+| `action_required`  | Instructor needs to fix      |
+| `approved`         | Verified                     |
+| `rejected`         | Denied                       |
+| `expired`          | Expired                      |
+
+### Error cases
+
+**Non-admin user:**
+**Expected 403:** Admin access required.
+
+---
+
+## 29. Admin — View Verification Detail
+
+**GET** `/admin/1/`
+
+> Replace `1` with the verification ID.
+
+**Headers:**
+```
+Authorization: Bearer <admin_access_token>
+```
+
+**Expected 200:**
+```json
+{
+    "success": true,
+    "data": {
+        "id": 1,
+        "instructor_name": "Sarah Williams",
+        "instructor_email": "sarah.instructor@example.com",
+        "document_type": "national_id",
+        "document_number": "AB1234567",
+        "issuing_country": "Bangladesh",
+        "expiry_date": "2030-12-31",
+        "document_front": "/id_verification/documents/front/...",
+        "document_back": null,
+        "selfie": "/id_verification/selfies/...",
+        "resume": null,
+        "status": "submitted",
+        "rejection_reason": "",
+        "action_required_reason": "",
+        "admin_notes": "",
+        "reviewed_by_email": null,
+        "reviewed_at": null,
+        "created_at": "...",
+        "submitted_at": "...",
+        "updated_at": "..."
+    }
+}
+```
+
+---
+
+## 30. Admin — Review Verification
+
+**POST** `/admin/1/review/`
+
+> Replace `1` with the verification ID.
+
+**Headers:**
+```
+Authorization: Bearer <admin_access_token>
+```
+
+### 29a. Pick Up (submitted → under_review)
+
+> Admin claims the request for review.
+
+```json
+{
+    "action": "pick_up"
+}
+```
+
+**Expected 200:**
+```json
+{
+    "success": true,
+    "message": "Verification under_review.",
+    "data": {
+        "id": 1,
+        "status": "under_review",
+        "reviewed_by_email": "admin@example.com",
+        "reviewed_at": "...",
+        "...other fields..."
+    }
+}
+```
+
+### 29b. Approve (under_review → approved)
+
+> Approves the instructor's identity. This also sets `is_verified = True` on the instructor's profile.
+
+```json
+{
+    "action": "approve",
+    "admin_notes": "Documents verified. All clear."
+}
+```
+
+**Expected 200:**
+```json
+{
+    "success": true,
+    "message": "Verification approved.",
+    "data": {
+        "status": "approved",
+        "...other fields..."
+    }
+}
+```
+
+### 29c. Reject (under_review → rejected)
+
+> `rejection_reason` is **required** when rejecting.
+
+```json
+{
+    "action": "reject",
+    "rejection_reason": "Document image is blurry and unreadable.",
+    "admin_notes": "Asked to resubmit with clearer photos."
+}
+```
+
+**Expected 200:**
+```json
+{
+    "success": true,
+    "message": "Verification rejected.",
+    "data": {
+        "status": "rejected",
+        "rejection_reason": "Document image is blurry and unreadable.",
+        "...other fields..."
+    }
+}
+```
+
+**Missing rejection_reason:**
+```json
+{
+    "action": "reject"
+}
+```
+**Expected 400:**
+```json
+{
+    "success": false,
+    "message": "Validation failed.",
+    "errors": {
+        "rejection_reason": "A reason is required when rejecting."
+    }
+}
+```
+
+### 29d. Request Action (under_review → action_required)
+
+> Sends the request back to the instructor for corrections. `action_required_reason` is **required**.
+
+```json
+{
+    "action": "request_action",
+    "action_required_reason": "Selfie does not match the ID photo. Please retake.",
+    "admin_notes": "Possible photo mismatch — give another chance."
+}
+```
+
+**Expected 200:**
+```json
+{
+    "success": true,
+    "message": "Verification action_required.",
+    "data": {
+        "status": "action_required",
+        "action_required_reason": "Selfie does not match the ID photo. Please retake.",
+        "...other fields..."
+    }
+}
+```
+
+**Missing action_required_reason:**
+```json
+{
+    "action": "request_action"
+}
+```
+**Expected 400:**
+```json
+{
+    "success": false,
+    "message": "Validation failed.",
+    "errors": {
+        "action_required_reason": "A reason is required when requesting action."
+    }
+}
+```
+
+### 29e. Expire a verification
+
+```json
+{
+    "action": "expire"
+}
+```
+
+**Expected 200:**
+```json
+{
+    "success": true,
+    "message": "Verification expired.",
+    "data": { "status": "expired", "...other fields..." }
+}
+```
+
+### Admin review — invalid transition errors
+
+**Trying to approve a draft (not yet submitted):**
+```json
+{
+    "action": "approve"
+}
+```
+**Expected 400:** Cannot transition from "draft" to "approved". Allowed: submitted.
+
+**Trying to pick up an already approved request:**
+```json
+{
+    "action": "pick_up"
+}
+```
+**Expected 400:** Cannot transition from "approved" to "under_review". Allowed: none (terminal state).
+
+### Admin review — action options:
+| Action            | Transitions From    | Transitions To      | Required Fields            |
+|-------------------|---------------------|----------------------|----------------------------|
+| `pick_up`         | submitted           | under_review         | —                          |
+| `approve`         | under_review        | approved             | —                          |
+| `reject`          | under_review        | rejected             | `rejection_reason`         |
+| `request_action`  | under_review        | action_required      | `action_required_reason`   |
+| `expire`          | submitted, under_review, action_required | expired | —               |
+
+---
+
+## Quick Test Flow — Instructor ID Verification (Full Cycle)
+
+1. **Register** an instructor (step 2)
+2. **Verify OTP** (step 5)
+3. **Login** as the instructor (step 7) — save the `access` token
+4. **Complete profile** (step 13b) — fill `headline`, `bio`, `specialization`, `years_of_experience`, `current_title`
+5. **Create draft** (step 22a) — note the verification `id`
+6. **Update** with document details (step 23a) — fill in type, number, country
+7. **Upload documents** (step 23b) — use form-data for front image & selfie
+8. *(Optional)* **Upload resume** (step 23b) — add resume/CV document
+9. **Submit** (step 24) — transitions to `submitted` (fails if profile is incomplete)
+10. **Login as admin** — save the admin `access` token
+11. **List verifications** (step 27) with `?status=submitted` — find the request
+12. **View detail** (step 28) — review the documents (including resume if provided)
+13. **Pick up** (step 29a) — transitions to `under_review`
+14. **Approve** (step 29b) — transitions to `approved`, instructor is now verified
+15. **Login as instructor** again → **Get My Profile** (step 12) — confirm `is_verified: true`
+
+## Quick Test Flow — Rejection & Resubmission
+
+1. Complete steps 1–13 above (up to `under_review`)
+2. **Reject** (step 29c) with a reason
+3. **Login as instructor** → **List verifications** (step 25) — see `rejected` status with reason
+4. Instructor creates a **new draft** (step 22) and goes through the flow again
+
+## Quick Test Flow — Action Required & Resubmit
+
+1. Complete steps 1–13 above (up to `under_review`)
+2. **Request action** (step 29d) — admin specifies what needs to be fixed
+3. **Login as instructor** → **List verifications** (step 25) — see `action_required` status and reason
+4. **Update** the verification (step 23) — fix the issue (e.g., re-upload clearer document)
+5. **Submit** again (step 24) — transitions back to `submitted` (profile completeness is checked again)
+6. **Admin picks up** and **approves** (steps 29a, 29b)

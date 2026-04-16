@@ -4,6 +4,8 @@ from rest_framework import status
 from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
+from rest_framework_simplejwt.exceptions import TokenError
+from rest_framework_simplejwt.serializers import TokenRefreshSerializer
 
 from auth.serializers import UserRegistrationSerializer, UserLoginSerializer, LogoutSerializer
 from auth.utils import send_otp_email
@@ -158,6 +160,42 @@ class LogoutView(APIView):
             {
                 'success': True,
                 'message': 'Logged out successfully.',
+            },
+            status=status.HTTP_200_OK,
+        )
+
+
+class TokenRefreshView(APIView):
+    permission_classes = [AllowAny]
+
+    def post(self, request):
+        serializer = TokenRefreshSerializer(data=request.data)
+        if not serializer.is_valid():
+            return Response(
+                {
+                    'success': False,
+                    'message': 'Token refresh failed.',
+                    'errors': serializer.errors,
+                },
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        try:
+            serializer.validated_data  # triggers token validation
+        except TokenError as e:
+            return Response(
+                {
+                    'success': False,
+                    'message': str(e),
+                },
+                status=status.HTTP_401_UNAUTHORIZED,
+            )
+
+        return Response(
+            {
+                'success': True,
+                'message': 'Token refreshed successfully.',
+                'tokens': serializer.validated_data,
             },
             status=status.HTTP_200_OK,
         )

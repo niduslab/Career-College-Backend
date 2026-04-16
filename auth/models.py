@@ -47,6 +47,7 @@ class CustomUserManager(BaseUserManager):
         extra_fields.setdefault('is_staff', True)
         extra_fields.setdefault('is_superuser', True)
         extra_fields.setdefault('is_active', True)
+        extra_fields.setdefault('is_email_verified', True)
         extra_fields.setdefault('user_type', 'admin')
         extra_fields.setdefault('full_name', 'Super Admin')
         

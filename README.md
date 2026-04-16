@@ -105,6 +105,7 @@ cp .env.example .env
 
 - **POST** `/register/` — Register new user (learner, instructor, or partner institution)
 - **POST** `/login/` — Login with email & password
+- **POST** `/token/refresh/` — Refresh access token (requires refresh token)
 - **POST** `/logout/` — Logout (requires refresh token)
 - **POST** `/otp/verify/` — Verify OTP for registration or password reset
 - **POST** `/otp/resend/` — Resend OTP

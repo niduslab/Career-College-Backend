@@ -4,7 +4,7 @@ from rest_framework import status
 from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
-from rest_framework_simplejwt.exceptions import InvalidToken, TokenError
+from rest_framework_simplejwt.exceptions import TokenError
 from rest_framework_simplejwt.serializers import TokenRefreshSerializer
 
 from auth.serializers import UserRegistrationSerializer, UserLoginSerializer, LogoutSerializer
@@ -170,10 +170,26 @@ class TokenRefreshView(APIView):
 
     def post(self, request):
         serializer = TokenRefreshSerializer(data=request.data)
+        if not serializer.is_valid():
+            return Response(
+                {
+                    'success': False,
+                    'message': 'Token refresh failed.',
+                    'errors': serializer.errors,
+                },
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
         try:
-            serializer.is_valid(raise_exception=True)
+            serializer.validated_data  # triggers token validation
         except TokenError as e:
-            raise InvalidToken(e.args[0])
+            return Response(
+                {
+                    'success': False,
+                    'message': str(e),
+                },
+                status=status.HTTP_401_UNAUTHORIZED,
+            )
 
         return Response(
             {

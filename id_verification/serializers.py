@@ -1,3 +1,4 @@
+from django.utils import timezone
 from rest_framework import serializers
 
 from id_verification.models import IdentityVerification
@@ -22,6 +23,11 @@ class VerificationCreateSerializer(serializers.ModelSerializer):
             'resume',
         )
         extra_kwargs = {f: {'required': False} for f in fields}
+
+    def validate_expiry_date(self, value):
+        if value and value < timezone.now().date():
+            raise serializers.ValidationError('Document has already expired.')
+        return value
 
     def validate(self, attrs):
         user = self.context['request'].user
@@ -48,6 +54,11 @@ class VerificationUpdateSerializer(serializers.ModelSerializer):
             'resume',
         )
         extra_kwargs = {f: {'required': False} for f in fields}
+
+    def validate_expiry_date(self, value):
+        if value and value < timezone.now().date():
+            raise serializers.ValidationError('Document has already expired.')
+        return value
 
 
 class VerificationDetailSerializer(serializers.ModelSerializer):

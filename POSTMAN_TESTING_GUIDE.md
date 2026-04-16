@@ -10,38 +10,39 @@
 - [5. Verify OTP](#5-verify-otp-required-before-login)
 - [6. Resend OTP](#6-resend-otp)
 - [7. Login](#7-login)
-- [8. Logout](#8-logout)
+- [8. Refresh Token](#8-refresh-token)
+- [9. Logout](#9-logout)
 
 ### Password Management
-- [9. Forgot Password](#9-forgot-password-send-password-reset-otp)
-- [10. Verify OTP for Password Reset](#10-verify-otp-for-password-reset)
-- [11. Reset Password](#11-reset-password)
+- [10. Forgot Password](#10-forgot-password-send-password-reset-otp)
+- [11. Verify OTP for Password Reset](#11-verify-otp-for-password-reset)
+- [12. Reset Password](#12-reset-password)
 
 ### Profile Management
-- [12. My Profile — Get](#12-my-profile--get)
-- [13. My Profile — Update (PATCH)](#13-my-profile--update-patch)
-- [14. Education — List & Create](#14-education--list--create)
-- [15. Education — Update & Delete](#15-education--update--delete)
-- [16. Work Experience — List & Create](#16-work-experience--list--create)
-- [17. Work Experience — Update & Delete](#17-work-experience--update--delete)
+- [13. My Profile — Get](#13-my-profile--get)
+- [14. My Profile — Update (PATCH)](#14-my-profile--update-patch)
+- [15. Education — List & Create](#15-education--list--create)
+- [16. Education — Update & Delete](#16-education--update--delete)
+- [17. Work Experience — List & Create](#17-work-experience--list--create)
+- [18. Work Experience — Update & Delete](#18-work-experience--update--delete)
 
 ### Public Profiles
-- [18. Public Profile — View by Slug](#18-public-profile--view-by-slug)
-- [19. Public Profile Lists — Browse Learners](#19-public-profile-lists--browse-learners)
-- [20. Public Profile Lists — Browse Instructors](#20-public-profile-lists--browse-instructors)
-- [21. Public Profile Lists — Browse Institutions](#21-public-profile-lists--browse-institutions)
+- [19. Public Profile — View by Slug](#19-public-profile--view-by-slug)
+- [20. Public Profile Lists — Browse Learners](#20-public-profile-lists--browse-learners)
+- [21. Public Profile Lists — Browse Instructors](#21-public-profile-lists--browse-instructors)
+- [22. Public Profile Lists — Browse Institutions](#22-public-profile-lists--browse-institutions)
 
 ### Instructor ID Verification
-- [22. Create Draft Verification](#22-create-draft-verification)
-- [23. Update Draft Verification](#23-update-draft-verification)
-- [24. Submit Verification](#24-submit-verification)
-- [25. List My Verifications](#25-list-my-verifications)
-- [26. View Single Verification](#26-view-single-verification)
+- [23. Create Draft Verification](#23-create-draft-verification)
+- [24. Update Draft Verification](#24-update-draft-verification)
+- [25. Submit Verification](#25-submit-verification)
+- [26. List My Verifications](#26-list-my-verifications)
+- [27. View Single Verification](#27-view-single-verification)
 
 ### Admin — Verification Management
-- [27. Admin — List All Verifications](#27-admin--list-all-verifications)
-- [28. Admin — View Verification Detail](#28-admin--view-verification-detail)
-- [29. Admin — Review Verification](#29-admin--review-verification)
+- [28. Admin — List All Verifications](#28-admin--list-all-verifications)
+- [29. Admin — View Verification Detail](#29-admin--view-verification-detail)
+- [30. Admin — Review Verification](#30-admin--review-verification)
 
 ### Quick Test Flows
 - [Registration / Login](#quick-test-flow--registrationlogin)
@@ -359,7 +360,50 @@
 
 ---
 
-## 8. Logout
+## 8. Refresh Token
+
+**POST** `/token/refresh/`
+
+> Use this to get a new access token when the current one expires. No `Authorization` header required.
+
+**Body:**
+```json
+{
+    "refresh": "<refresh_token>"
+}
+```
+
+**Expected 200:**
+```json
+{
+    "success": true,
+    "message": "Token refreshed successfully.",
+    "tokens": {
+        "access": "<new_access_token>",
+        "refresh": "<new_refresh_token>"
+    }
+}
+```
+
+### Refresh token error cases
+
+**Expired or already-used refresh token:**
+```json
+{
+    "refresh": "<expired_or_used_token>"
+}
+```
+**Expected 401:** `{ "success": false, "message": "Token is invalid or expired" }`
+
+**Missing refresh field:**
+```json
+{}
+```
+**Expected 400:** `{ "success": false, "message": "Token refresh failed.", "errors": { "refresh": ["This field is required."] } }`
+
+---
+
+## 9. Logout
 
 **POST** `/logout/`
 
@@ -385,7 +429,7 @@ Authorization: Bearer <access_token>
 
 ---
 
-## 9. Forgot Password (send password reset OTP)
+## 10. Forgot Password (send password reset OTP)
 
 **POST** `/password/forgot/`
 
@@ -428,7 +472,7 @@ Authorization: Bearer <access_token>
 
 ---
 
-## 10. Verify OTP for Password Reset
+## 11. Verify OTP for Password Reset
 
 **POST** `/otp/verify/`
 
@@ -460,7 +504,7 @@ Authorization: Bearer <access_token>
 
 ---
 
-## 11. Reset Password
+## 12. Reset Password
 
 **POST** `/password/reset/`
 
@@ -531,7 +575,7 @@ Authorization: Bearer <access_token>
 
 ---
 
-## 12. My Profile — Get
+## 13. My Profile — Get
 
 **GET** `/profile/me/`
 
@@ -591,7 +635,7 @@ Authorization: Bearer <access_token>
 
 ---
 
-## 13. My Profile — Update (PATCH)
+## 14. My Profile — Update (PATCH)
 
 **PATCH** `/profile/me/`
 
@@ -748,7 +792,7 @@ Authorization: Bearer <access_token>
 
 ---
 
-## 14. Education — List & Create
+## 15. Education — List & Create
 
 ### 14a. List My Education
 
@@ -860,7 +904,7 @@ Authorization: Bearer <access_token>
 
 ---
 
-## 15. Education — Update & Delete
+## 16. Education — Update & Delete
 
 ### 15a. Update Education Entry (PATCH)
 
@@ -905,7 +949,7 @@ Authorization: Bearer <access_token>
 
 ---
 
-## 16. Work Experience — List & Create
+## 17. Work Experience — List & Create
 
 ### 16a. List My Work Experience
 
@@ -985,7 +1029,7 @@ Authorization: Bearer <access_token>
 
 ---
 
-## 17. Work Experience — Update & Delete
+## 18. Work Experience — Update & Delete
 
 ### 17a. Update Work Experience (PATCH)
 
@@ -1030,7 +1074,7 @@ Authorization: Bearer <access_token>
 
 ---
 
-## 18. Public Profile — View by Slug
+## 19. Public Profile — View by Slug
 
 **GET** `/profiles/<slug>/`
 
@@ -1093,7 +1137,7 @@ Authorization: Bearer <access_token>
 
 ---
 
-## 19. Public Profile Lists — Browse Learners
+## 20. Public Profile Lists — Browse Learners
 
 **GET** `/profiles/learners/`
 
@@ -1132,7 +1176,7 @@ Authorization: Bearer <access_token>
 
 ---
 
-## 20. Public Profile Lists — Browse Instructors
+## 21. Public Profile Lists — Browse Instructors
 
 **GET** `/profiles/instructors/`
 
@@ -1170,7 +1214,7 @@ Authorization: Bearer <access_token>
 
 ---
 
-## 21. Public Profile Lists — Browse Institutions
+## 22. Public Profile Lists — Browse Institutions
 
 **GET** `/profiles/institutions/`
 
@@ -1278,7 +1322,7 @@ draft → submitted → under_review → approved
 
 ---
 
-## 22. Create Draft Verification
+## 23. Create Draft Verification
 
 **POST** `/create/`
 
@@ -1358,7 +1402,7 @@ Authorization: Bearer <instructor_access_token>
 
 ---
 
-## 23. Update Draft Verification
+## 24. Update Draft Verification
 
 **PATCH** `/1/update/`
 
@@ -1457,7 +1501,7 @@ Authorization: Bearer <instructor_access_token>
 
 ---
 
-## 24. Submit Verification
+## 25. Submit Verification
 
 **POST** `/1/submit/`
 
@@ -1544,7 +1588,7 @@ Before submitting, **two sets of requirements** must be satisfied:
 
 ---
 
-## 25. List My Verifications
+## 26. List My Verifications
 
 **GET** `/my/`
 
@@ -1584,7 +1628,7 @@ Authorization: Bearer <instructor_access_token>
 
 ---
 
-## 26. View Single Verification
+## 27. View Single Verification
 
 **GET** `/my/1/`
 
@@ -1626,7 +1670,7 @@ python manage.py createsuperuser
 
 ---
 
-## 27. Admin — List All Verifications
+## 28. Admin — List All Verifications
 
 **GET** `/admin/list/`
 
@@ -1676,7 +1720,7 @@ Authorization: Bearer <admin_access_token>
 
 ---
 
-## 28. Admin — View Verification Detail
+## 29. Admin — View Verification Detail
 
 **GET** `/admin/1/`
 
@@ -1718,7 +1762,7 @@ Authorization: Bearer <admin_access_token>
 
 ---
 
-## 29. Admin — Review Verification
+## 30. Admin — Review Verification
 
 **POST** `/admin/1/review/`
 

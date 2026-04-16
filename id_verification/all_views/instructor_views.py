@@ -1,5 +1,6 @@
 import logging
 
+from django.core.exceptions import ObjectDoesNotExist, ValidationError
 from django.shortcuts import get_object_or_404
 from rest_framework import status
 from rest_framework.permissions import IsAuthenticated
@@ -29,12 +30,12 @@ def _require_instructor(request):
 def _check_profile_completeness(user):
     """
     Check if instructor profile is complete.
-    Returns (is_complete: bool, missing_fields: list).
+    Returns (is_complete: bool, missing_fields: dict).
     """
     try:
         profile = user.instructor_profile
-    except Exception:
-        return False, ['Profile does not exist. Please create your profile first.']
+    except ObjectDoesNotExist:
+        return False, {'profile': 'Profile does not exist. Please create your profile first.'}
 
     required_fields = {
         'headline': 'Headline is required.',
@@ -157,7 +158,7 @@ class VerificationSubmitView(APIView):
                 {
                     'success': False,
                     'message': 'Your profile must be complete before submitting for verification.',
-                    'errors': {'profile': missing_fields},
+                    'errors': missing_fields,
                 },
                 status=status.HTTP_400_BAD_REQUEST,
             )
@@ -171,10 +172,16 @@ class VerificationSubmitView(APIView):
 
         try:
             verification.transition_to('submitted')
-        except Exception as e:
+        except ValidationError as e:
             return Response(
-                {'success': False, 'message': str(e)},
+                {'success': False, 'message': 'Submission failed.', 'errors': e.message_dict if hasattr(e, 'message_dict') else {'detail': e.messages}},
                 status=status.HTTP_400_BAD_REQUEST,
+            )
+        except Exception:
+            logger.exception('Unexpected error during verification submission pk=%s', pk)
+            return Response(
+                {'success': False, 'message': 'An unexpected server error occurred. Please try again.'},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
             )
 
         return Response(

@@ -1,5 +1,6 @@
 import logging
 
+from django.core.exceptions import ValidationError
 from django.shortcuts import get_object_or_404
 from rest_framework import status
 from rest_framework.permissions import IsAuthenticated
@@ -54,7 +55,12 @@ class AdminVerificationListView(APIView):
         paginator = StandardResultsSetPagination()
         page = paginator.paginate_queryset(queryset, request)
         serializer = AdminVerificationListSerializer(page, many=True)
-        return paginator.get_paginated_response(serializer.data)
+        paginated_response = paginator.get_paginated_response(serializer.data)
+        paginated_response.data = {
+            'success': True,
+            'data': paginated_response.data,
+        }
+        return paginated_response
 
 
 class AdminVerificationDetailView(APIView):
@@ -114,10 +120,16 @@ class AdminVerificationReviewView(APIView):
                 action_required_reason=action_required_reason,
                 admin_notes=admin_notes,
             )
-        except Exception as e:
+        except ValidationError as e:
             return Response(
-                {'success': False, 'message': str(e)},
+                {'success': False, 'message': 'Action failed.', 'errors': e.message_dict if hasattr(e, 'message_dict') else {'detail': e.messages}},
                 status=status.HTTP_400_BAD_REQUEST,
+            )
+        except Exception:
+            logger.exception('Unexpected error during verification transition pk=%s', pk)
+            return Response(
+                {'success': False, 'message': 'An unexpected server error occurred. Please try again.'},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
             )
 
         detail = AdminVerificationDetailSerializer(

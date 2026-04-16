@@ -29,7 +29,15 @@ class ForgotPasswordView(APIView):
 
     def post(self, request):
         serializer = ForgotPasswordSerializer(data=request.data)
-        serializer.is_valid(raise_exception=True)
+        if not serializer.is_valid():
+            return Response(
+                {
+                    'success': False,
+                    'message': 'Password reset request failed.',
+                    'errors': serializer.errors,
+                },
+                status=status.HTTP_400_BAD_REQUEST,
+            )
 
         try:
             user = serializer.save()
@@ -68,7 +76,15 @@ class ResetPasswordView(APIView):
 
     def post(self, request):
         serializer = ResetPasswordSerializer(data=request.data)
-        serializer.is_valid(raise_exception=True)
+        if not serializer.is_valid():
+            return Response(
+                {
+                    'success': False,
+                    'message': 'Password reset failed.',
+                    'errors': serializer.errors,
+                },
+                status=status.HTTP_400_BAD_REQUEST,
+            )
 
         try:
             user = serializer.save()
@@ -94,7 +110,15 @@ class ChangePasswordView(APIView):
 
     def post(self, request):
         serializer = ChangePasswordSerializer(data=request.data, context={'request': request})
-        serializer.is_valid(raise_exception=True)
+        if not serializer.is_valid():
+            return Response(
+                {
+                    'success': False,
+                    'message': 'Password change failed.',
+                    'errors': serializer.errors,
+                },
+                status=status.HTTP_400_BAD_REQUEST,
+            )
 
         try:
             serializer.save()

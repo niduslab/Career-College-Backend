@@ -3,6 +3,9 @@ from auth.views import (
     GoogleAuthCallbackView,
     GoogleAuthRedirectView,
     GoogleExchangeTokenView,
+    LinkedInAuthRedirectView,
+    LinkedInAuthCallbackView,
+    LinkedInExchangeTokenView,
     UserRegistrationView,
     UserLoginView,
     LogoutView,
@@ -36,6 +39,11 @@ urlpatterns = [
     path('google/', GoogleAuthRedirectView.as_view(), name='google-redirect'),
     path('google/callback/', GoogleAuthCallbackView.as_view(), name='google-callback'),
     path('google/exchange-token/', GoogleExchangeTokenView.as_view(), name='google-exchange-token'),
+
+    # LinkedIn OAuth (authorization-code flow)
+    path('linkedin/', LinkedInAuthRedirectView.as_view(), name='linkedin-redirect'),
+    path('linkedin/callback/', LinkedInAuthCallbackView.as_view(), name='linkedin-callback'),
+    path('linkedin/exchange-token/', LinkedInExchangeTokenView.as_view(), name='linkedin-exchange-token'),
 
     # OTP
     path('otp/verify/', VerifyOTPView.as_view(), name='otp-verify'),

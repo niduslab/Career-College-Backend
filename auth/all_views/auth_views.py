@@ -1,13 +1,17 @@
 import logging
 
-from rest_framework import status
+from rest_framework import serializers, status
 from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
 from rest_framework_simplejwt.exceptions import TokenError
 from rest_framework_simplejwt.serializers import TokenRefreshSerializer
 
-from auth.serializers import UserRegistrationSerializer, UserLoginSerializer, LogoutSerializer
+from auth.serializers import (
+    LogoutSerializer,
+    UserLoginSerializer,
+    UserRegistrationSerializer,
+)
 from auth.utils import send_otp_email
 
 logger = logging.getLogger(__name__)

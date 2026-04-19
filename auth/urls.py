@@ -1,5 +1,8 @@
 from django.urls import path
 from auth.views import (
+    GoogleAuthCallbackView,
+    GoogleAuthRedirectView,
+    GoogleExchangeTokenView,
     UserRegistrationView,
     UserLoginView,
     LogoutView,
@@ -28,6 +31,11 @@ urlpatterns = [
     path('login/', UserLoginView.as_view(), name='login'),
     path('token/refresh/', TokenRefreshView.as_view(), name='token-refresh'),
     path('logout/', LogoutView.as_view(), name='logout'),
+
+    # Google OAuth (authorization-code flow)
+    path('google/', GoogleAuthRedirectView.as_view(), name='google-redirect'),
+    path('google/callback/', GoogleAuthCallbackView.as_view(), name='google-callback'),
+    path('google/exchange-token/', GoogleExchangeTokenView.as_view(), name='google-exchange-token'),
 
     # OTP
     path('otp/verify/', VerifyOTPView.as_view(), name='otp-verify'),

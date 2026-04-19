@@ -29,6 +29,10 @@ GENERIC_EMAIL_DOMAINS = {
     'qq.com', '163.com', 'mail.ru',
 }
 
+INSTITUTION_TYPE_CHOICES = (
+    'university', 'college', 'training_center', 'corporate', 'nonprofit', 'other',
+)
+
 
 class UserLoginSerializer(serializers.Serializer):
     email = serializers.EmailField()
@@ -89,10 +93,7 @@ class LogoutSerializer(serializers.Serializer):
 
 class UserRegistrationSerializer(serializers.ModelSerializer):
     ALLOWED_REGISTRATION_TYPES = ('learner', 'instructor', 'partner_institution')
-
-    INSTITUTION_TYPE_CHOICES = (
-        'university', 'college', 'training_center', 'corporate', 'nonprofit', 'other',
-    )
+    INSTITUTION_TYPE_CHOICES = INSTITUTION_TYPE_CHOICES
 
     password = serializers.CharField(
         write_only=True, min_length=8, validators=[validate_password, validate_custom_password_strength]

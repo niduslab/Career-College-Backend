@@ -49,6 +49,7 @@ INSTALLED_APPS = [
     'django.contrib.auth',
     'django.contrib.contenttypes',
     'django.contrib.sessions',
+    'django.contrib.sites',
     'django.contrib.messages',
     'django.contrib.staticfiles',
     # Third-party
@@ -56,6 +57,10 @@ INSTALLED_APPS = [
     'rest_framework_simplejwt.token_blacklist',
     'corsheaders',
     'django_filters',
+    'allauth',
+    'allauth.account',
+    'allauth.socialaccount',
+    'allauth.socialaccount.providers.google',
     # Local
     'auth.apps.AuthConfig',
     'id_verification',
@@ -67,6 +72,7 @@ MIDDLEWARE = [
     'django.middleware.common.CommonMiddleware',
     'django.middleware.csrf.CsrfViewMiddleware',
     'django.contrib.auth.middleware.AuthenticationMiddleware',
+    'allauth.account.middleware.AccountMiddleware',
     'django.contrib.messages.middleware.MessageMiddleware',
     'django.middleware.clickjacking.XFrameOptionsMiddleware',
 ]
@@ -122,6 +128,12 @@ AUTH_PASSWORD_VALIDATORS = [
 
 
 AUTH_USER_MODEL = 'accounts.User'
+SITE_ID = int(os.getenv('SITE_ID', '1'))
+
+AUTHENTICATION_BACKENDS = (
+    'django.contrib.auth.backends.ModelBackend',
+    'allauth.account.auth_backends.AuthenticationBackend',
+)
 
 # REST Framework
 REST_FRAMEWORK = {
@@ -140,6 +152,45 @@ SIMPLE_JWT = {
     'BLACKLIST_AFTER_ROTATION': True,
     'AUTH_HEADER_TYPES': ('Bearer',),
 }
+
+# Google OAuth (authorization-code flow)
+GOOGLE_CLIENT_ID = os.getenv('GOOGLE_CLIENT_ID', os.getenv('GOOGLE_OAUTH_CLIENT_ID', ''))
+GOOGLE_CLIENT_SECRET = os.getenv('GOOGLE_CLIENT_SECRET', os.getenv('GOOGLE_OAUTH_CLIENT_SECRET', ''))
+GOOGLE_CALLBACK_URL = os.getenv('GOOGLE_CALLBACK_URL', 'http://localhost:8000/api/v1/auth/google/callback/')
+
+# Frontend URLs for redirect after Google OAuth
+FRONTEND_URL = os.getenv('FRONTEND_URL', 'http://localhost:3000')
+FRONTEND_GOOGLE_CALLBACK = os.getenv('FRONTEND_GOOGLE_CALLBACK', '')
+FRONTEND_ERROR_URL = os.getenv('FRONTEND_ERROR_URL', '')
+
+# Keep allauth wired for SocialAccount model only
+SOCIALACCOUNT_PROVIDERS = {
+    'google': {
+        'APP': {
+            'client_id': GOOGLE_CLIENT_ID,
+            'secret': GOOGLE_CLIENT_SECRET,
+            'key': '',
+        },
+        'SCOPE': ['openid', 'email', 'profile'],
+        'AUTH_PARAMS': {
+            'access_type': 'online',
+            'prompt': 'select_account',
+        },
+    }
+}
+
+# JWT cookie settings (HttpOnly cookies for Google OAuth flow)
+JWT_COOKIE_SECURE = env_bool('JWT_COOKIE_SECURE', default=not DEBUG)
+JWT_COOKIE_SAMESITE = os.getenv('JWT_COOKIE_SAMESITE', 'Lax')
+JWT_COOKIE_DOMAIN = os.getenv('JWT_COOKIE_DOMAIN', None) or None
+JWT_COOKIE_PATH = os.getenv('JWT_COOKIE_PATH', '/')
+JWT_ACCESS_COOKIE_NAME = os.getenv('JWT_ACCESS_COOKIE_NAME', 'access_token')
+JWT_REFRESH_COOKIE_NAME = os.getenv('JWT_REFRESH_COOKIE_NAME', 'refresh_token')
+ACCOUNT_UNIQUE_EMAIL = True
+ACCOUNT_EMAIL_VERIFICATION = 'none'
+ACCOUNT_LOGIN_METHODS = {'email'}
+ACCOUNT_SIGNUP_FIELDS = ['email*', 'password1*', 'password2*']
+ACCOUNT_USER_MODEL_USERNAME_FIELD = None
 
 # Internationalization
 # https://docs.djangoproject.com/en/5.2/topics/i18n/

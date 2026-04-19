@@ -105,6 +105,7 @@ cp .env.example .env
 
 - **POST** `/register/` — Register new user (learner, instructor, or partner institution)
 - **POST** `/login/` — Login with email & password
+- **POST** `/google/sign-in/` — Sign in with Google using an ID token or access token from the frontend
 - **POST** `/token/refresh/` — Refresh access token (requires refresh token)
 - **POST** `/logout/` — Logout (requires refresh token)
 - **POST** `/otp/verify/` — Verify OTP for registration or password reset
@@ -225,8 +226,42 @@ Configured in .env:
 - EMAIL_HOST_PASSWORD
 - DEFAULT_FROM_EMAIL
 - OTP_RATE_LIMIT
+- GOOGLE_OAUTH_CLIENT_ID
+- GOOGLE_OAUTH_CLIENT_SECRET
+- GOOGLE_OAUTH_ALLOWED_CLIENT_IDS
 
 Sample values are provided in .env.example.
+
+## Google Sign-In
+
+This project uses `django-allauth` for Google OAuth provider integration, while the backend endpoint performs direct token verification for frontend-issued Google credentials and links each Google identity through allauth's social account records.
+
+Google sign-in is supported only for `learner` and `instructor` accounts. `partner_institution` accounts must continue using the standard registration and login flow.
+
+### Frontend Flow
+
+1. Authenticate the user with Google in React or Next.js.
+2. Send the returned `id_token` (preferred) or `access_token` to `POST /api/v1/auth/google/sign-in/`.
+3. The backend verifies the token with Google, finds or creates the local user, and returns SimpleJWT access and refresh tokens.
+
+### Request Body
+
+```json
+{
+   "token": "google-id-or-access-token",
+   "token_type": "id_token",
+   "user_type": "learner"
+}
+```
+
+- `token_type`: `id_token`, `access_token`, or `auto`
+- `user_type`: only used when the backend creates a brand-new account, and only `learner` or `instructor` is accepted
+
+### Notes
+
+- Prefer `id_token` in production because it supports strict audience validation against your configured Google client IDs.
+- If you use `access_token`, request Google scopes `openid email profile` on the frontend.
+- Set `GOOGLE_OAUTH_ALLOWED_CLIENT_IDS` to every Google client ID allowed to call this backend.
 
 ## Useful Commands
 

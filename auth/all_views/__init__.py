@@ -1,4 +1,14 @@
-from auth.all_views.auth_views import UserRegistrationView, UserLoginView, LogoutView, TokenRefreshView
+from auth.all_views.auth_views import (
+    LogoutView,
+    TokenRefreshView,
+    UserLoginView,
+    UserRegistrationView,
+)
+from auth.all_views.google_views import (
+    GoogleAuthCallbackView,
+    GoogleAuthRedirectView,
+    GoogleExchangeTokenView,
+)
 from auth.all_views.otp_views import VerifyOTPView, ResendOTPView
 from auth.all_views.password_views import ForgotPasswordView, ResetPasswordView, ChangePasswordView
 from auth.all_views.profile_views import (
@@ -14,6 +24,9 @@ from auth.all_views.profile_views import (
 )
 
 __all__ = [
+    'GoogleAuthRedirectView',
+    'GoogleAuthCallbackView',
+    'GoogleExchangeTokenView',
     'UserRegistrationView',
     'UserLoginView',
     'LogoutView',

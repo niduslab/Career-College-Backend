@@ -1,4 +1,7 @@
 from auth.all_views import (
+    GoogleAuthCallbackView,
+    GoogleAuthRedirectView,
+    GoogleExchangeTokenView,
     UserRegistrationView,
     UserLoginView,
     LogoutView,
@@ -20,6 +23,9 @@ from auth.all_views import (
 )
 
 __all__ = [
+    'GoogleAuthRedirectView',
+    'GoogleAuthCallbackView',
+    'GoogleExchangeTokenView',
     'UserRegistrationView',
     'UserLoginView',
     'LogoutView',

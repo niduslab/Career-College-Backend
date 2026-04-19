@@ -1,4 +1,4 @@
-# Postman Testing Guide — Registration, Login, Forgot Password, Reset Password, Profiles & ID Verification
+# Postman Testing Guide — Registration, Login, Google Sign-In, Forgot Password, Reset Password, Profiles & ID Verification
 
 ## Table of Contents
 
@@ -12,40 +12,45 @@
 - [7. Login](#7-login)
 - [8. Refresh Token](#8-refresh-token)
 - [9. Logout](#9-logout)
+- [10. Google Sign-In — Redirect](#10-google-sign-in--redirect)
+- [11. Google Sign-In — Callback](#11-google-sign-in--callback)
+- [12. Google Sign-In — Exchange Token](#12-google-sign-in--exchange-token)
+- [13. Google Sign-In — Error Cases](#13-google-sign-in--error-cases)
 
 ### Password Management
-- [10. Forgot Password](#10-forgot-password-send-password-reset-otp)
-- [11. Verify OTP for Password Reset](#11-verify-otp-for-password-reset)
-- [12. Reset Password](#12-reset-password)
+- [14. Forgot Password](#14-forgot-password-send-password-reset-otp)
+- [15. Verify OTP for Password Reset](#15-verify-otp-for-password-reset)
+- [16. Reset Password](#16-reset-password)
 
 ### Profile Management
-- [13. My Profile — Get](#13-my-profile--get)
-- [14. My Profile — Update (PATCH)](#14-my-profile--update-patch)
-- [15. Education — List & Create](#15-education--list--create)
-- [16. Education — Update & Delete](#16-education--update--delete)
-- [17. Work Experience — List & Create](#17-work-experience--list--create)
-- [18. Work Experience — Update & Delete](#18-work-experience--update--delete)
+- [17. My Profile — Get](#17-my-profile--get)
+- [18. My Profile — Update (PATCH)](#18-my-profile--update-patch)
+- [19. Education — List & Create](#19-education--list--create)
+- [20. Education — Update & Delete](#20-education--update--delete)
+- [21. Work Experience — List & Create](#21-work-experience--list--create)
+- [22. Work Experience — Update & Delete](#22-work-experience--update--delete)
 
 ### Public Profiles
-- [19. Public Profile — View by Slug](#19-public-profile--view-by-slug)
-- [20. Public Profile Lists — Browse Learners](#20-public-profile-lists--browse-learners)
-- [21. Public Profile Lists — Browse Instructors](#21-public-profile-lists--browse-instructors)
-- [22. Public Profile Lists — Browse Institutions](#22-public-profile-lists--browse-institutions)
+- [23. Public Profile — View by Slug](#23-public-profile--view-by-slug)
+- [24. Public Profile Lists — Browse Learners](#24-public-profile-lists--browse-learners)
+- [25. Public Profile Lists — Browse Instructors](#25-public-profile-lists--browse-instructors)
+- [26. Public Profile Lists — Browse Institutions](#26-public-profile-lists--browse-institutions)
 
 ### Instructor ID Verification
-- [23. Create Draft Verification](#23-create-draft-verification)
-- [24. Update Draft Verification](#24-update-draft-verification)
-- [25. Submit Verification](#25-submit-verification)
-- [26. List My Verifications](#26-list-my-verifications)
-- [27. View Single Verification](#27-view-single-verification)
+- [27. Create Draft Verification](#27-create-draft-verification)
+- [28. Update Draft Verification](#28-update-draft-verification)
+- [29. Submit Verification](#29-submit-verification)
+- [30. List My Verifications](#30-list-my-verifications)
+- [31. View Single Verification](#31-view-single-verification)
 
 ### Admin — Verification Management
-- [28. Admin — List All Verifications](#28-admin--list-all-verifications)
-- [29. Admin — View Verification Detail](#29-admin--view-verification-detail)
-- [30. Admin — Review Verification](#30-admin--review-verification)
+- [32. Admin — List All Verifications](#32-admin--list-all-verifications)
+- [33. Admin — View Verification Detail](#33-admin--view-verification-detail)
+- [34. Admin — Review Verification](#34-admin--review-verification)
 
 ### Quick Test Flows
 - [Registration / Login](#quick-test-flow--registrationlogin)
+- [Google Sign-In (Full OAuth Flow)](#quick-test-flow--google-sign-in-full-oauth-flow)
 - [Forgot / Reset Password](#quick-test-flow--forgotreset-password)
 - [Profile Management](#quick-test-flow--profile-management)
 - [Public Browsing](#quick-test-flow--public-browsing)
@@ -429,7 +434,331 @@ Authorization: Bearer <access_token>
 
 ---
 
-## 10. Forgot Password (send password reset OTP)
+## 10. Google Sign-In — Redirect
+
+**GET** `/google/`
+
+> Open this URL in a **browser** (not Postman body). It redirects to Google's consent screen.
+> In Postman, send a GET request and check for a `302` redirect.
+
+**Optional query parameter:**
+| Param       | Default    | Description                                 |
+|-------------|------------|---------------------------------------------|
+| `user_type` | `learner`  | Used for new account creation: `learner` or `instructor` |
+
+**Examples:**
+- `http://localhost:8000/api/v1/auth/google/` — signs in as learner (default)
+- `http://localhost:8000/api/v1/auth/google/?user_type=instructor` — signs in as instructor
+
+**Expected 302:**
+- `Location` header points to `https://accounts.google.com/o/oauth2/v2/auth?...`
+- Contains your `client_id`, `redirect_uri`, `scope=openid+email+profile`, and a random `state` param
+
+**How to test in Postman:**
+1. Create a GET request to `http://localhost:8000/api/v1/auth/google/`
+2. In Postman **Settings** (gear icon), **disable** "Automatically follow redirects"
+3. Send — you should get a `302` with the Google URL in the `Location` header
+4. Copy that URL and open it in a browser to complete the Google consent flow
+
+**Error case — not configured (503):**
+
+If `GOOGLE_CLIENT_ID` is missing from your `.env`:
+```json
+{
+    "success": false,
+    "message": "Google sign-in is not configured on the server."
+}
+```
+
+---
+
+## 11. Google Sign-In — Callback
+
+**GET** `/google/callback/`
+
+> This endpoint is called **by Google**, not by you directly. After the user consents on Google's screen, Google redirects to this URL with a `code` query parameter.
+
+This endpoint operates in one of two modes:
+
+### Backend-only mode (default — no frontend needed)
+
+When `FRONTEND_GOOGLE_CALLBACK` is **not set** in `.env` (the default), the callback handles the entire flow automatically:
+
+1. Receives `?code=<authorization_code>` from Google
+2. Exchanges the code with Google server-to-server
+3. Fetches the Google profile
+4. Creates or finds the user
+5. Sets HttpOnly JWT cookies
+6. Returns a JSON response
+
+**This means you can test the full Google sign-in just by opening `/auth/google/` in a browser** — no frontend required.
+
+**Expected 200:**
+```json
+{
+    "success": true,
+    "message": "Google sign-in successful. New account created.",
+    "data": {
+        "user_id": 10,
+        "email": "user@gmail.com",
+        "full_name": "Google User",
+        "user_type": "learner",
+        "is_email_verified": true,
+        "is_verified": true,
+        "auth_provider": "google",
+        "is_new_user": true
+    }
+}
+```
+
+> `user_type` defaults to `learner`. To sign in as instructor, start at `/auth/google/?user_type=instructor`.
+
+**Error — Google returned an error:**
+```
+GET /google/callback/?error=access_denied
+```
+**Expected 400:**
+```json
+{
+    "success": false,
+    "message": "Google sign-in was cancelled or failed."
+}
+```
+
+**Error — No code param:**
+```
+GET /google/callback/
+```
+**Expected 400:** `"No authorization code received from Google."`
+
+### Frontend mode
+
+When `FRONTEND_GOOGLE_CALLBACK` **is set** in `.env`, the callback redirects to the frontend:
+
+- Receives `?code=<authorization_code>&state=<state>` from Google
+- Redirects to `FRONTEND_GOOGLE_CALLBACK?code=<code>&state=<state>`
+- On error, redirects to `FRONTEND_ERROR_URL?error=<message>`
+
+**To test manually in Postman (frontend mode):**
+
+```
+GET /google/callback/?code=fake_auth_code_123&state=test_state
+```
+
+**Expected 302:**
+- `Location`: `http://localhost:3000/auth/google/callback?code=fake_auth_code_123&state=test_state`
+
+---
+
+## 12. Google Sign-In — Exchange Token
+
+**POST** `/google/exchange-token/`
+
+> This is the main endpoint your frontend calls after receiving the authorization code from the callback redirect.
+
+### 12a. New Learner Sign-In
+
+```json
+{
+    "code": "<authorization_code_from_google>",
+    "user_type": "learner"
+}
+```
+
+**Expected 200:**
+```json
+{
+    "success": true,
+    "message": "Google sign-in successful. New account created.",
+    "data": {
+        "user_id": 10,
+        "email": "user@gmail.com",
+        "full_name": "Google User",
+        "user_type": "learner",
+        "is_email_verified": true,
+        "is_verified": true,
+        "auth_provider": "google",
+        "is_new_user": true
+    }
+}
+```
+
+**Response also sets HttpOnly cookies:**
+| Cookie           | HttpOnly | Secure | SameSite | Max-Age    |
+|------------------|----------|--------|----------|------------|
+| `access_token`   | ✅       | ✅*    | Lax      | 43200 (12h)|
+| `refresh_token`  | ✅       | ✅*    | Lax      | 604800 (7d)|
+
+> *`Secure` is `False` in development (`DEBUG=True`), `True` in production.
+
+### 12b. New Instructor Sign-In
+
+```json
+{
+    "code": "<authorization_code_from_google>",
+    "user_type": "instructor"
+}
+```
+
+**Expected 200:**
+```json
+{
+    "success": true,
+    "message": "Google sign-in successful. New account created.",
+    "data": {
+        "user_id": 11,
+        "email": "instructor@gmail.com",
+        "full_name": "Google Instructor",
+        "user_type": "instructor",
+        "is_email_verified": true,
+        "is_verified": false,
+        "auth_provider": "google",
+        "is_new_user": true
+    }
+}
+```
+
+> Note: `is_verified` is `false` for instructors — they need admin verification.
+
+### 12c. Existing User Sign-In
+
+If the Google email matches an existing user, no new account is created:
+
+```json
+{
+    "code": "<authorization_code_from_google>"
+}
+```
+
+**Expected 200:**
+```json
+{
+    "success": true,
+    "message": "Google sign-in successful.",
+    "data": {
+        "user_id": 1,
+        "email": "john.learner@example.com",
+        "full_name": "John Doe",
+        "user_type": "learner",
+        "is_email_verified": true,
+        "is_verified": true,
+        "auth_provider": "google",
+        "is_new_user": false
+    }
+}
+```
+
+> `user_type` defaults to `"learner"` if omitted (only used for new account creation).
+
+---
+
+## 13. Google Sign-In — Error Cases
+
+### 13a. Missing authorization code
+
+```json
+{}
+```
+
+**Expected 400:**
+```json
+{
+    "success": false,
+    "message": "Authorization code is required."
+}
+```
+
+### 13b. Invalid / expired authorization code
+
+```json
+{
+    "code": "invalid_or_expired_code"
+}
+```
+
+**Expected 400:**
+```json
+{
+    "success": false,
+    "message": "Failed to exchange the authorization code with Google."
+}
+```
+
+### 13c. Blocked user_type — partner_institution
+
+```json
+{
+    "code": "<valid_code>",
+    "user_type": "partner_institution"
+}
+```
+
+**Expected 400:**
+```json
+{
+    "success": false,
+    "message": "Google sign-in failed.",
+    "errors": {
+        "user_type": ["\"partner_institution\" is not a valid choice. Allowed: learner, instructor."]
+    }
+}
+```
+
+### 13d. Existing partner_institution user tries Google sign-in
+
+If the Google email matches an existing `partner_institution` account:
+
+**Expected 403:**
+```json
+{
+    "success": false,
+    "message": "Partner institution accounts cannot sign in with Google."
+}
+```
+
+### 13e. Deleted user tries Google sign-in
+
+**Expected 403:**
+```json
+{
+    "success": false,
+    "message": "This account has been deleted and cannot sign in with Google."
+}
+```
+
+### 13f. Deactivated / restricted user
+
+**Expected 403:**
+```json
+{
+    "success": false,
+    "message": "Your account has been deactivated or restricted. Please contact support."
+}
+```
+
+### 13g. Google sub already linked to another user
+
+**Expected 409:**
+```json
+{
+    "success": false,
+    "message": "This Google account is already linked to another user."
+}
+```
+
+### 13h. User already linked to a different Google account
+
+**Expected 409:**
+```json
+{
+    "success": false,
+    "message": "Your account is already linked to a different Google account."
+}
+```
+
+---
+
+## 14. Forgot Password (send password reset OTP)
 
 **POST** `/password/forgot/`
 
@@ -472,7 +801,7 @@ Authorization: Bearer <access_token>
 
 ---
 
-## 11. Verify OTP for Password Reset
+## 15. Verify OTP for Password Reset
 
 **POST** `/otp/verify/`
 
@@ -504,7 +833,7 @@ Authorization: Bearer <access_token>
 
 ---
 
-## 12. Reset Password
+## 16. Reset Password
 
 **POST** `/password/reset/`
 
@@ -562,20 +891,70 @@ Authorization: Bearer <access_token>
 2. **Check OTP** — look in email or DB: `python manage.py shell -c "from auth.models import User; u=User.objects.get(email='john.learner@example.com'); print(u.otp_code)"`
 3. **Verify OTP** (step 5) with the code
 4. **Login** (step 7) — save the `access` and `refresh` tokens
-5. **Logout** (step 8) with the tokens
+5. **Logout** (step 9) with the tokens
+
+## Quick Test Flow — Google Sign-In (Full OAuth Flow)
+
+> **Prerequisites:** Set `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, and `GOOGLE_CALLBACK_URL` in your `.env` file. The callback URL must match what's configured in Google Cloud Console.
+
+### Option A: Backend-only browser flow (recommended — no frontend needed)
+
+> Make sure `FRONTEND_GOOGLE_CALLBACK` is **not set** in your `.env` (this is the default).
+
+1. Open `http://localhost:8000/api/v1/auth/google/` in your **browser**
+2. You'll be redirected to Google's consent screen — sign in with a Google account
+3. After consent, Google redirects to your backend callback (`/auth/google/callback/`)
+4. The backend exchanges the code, creates/finds the user, and returns JSON directly
+5. Check the browser response: `success: true`, user data, cookies set
+
+**To sign in as instructor instead of learner:**
+```
+http://localhost:8000/api/v1/auth/google/?user_type=instructor
+```
+
+### Option B: Frontend flow (when FRONTEND_GOOGLE_CALLBACK is set)
+
+1. Open `http://localhost:8000/api/v1/auth/google/` in your **browser**
+2. Google consent screen → backend callback → **redirects to frontend** with `?code=<code>`
+3. Copy the `code` value from the frontend URL
+4. In Postman, **POST** `/google/exchange-token/` with:
+   ```json
+   {
+       "code": "<paste_authorization_code_here>",
+       "user_type": "learner"
+   }
+   ```
+5. Check response: `success: true`, user data returned, `access_token` + `refresh_token` cookies set
+
+### Option C: Postman-only (for quick testing)
+
+1. **GET** `/google/` — disable auto-redirects, copy the `Location` header URL
+2. Paste that URL in a browser, complete Google sign-in
+3. After redirect, grab the `code` param from the URL
+4. **POST** `/google/exchange-token/` with the code
+5. Verify cookies and response payload
+
+### Things to verify:
+- ✅ `access_token` and `refresh_token` cookies are HttpOnly
+- ✅ New learner has `is_verified: true`, new instructor has `is_verified: false`
+- ✅ New Google user has no usable password (can't login with password)
+- ✅ `is_email_verified: true` for all Google sign-ins
+- ✅ Second sign-in with same Google account reuses existing user (`is_new_user: false`)
+- ✅ `partner_institution` user_type is rejected with 400
+- ✅ Existing `partner_institution` account is rejected with 403
 
 ## Quick Test Flow — Forgot/Reset Password
 
-1. **Forgot Password** (step 9) for a verified user email
+1. **Forgot Password** (step 14) for a verified user email
 2. **Check OTP** — look in email or DB
-3. **Verify OTP** using `purpose: "password_reset"` (step 10)
+3. **Verify OTP** using `purpose: "password_reset"` (step 15)
 4. **Copy reset_token** from the OTP verify response
-5. **Reset Password** (step 11)
+5. **Reset Password** (step 16)
 6. **Login** with the new password (step 7)
 
 ---
 
-## 13. My Profile — Get
+## 17. My Profile — Get
 
 **GET** `/profile/me/`
 
@@ -635,7 +1014,7 @@ Authorization: Bearer <access_token>
 
 ---
 
-## 14. My Profile — Update (PATCH)
+## 18. My Profile — Update (PATCH)
 
 **PATCH** `/profile/me/`
 
@@ -644,7 +1023,7 @@ Authorization: Bearer <access_token>
 Authorization: Bearer <access_token>
 ```
 
-### 13a. Update Learner Profile
+### 18a. Update Learner Profile
 
 ```json
 {
@@ -670,7 +1049,7 @@ Authorization: Bearer <access_token>
 }
 ```
 
-### 13b. Update Instructor Profile
+### 18b. Update Instructor Profile
 
 > Login as instructor first.
 
@@ -688,7 +1067,7 @@ Authorization: Bearer <access_token>
 }
 ```
 
-### 13c. Update Partner Institution Profile
+### 18c. Update Partner Institution Profile
 
 > Login as partner institution first.
 
@@ -792,9 +1171,9 @@ Authorization: Bearer <access_token>
 
 ---
 
-## 15. Education — List & Create
+## 19. Education — List & Create
 
-### 14a. List My Education
+### 19a. List My Education
 
 **GET** `/profile/me/education/`
 
@@ -811,7 +1190,7 @@ Authorization: Bearer <access_token>
 }
 ```
 
-### 14b. Create Education Entry
+### 19b. Create Education Entry
 
 **POST** `/profile/me/education/`
 
@@ -850,7 +1229,7 @@ Authorization: Bearer <access_token>
 }
 ```
 
-### 14c. Create Current Education (no end_date)
+### 19c. Create Current Education (no end_date)
 
 ```json
 {
@@ -904,9 +1283,9 @@ Authorization: Bearer <access_token>
 
 ---
 
-## 16. Education — Update & Delete
+## 20. Education — Update & Delete
 
-### 15a. Update Education Entry (PATCH)
+### 20a. Update Education Entry (PATCH)
 
 **PATCH** `/profile/me/education/1/`
 
@@ -930,7 +1309,7 @@ Authorization: Bearer <access_token>
 }
 ```
 
-### 15b. Delete Education Entry
+### 20b. Delete Education Entry
 
 **DELETE** `/profile/me/education/1/`
 
@@ -949,9 +1328,9 @@ Authorization: Bearer <access_token>
 
 ---
 
-## 17. Work Experience — List & Create
+## 21. Work Experience — List & Create
 
-### 16a. List My Work Experience
+### 21a. List My Work Experience
 
 **GET** `/profile/me/work-experience/`
 
@@ -968,7 +1347,7 @@ Authorization: Bearer <access_token>
 }
 ```
 
-### 16b. Create Work Experience Entry
+### 21b. Create Work Experience Entry
 
 **POST** `/profile/me/work-experience/`
 
@@ -1006,7 +1385,7 @@ Authorization: Bearer <access_token>
 }
 ```
 
-### 16c. Create Past Position
+### 21c. Create Past Position
 
 ```json
 {
@@ -1029,9 +1408,9 @@ Authorization: Bearer <access_token>
 
 ---
 
-## 18. Work Experience — Update & Delete
+## 22. Work Experience — Update & Delete
 
-### 17a. Update Work Experience (PATCH)
+### 22a. Update Work Experience (PATCH)
 
 **PATCH** `/profile/me/work-experience/1/`
 
@@ -1055,7 +1434,7 @@ Authorization: Bearer <access_token>
 }
 ```
 
-### 17b. Delete Work Experience
+### 22b. Delete Work Experience
 
 **DELETE** `/profile/me/work-experience/1/`
 
@@ -1074,7 +1453,7 @@ Authorization: Bearer <access_token>
 
 ---
 
-## 19. Public Profile — View by Slug
+## 23. Public Profile — View by Slug
 
 **GET** `/profiles/<slug>/`
 
@@ -1137,7 +1516,7 @@ Authorization: Bearer <access_token>
 
 ---
 
-## 20. Public Profile Lists — Browse Learners
+## 24. Public Profile Lists — Browse Learners
 
 **GET** `/profiles/learners/`
 
@@ -1176,7 +1555,7 @@ Authorization: Bearer <access_token>
 
 ---
 
-## 21. Public Profile Lists — Browse Instructors
+## 25. Public Profile Lists — Browse Instructors
 
 **GET** `/profiles/instructors/`
 
@@ -1214,7 +1593,7 @@ Authorization: Bearer <access_token>
 
 ---
 
-## 22. Public Profile Lists — Browse Institutions
+## 26. Public Profile Lists — Browse Institutions
 
 **GET** `/profiles/institutions/`
 
@@ -1322,7 +1701,7 @@ draft → submitted → under_review → approved
 
 ---
 
-## 23. Create Draft Verification
+## 27. Create Draft Verification
 
 **POST** `/create/`
 
@@ -1333,7 +1712,7 @@ Authorization: Bearer <instructor_access_token>
 
 > All fields are optional at this stage. You can create an empty draft and fill in details later.
 
-### 22a. Create empty draft
+### 27a. Create empty draft
 
 ```json
 {}
@@ -1366,7 +1745,7 @@ Authorization: Bearer <instructor_access_token>
 }
 ```
 
-### 22b. Create draft with partial data
+### 27b. Create draft with partial data
 
 ```json
 {
@@ -1402,7 +1781,7 @@ Authorization: Bearer <instructor_access_token>
 
 ---
 
-## 24. Update Draft Verification
+## 28. Update Draft Verification
 
 **PATCH** `/1/update/`
 
@@ -1413,7 +1792,7 @@ Authorization: Bearer <instructor_access_token>
 Authorization: Bearer <instructor_access_token>
 ```
 
-### 23a. Update text fields (JSON)
+### 28a. Update text fields (JSON)
 
 ```json
 {
@@ -1452,7 +1831,7 @@ Authorization: Bearer <instructor_access_token>
 
 > Resume can be uploaded separately using form-data (section 23b).
 
-### 23b. Upload documents (form-data)
+### 28b. Upload documents (form-data)
 
 > File uploads must use **form-data** (not raw JSON).
 
@@ -1467,7 +1846,7 @@ Authorization: Bearer <instructor_access_token>
 
 **Expected 200:** Same structure with file URLs populated.
 
-### 23c. Full update with PUT (all fields required)
+### 28c. Full update with PUT (all fields required)
 
 **PUT** `/1/update/`
 
@@ -1501,7 +1880,7 @@ Authorization: Bearer <instructor_access_token>
 
 ---
 
-## 25. Submit Verification
+## 29. Submit Verification
 
 **POST** `/1/submit/`
 
@@ -1588,7 +1967,7 @@ Before submitting, **two sets of requirements** must be satisfied:
 
 ---
 
-## 26. List My Verifications
+## 30. List My Verifications
 
 **GET** `/my/`
 
@@ -1628,7 +2007,7 @@ Authorization: Bearer <instructor_access_token>
 
 ---
 
-## 27. View Single Verification
+## 31. View Single Verification
 
 **GET** `/my/1/`
 
@@ -1670,7 +2049,7 @@ python manage.py createsuperuser
 
 ---
 
-## 28. Admin — List All Verifications
+## 32. Admin — List All Verifications
 
 **GET** `/admin/list/`
 
@@ -1720,7 +2099,7 @@ Authorization: Bearer <admin_access_token>
 
 ---
 
-## 29. Admin — View Verification Detail
+## 33. Admin — View Verification Detail
 
 **GET** `/admin/1/`
 
@@ -1762,7 +2141,7 @@ Authorization: Bearer <admin_access_token>
 
 ---
 
-## 30. Admin — Review Verification
+## 34. Admin — Review Verification
 
 **POST** `/admin/1/review/`
 
@@ -1773,7 +2152,7 @@ Authorization: Bearer <admin_access_token>
 Authorization: Bearer <admin_access_token>
 ```
 
-### 29a. Pick Up (submitted → under_review)
+### 34a. Pick Up (submitted → under_review)
 
 > Admin claims the request for review.
 
@@ -1798,7 +2177,7 @@ Authorization: Bearer <admin_access_token>
 }
 ```
 
-### 29b. Approve (under_review → approved)
+### 34b. Approve (under_review → approved)
 
 > Approves the instructor's identity. This also sets `is_verified = True` on the instructor's profile.
 
@@ -1821,7 +2200,7 @@ Authorization: Bearer <admin_access_token>
 }
 ```
 
-### 29c. Reject (under_review → rejected)
+### 34c. Reject (under_review → rejected)
 
 > `rejection_reason` is **required** when rejecting.
 
@@ -1863,7 +2242,7 @@ Authorization: Bearer <admin_access_token>
 }
 ```
 
-### 29d. Request Action (under_review → action_required)
+### 34d. Request Action (under_review → action_required)
 
 > Sends the request back to the instructor for corrections. `action_required_reason` is **required**.
 
@@ -1905,7 +2284,7 @@ Authorization: Bearer <admin_access_token>
 }
 ```
 
-### 29e. Expire a verification
+### 34e. Expire a verification
 
 ```json
 {

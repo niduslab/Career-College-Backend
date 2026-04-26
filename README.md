@@ -70,6 +70,7 @@ cp .env.example .env
 
 - **Auth:** `http://127.0.0.1:8000/api/v1/auth`
 - **Verification:** `http://127.0.0.1:8000/api/v1/verification`
+- **Courses:** `http://127.0.0.1:8000/api/v1/courses`
 
 ## Core Features
 
@@ -95,6 +96,14 @@ cp .env.example .env
 - Admin review system with approval, rejection, and action-requested states
 - Automatic instructor profile verification flag on approval
 - Resubmission workflow for fixing rejected documents
+
+### Courses & Video Transcoding
+- Course marketplace model (`NidusCourse`) with category support (`CourseCategory`)
+- Course structure with sections and lectures
+- Lecture types: `article` and `video`
+- Video upload with async transcoding pipeline (Celery task queue)
+- HLS output generation with multiple renditions: `240p`, `360p`, `480p`, `720p`, `1080p`
+- Processing lifecycle tracking via `VideoAsset` and `VideoProcessingJob`
 
 ### Soft Deletion
 - User soft delete with soft_delete reason tracking
@@ -148,6 +157,30 @@ cp .env.example .env
 - **GET** `/admin/<id>/` — View verification request detail
 - **POST** `/admin/<id>/review/` — Review verification (pick_up, approve, reject, request_action, expire)
 
+## Courses Endpoints
+
+### Courses
+- **GET** `/` — List instructor courses
+- **POST** `/create/` — Create course
+- **GET** `/<course_id>/` — Course detail
+- **PATCH** `/<course_id>/` — Update course
+
+### Course Sections
+- **GET** `/<course_id>/sections/` — List sections for a course
+- **POST** `/<course_id>/sections/create/` — Create section
+- **GET** `/sections/<section_id>/` — Section detail
+- **PATCH** `/sections/<section_id>/` — Update section
+- **PUT** `/sections/<section_id>/` — Replace section
+- **DELETE** `/sections/<section_id>/` — Delete section
+
+### Lectures
+- **GET** `/sections/<section_id>/lectures/` — List section lectures
+- **POST** `/sections/<section_id>/lectures/create/` — Create lecture (supports `video_file` upload for video type)
+- **GET** `/lectures/<lecture_id>/` — Lecture detail
+- **PATCH** `/lectures/<lecture_id>/` — Update lecture
+- **PUT** `/lectures/<lecture_id>/` — Replace lecture
+- **DELETE** `/lectures/<lecture_id>/` — Delete lecture
+
 ## Admin Features
 
 ### User Management
@@ -198,6 +231,8 @@ Includes:
 - Public profile browsing
 - **Instructor ID verification workflow** (full cycle with quick test flows)
 - Admin verification review actions
+
+Course upload/transcoding testing guide: **[COURSES_API_TESTING_GUIDE.md](COURSES_API_TESTING_GUIDE.md)**
 - Error cases for each endpoint
 
 ### Admin Setup for Testing
@@ -226,6 +261,13 @@ Configured in .env:
 - EMAIL_HOST_PASSWORD
 - DEFAULT_FROM_EMAIL
 - OTP_RATE_LIMIT
+- CELERY_BROKER_URL
+- CELERY_RESULT_BACKEND
+- MEDIA_ROOT
+- MEDIA_URL
+- FFMPEG_BINARY_PATH
+- FFPROBE_BINARY_PATH (optional, recommended)
+- LOG_DIR (optional; defaults to `<project>/logs`)
 - GOOGLE_OAUTH_CLIENT_ID
 - GOOGLE_OAUTH_CLIENT_SECRET
 - GOOGLE_OAUTH_ALLOWED_CLIENT_IDS
@@ -284,6 +326,9 @@ python manage.py test
 # Check code for errors
 python manage.py check
 
+# Run Celery worker (video transcoding tasks)
+celery -A career_college_backend worker -l info
+
 # View available commands
 python manage.py help
 ```
@@ -317,6 +362,14 @@ career_college_backend/
 │   ├── views.py & all_views/      # Instructor & admin viewsets
 │   ├── admin.py                   # Django admin customization
 │   └── migrations/                # Database migrations
+├── courses/                       # Course marketplace + content upload/transcoding
+│   ├── models.py                  # NidusCourse, CourseCategory, sections, lectures, video assets/jobs
+│   ├── serializers.py             # Course/section/lecture serializers
+│   ├── all_views/                 # APIView-based endpoints
+│   ├── services.py                # Course business logic + upload orchestration
+│   ├── tasks.py                   # Celery task entrypoints
+│   ├── transcoding.py             # FFmpeg/ffprobe transcoding logic
+│   └── migrations/                # Database migrations
 ├── core/                          # Shared utilities
 │   ├── pagination.py              # StandardResultsSetPagination
 │   ├── permissions.py             # Custom permission classes
@@ -325,7 +378,8 @@ career_college_backend/
 ├── manage.py                      # Django management script
 ├── requirements.txt               # Python dependencies
 ├── .env.example                   # Template for environment variables
-└── POSTMAN_TESTING_GUIDE.md       # Complete API testing guide
+├── POSTMAN_TESTING_GUIDE.md       # Auth/verification API testing guide
+└── COURSES_API_TESTING_GUIDE.md   # Courses API + transcoding testing guide
 ```
 
 ## Key Models

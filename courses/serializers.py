@@ -14,6 +14,33 @@ from courses.models import (
 )
 
 
+def _normalize_media_relative_path(path_value):
+    if not isinstance(path_value, str):
+        return path_value
+
+    normalized = path_value.replace('\\', '/').lstrip('/')
+    if normalized.startswith('media/'):
+        return normalized[len('media/'):]
+    return normalized
+
+
+def _normalize_renditions_playlists(renditions):
+    if not isinstance(renditions, list):
+        return renditions
+
+    normalized_renditions = []
+    for item in renditions:
+        if not isinstance(item, dict):
+            normalized_renditions.append(item)
+            continue
+
+        row = dict(item)
+        row['playlist'] = _normalize_media_relative_path(row.get('playlist', ''))
+        normalized_renditions.append(row)
+
+    return normalized_renditions
+
+
 class InstructorBriefSerializer(serializers.ModelSerializer):
     class Meta:
         model = User
@@ -235,6 +262,9 @@ class NidusCourseCreateUpdateSerializer(serializers.ModelSerializer):
 
 
 class VideoAssetSerializer(serializers.ModelSerializer):
+    master_playlist = serializers.SerializerMethodField()
+    renditions = serializers.SerializerMethodField()
+
     class Meta:
         model = VideoAsset
         fields = [
@@ -252,6 +282,12 @@ class VideoAssetSerializer(serializers.ModelSerializer):
             'updated_at',
         ]
         read_only_fields = fields
+
+    def get_master_playlist(self, obj):
+        return _normalize_media_relative_path(obj.master_playlist)
+
+    def get_renditions(self, obj):
+        return _normalize_renditions_playlists(obj.renditions)
 
 
 class CourseSectionSerializer(serializers.ModelSerializer):
@@ -287,6 +323,8 @@ class CourseSectionCreateUpdateSerializer(serializers.ModelSerializer):
 
 class LectureSerializer(serializers.ModelSerializer):
     section_id = serializers.IntegerField(source='section.id', read_only=True)
+    stream_master_playlist = serializers.SerializerMethodField()
+    stream_renditions = serializers.SerializerMethodField()
     active_video_asset = serializers.SerializerMethodField()
 
     class Meta:
@@ -306,6 +344,12 @@ class LectureSerializer(serializers.ModelSerializer):
             'updated_at',
         ]
         read_only_fields = fields
+
+    def get_stream_master_playlist(self, obj):
+        return _normalize_media_relative_path(obj.stream_master_playlist)
+
+    def get_stream_renditions(self, obj):
+        return _normalize_renditions_playlists(obj.stream_renditions)
 
     def get_active_video_asset(self, obj):
         asset = obj.video_assets.filter(is_active=True).order_by('-created_at').first()

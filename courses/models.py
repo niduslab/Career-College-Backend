@@ -22,7 +22,7 @@ def course_thumbnail_upload_path(instance, filename):
 def video_asset_upload_path(instance, filename):
     """
     Store raw lecture videos with a stable, production-grade path:
-    media/courses/{course_slug}/lectures/{lecture_id}/raw/{uuid}.{ext}
+    courses/{course_slug}/lectures/{lecture_id}/raw/{uuid}.{ext}
     """
     _, ext = os.path.splitext(filename)
     extension = ext.lower() or '.bin'
@@ -37,7 +37,7 @@ def video_asset_upload_path(instance, filename):
             course_slug = course.slug
 
     unique_name = uuid.uuid4().hex
-    return f"media/courses/{course_slug}/lectures/{lecture_id}/raw/{unique_name}{extension}"
+    return f"courses/{course_slug}/lectures/{lecture_id}/raw/{unique_name}{extension}"
 
 
 class TimestampedModel(models.Model):

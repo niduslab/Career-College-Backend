@@ -38,7 +38,7 @@ def _ffprobe_binary() -> str:
 def _build_output_root(video_asset: VideoAsset) -> Path:
     lecture = video_asset.lecture
     course_slug = lecture.section.course.slug
-    root = Path(settings.MEDIA_ROOT) / 'media' / 'courses' / course_slug / 'lectures' / str(lecture.id) / 'hls'
+    root = Path(settings.MEDIA_ROOT) / 'courses' / course_slug / 'lectures' / str(lecture.id) / 'hls'
     return root / str(video_asset.id)
 
 

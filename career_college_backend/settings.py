@@ -211,9 +211,10 @@ USE_TZ = True
 STATIC_URL = 'static/'
 
 # Media files (user uploads)
-MEDIA_URL = '/media/'
-MEDIA_ROOT = BASE_DIR / 'media'
+MEDIA_URL = os.getenv('MEDIA_URL', '/media/')
+MEDIA_ROOT = Path(os.getenv('MEDIA_ROOT', str(BASE_DIR / 'media')))
 FFMPEG_BINARY_PATH = os.getenv('FFMPEG_BINARY_PATH', 'ffmpeg')
+FFPROBE_BINARY_PATH = os.getenv('FFPROBE_BINARY_PATH', 'ffprobe')
 
 # Celery
 CELERY_BROKER_URL = os.getenv('CELERY_BROKER_URL', 'redis://127.0.0.1:6379/0')

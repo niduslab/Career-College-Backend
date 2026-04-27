@@ -26,13 +26,14 @@ def transcode_video_asset_task(self, video_asset_id: int, job_id: int):
     video_asset.save(update_fields=['status', 'updated_at'])
 
     try:
-        master_playlist, renditions = transcode_video_asset(video_asset)
+        master_playlist, renditions, duration_seconds = transcode_video_asset(video_asset)
 
         with transaction.atomic():
             video_asset.master_playlist = master_playlist
             video_asset.renditions = renditions
+            video_asset.duration_seconds = duration_seconds
             video_asset.status = VideoAsset.Status.READY
-            video_asset.save(update_fields=['master_playlist', 'renditions', 'status', 'updated_at'])
+            video_asset.save(update_fields=['master_playlist', 'renditions', 'duration_seconds', 'status', 'updated_at'])
 
             lecture = video_asset.lecture
             lecture.stream_master_playlist = master_playlist

@@ -78,6 +78,33 @@ def _probe_video_resolution(video_file: Path) -> tuple[int, int] | None:
         return None
 
 
+def _probe_video_duration_seconds(video_file: Path) -> int | None:
+    command = [
+        _ffprobe_binary(),
+        '-v',
+        'error',
+        '-show_entries',
+        'format=duration',
+        '-of',
+        'default=noprint_wrappers=1:nokey=1',
+        str(video_file),
+    ]
+
+    try:
+        result = subprocess.run(command, check=True, capture_output=True, text=True)
+        raw = (result.stdout or '').strip()
+        if not raw:
+            return None
+        duration = float(raw)
+        if duration <= 0:
+            return None
+        # Ensure DB validation (> 0) always passes for short clips.
+        return max(1, int(round(duration)))
+    except Exception:
+        logger.warning('Failed to probe video duration for file=%s', video_file, exc_info=True)
+        return None
+
+
 def _write_master_playlist(output_root: Path, variant_rows: list[dict]) -> Path:
     master_path = output_root / 'master.m3u8'
     lines = ['#EXTM3U', '#EXT-X-VERSION:3']
@@ -88,17 +115,19 @@ def _write_master_playlist(output_root: Path, variant_rows: list[dict]) -> Path:
     return master_path
 
 
-def transcode_video_asset(video_asset: VideoAsset) -> tuple[str, list[dict]]:
+def transcode_video_asset(video_asset: VideoAsset) -> tuple[str, list[dict], int | None]:
     """
     Transcode one raw video into HLS renditions and return:
     - master playlist relative path (MEDIA_ROOT-relative)
     - list of rendition metadata dicts
+    - duration_seconds (if probe succeeds)
     """
     input_path = Path(video_asset.video_file.path)
     if not input_path.exists():
         raise FileNotFoundError(f'Video file not found: {input_path}')
 
     ffmpeg_bin = _ffmpeg_binary()
+    duration_seconds = _probe_video_duration_seconds(input_path)
     output_root = _build_output_root(video_asset)
     output_root.mkdir(parents=True, exist_ok=True)
 
@@ -178,4 +207,4 @@ def transcode_video_asset(video_asset: VideoAsset) -> tuple[str, list[dict]]:
         }
         for row in variant_rows
     ]
-    return master_relative, renditions
+    return master_relative, renditions, duration_seconds

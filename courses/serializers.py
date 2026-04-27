@@ -1,6 +1,7 @@
-from auth.models import PartnerInstitutionProfile, User
+from django.db import transaction
 from rest_framework import serializers
 
+from auth.models import PartnerInstitutionProfile, User
 from courses.models import (
     CourseAudience,
     CourseCategory,
@@ -40,6 +41,12 @@ class CourseLearningObjectiveSerializer(serializers.ModelSerializer):
         fields = ['id', 'text', 'display_order']
         read_only_fields = ['id']
 
+    def validate_text(self, value):
+        text = value.strip()
+        if not text:
+            raise serializers.ValidationError('Text cannot be empty.')
+        return text
+
 
 class CoursePreRequisiteSerializer(serializers.ModelSerializer):
     class Meta:
@@ -47,12 +54,24 @@ class CoursePreRequisiteSerializer(serializers.ModelSerializer):
         fields = ['id', 'text', 'display_order']
         read_only_fields = ['id']
 
+    def validate_text(self, value):
+        text = value.strip()
+        if not text:
+            raise serializers.ValidationError('Text cannot be empty.')
+        return text
+
 
 class CourseAudienceSerializer(serializers.ModelSerializer):
     class Meta:
         model = CourseAudience
         fields = ['id', 'text', 'display_order']
         read_only_fields = ['id']
+
+    def validate_text(self, value):
+        text = value.strip()
+        if not text:
+            raise serializers.ValidationError('Text cannot be empty.')
+        return text
 
 
 class NidusCourseSerializer(serializers.ModelSerializer):
@@ -161,56 +180,58 @@ class NidusCourseCreateUpdateSerializer(serializers.ModelSerializer):
             model_class.objects.bulk_create(new_objects)
 
     def create(self, validated_data):
-        learning_objectives = validated_data.pop('learning_objectives', [])
-        prerequisites = validated_data.pop('prerequisites', [])
-        audiences = validated_data.pop('audiences', [])
-        instructors = validated_data.pop('instructors', [])
-        partner_institutions = validated_data.pop('partner_institutions', [])
+        with transaction.atomic():
+            learning_objectives = validated_data.pop('learning_objectives', [])
+            prerequisites = validated_data.pop('prerequisites', [])
+            audiences = validated_data.pop('audiences', [])
+            instructors = validated_data.pop('instructors', [])
+            partner_institutions = validated_data.pop('partner_institutions', [])
 
-        request_user = self.context['request'].user
-        course = NidusCourse.objects.create(created_by=request_user, **validated_data)
+            request_user = self.context['request'].user
+            course = NidusCourse.objects.create(created_by=request_user, **validated_data)
 
-        if not instructors:
-            instructors = [request_user]
-        elif request_user not in instructors:
-            instructors.append(request_user)
+            if not instructors:
+                instructors = [request_user]
+            elif request_user not in instructors:
+                instructors.append(request_user)
 
-        course.instructors.set(instructors)
-        course.partner_institutions.set(partner_institutions)
-        self._replace_items(CourseLearningObjective, course, learning_objectives)
-        self._replace_items(CoursePreRequisite, course, prerequisites)
-        self._replace_items(CourseAudience, course, audiences)
-        return course
+            course.instructors.set(instructors)
+            course.partner_institutions.set(partner_institutions)
+            self._replace_items(CourseLearningObjective, course, learning_objectives)
+            self._replace_items(CoursePreRequisite, course, prerequisites)
+            self._replace_items(CourseAudience, course, audiences)
+            return course
 
     def update(self, instance, validated_data):
-        learning_objectives = validated_data.pop('learning_objectives', None)
-        prerequisites = validated_data.pop('prerequisites', None)
-        audiences = validated_data.pop('audiences', None)
-        instructors = validated_data.pop('instructors', None)
-        partner_institutions = validated_data.pop('partner_institutions', None)
+        with transaction.atomic():
+            learning_objectives = validated_data.pop('learning_objectives', None)
+            prerequisites = validated_data.pop('prerequisites', None)
+            audiences = validated_data.pop('audiences', None)
+            instructors = validated_data.pop('instructors', None)
+            partner_institutions = validated_data.pop('partner_institutions', None)
 
-        for attr, value in validated_data.items():
-            setattr(instance, attr, value)
-        instance.save()
+            for attr, value in validated_data.items():
+                setattr(instance, attr, value)
+            instance.save()
 
-        request_user = self.context['request'].user
+            request_user = self.context['request'].user
 
-        if instructors is not None:
-            if request_user not in instructors:
-                instructors.append(request_user)
-            instance.instructors.set(instructors)
+            if instructors is not None:
+                if request_user not in instructors:
+                    instructors.append(request_user)
+                instance.instructors.set(instructors)
 
-        if partner_institutions is not None:
-            instance.partner_institutions.set(partner_institutions)
+            if partner_institutions is not None:
+                instance.partner_institutions.set(partner_institutions)
 
-        if learning_objectives is not None:
-            self._replace_items(CourseLearningObjective, instance, learning_objectives)
-        if prerequisites is not None:
-            self._replace_items(CoursePreRequisite, instance, prerequisites)
-        if audiences is not None:
-            self._replace_items(CourseAudience, instance, audiences)
+            if learning_objectives is not None:
+                self._replace_items(CourseLearningObjective, instance, learning_objectives)
+            if prerequisites is not None:
+                self._replace_items(CoursePreRequisite, instance, prerequisites)
+            if audiences is not None:
+                self._replace_items(CourseAudience, instance, audiences)
 
-        return instance
+            return instance
 
 
 class VideoAssetSerializer(serializers.ModelSerializer):

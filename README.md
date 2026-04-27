@@ -89,7 +89,7 @@ cp .env.example .env
 - File uploads (profile photo, institution logo/cover, resume)
 
 ### Instructor Identity Verification
-- Multi-stage verification workflow: draft → submitted → under_review → approved/rejected/action_required
+- Multi-stage verification workflow: draft -> submitted -> under_review -> approved/rejected/action_required
 - Support for multiple ID document types (national ID, passport, driver's license, residence permit)
 - Document image uploads (front, back, selfie)
 - Optional resume/CV upload
@@ -99,11 +99,11 @@ cp .env.example .env
 
 ### Courses & Video Transcoding
 - Course marketplace model (`NidusCourse`) with category support (`CourseCategory`)
-- Course structure with sections and lectures
+- Course structure with sections, lectures, learning objectives, prerequisites, and audience entries
 - Lecture types: `article` and `video`
 - Video upload with async transcoding pipeline (Celery task queue)
 - HLS output generation with multiple renditions: `240p`, `360p`, `480p`, `720p`, `1080p`
-- Processing lifecycle tracking via `VideoAsset` and `VideoProcessingJob`
+- Video duration probing via `ffprobe` and lifecycle tracking via `VideoAsset` and `VideoProcessingJob`
 
 ### Soft Deletion
 - User soft delete with soft_delete reason tracking
@@ -112,74 +112,96 @@ cp .env.example .env
 
 ## Auth Endpoints
 
-- **POST** `/register/` — Register new user (learner, instructor, or partner institution)
-- **POST** `/login/` — Login with email & password
-- **POST** `/google/sign-in/` — Sign in with Google using an ID token or access token from the frontend
-- **POST** `/token/refresh/` — Refresh access token (requires refresh token)
-- **POST** `/logout/` — Logout (requires refresh token)
-- **POST** `/otp/verify/` — Verify OTP for registration or password reset
-- **POST** `/otp/resend/` — Resend OTP
-- **POST** `/password/forgot/` — Request password reset OTP
-- **POST** `/password/reset/` — Reset password with token
-- **POST** `/password/change/` — Change password (authenticated)
+- **POST** `/register/` - Register new user (learner, instructor, or partner institution)
+- **POST** `/login/` - Login with email & password
+- **POST** `/google/sign-in/` - Sign in with Google using an ID token or access token from the frontend
+- **POST** `/token/refresh/` - Refresh access token (requires refresh token)
+- **POST** `/logout/` - Logout (requires refresh token)
+- **POST** `/otp/verify/` - Verify OTP for registration or password reset
+- **POST** `/otp/resend/` - Resend OTP
+- **POST** `/password/forgot/` - Request password reset OTP
+- **POST** `/password/reset/` - Reset password with token
+- **POST** `/password/change/` - Change password (authenticated)
 
 ## Profile Endpoints
 
-- **GET** `/profile/me/` — Get authenticated user's profile
-- **PATCH** `/profile/me/` — Update profile (supports form-data for file uploads)
-- **GET** `/profiles/<slug>/` — View public profile by slug (no auth required)
-- **GET** `/profiles/learners/` — Browse public learner profiles (paginated, filterable)
-- **GET** `/profiles/instructors/` — Browse public instructor profiles (paginated, filterable)
-- **GET** `/profiles/institutions/` — Browse public institution profiles (paginated, filterable)
+- **GET** `/profile/me/` - Get authenticated user's profile
+- **PATCH** `/profile/me/` - Update profile (supports form-data for file uploads)
+- **GET** `/profiles/<slug>/` - View public profile by slug (no auth required)
+- **GET** `/profiles/learners/` - Browse public learner profiles (paginated, filterable)
+- **GET** `/profiles/instructors/` - Browse public instructor profiles (paginated, filterable)
+- **GET** `/profiles/institutions/` - Browse public institution profiles (paginated, filterable)
 
 ### Education & Work Experience
 
-- **GET** `/profile/me/education/` — List education entries
-- **POST** `/profile/me/education/` — Create education entry
-- **PATCH** `/profile/me/education/<id>/` — Update education entry
-- **DELETE** `/profile/me/education/<id>/` — Delete education entry
-- **GET** `/profile/me/work-experience/` — List work experience entries
-- **POST** `/profile/me/work-experience/` — Create work experience entry
-- **PATCH** `/profile/me/work-experience/<id>/` — Update work experience entry
-- **DELETE** `/profile/me/work-experience/<id>/` — Delete work experience entry
+- **GET** `/profile/me/education/` - List education entries
+- **POST** `/profile/me/education/` - Create education entry
+- **PATCH** `/profile/me/education/<id>/` - Update education entry
+- **DELETE** `/profile/me/education/<id>/` - Delete education entry
+- **GET** `/profile/me/work-experience/` - List work experience entries
+- **POST** `/profile/me/work-experience/` - Create work experience entry
+- **PATCH** `/profile/me/work-experience/<id>/` - Update work experience entry
+- **DELETE** `/profile/me/work-experience/<id>/` - Delete work experience entry
 
 ## Verification Endpoints (Instructors)
 
-- **POST** `/create/` — Create draft verification request
-- **PATCH** `/<id>/update/` — Update draft/action_required verification
-- **POST** `/<id>/submit/` — Submit verification for admin review
-- **GET** `/my/` — List instructor's verification requests
-- **GET** `/my/<id>/` — View specific verification request
+- **POST** `/create/` - Create draft verification request
+- **PATCH** `/<id>/update/` - Update draft/action_required verification
+- **POST** `/<id>/submit/` - Submit verification for admin review
+- **GET** `/my/` - List instructor's verification requests
+- **GET** `/my/<id>/` - View specific verification request
 
 ## Verification Endpoints (Admin)
 
-- **GET** `/admin/list/` — List all verification requests (paginated, filterable by status)
-- **GET** `/admin/<id>/` — View verification request detail
-- **POST** `/admin/<id>/review/` — Review verification (pick_up, approve, reject, request_action, expire)
+- **GET** `/admin/list/` - List all verification requests (paginated, filterable by status)
+- **GET** `/admin/<id>/` - View verification request detail
+- **POST** `/admin/<id>/review/` - Review verification (pick_up, approve, reject, request_action, expire)
 
 ## Courses Endpoints
 
 ### Courses
-- **GET** `/` — List instructor courses
-- **POST** `/create/` — Create course
-- **GET** `/<course_id>/` — Course detail
-- **PATCH** `/<course_id>/` — Update course
+- **GET** `/` - List instructor courses
+- **POST** `/create/` - Create course
+- **GET** `/<course_id>/` - Course detail
+- **PATCH** `/<course_id>/` - Update course
+
+### Course Details Metadata
+- **GET** `/<course_id>/learning-objectives/` - List learning objectives
+- **POST** `/<course_id>/learning-objectives/` - Create learning objective
+- **GET** `/learning-objectives/<item_id>/` - Learning objective detail
+- **PATCH** `/learning-objectives/<item_id>/` - Update learning objective
+- **PUT** `/learning-objectives/<item_id>/` - Replace learning objective
+- **DELETE** `/learning-objectives/<item_id>/` - Delete learning objective
+- **GET** `/<course_id>/prerequisites/` - List prerequisites
+- **POST** `/<course_id>/prerequisites/` - Create prerequisite
+- **GET** `/prerequisites/<item_id>/` - Prerequisite detail
+- **PATCH** `/prerequisites/<item_id>/` - Update prerequisite
+- **PUT** `/prerequisites/<item_id>/` - Replace prerequisite
+- **DELETE** `/prerequisites/<item_id>/` - Delete prerequisite
+- **GET** `/<course_id>/audiences/` - List audience entries
+- **POST** `/<course_id>/audiences/` - Create audience entry
+- **GET** `/audiences/<item_id>/` - Audience detail
+- **PATCH** `/audiences/<item_id>/` - Update audience entry
+- **PUT** `/audiences/<item_id>/` - Replace audience entry
+- **DELETE** `/audiences/<item_id>/` - Delete audience entry
 
 ### Course Sections
-- **GET** `/<course_id>/sections/` — List sections for a course
-- **POST** `/<course_id>/sections/create/` — Create section
-- **GET** `/sections/<section_id>/` — Section detail
-- **PATCH** `/sections/<section_id>/` — Update section
-- **PUT** `/sections/<section_id>/` — Replace section
-- **DELETE** `/sections/<section_id>/` — Delete section
+- **GET** `/<course_id>/sections/` - List sections for a course
+- **POST** `/<course_id>/sections/create/` - Create section
+- **GET** `/sections/<section_id>/` - Section detail
+- **PATCH** `/sections/<section_id>/` - Update section
+- **PUT** `/sections/<section_id>/` - Replace section
+- **DELETE** `/sections/<section_id>/` - Delete section
 
 ### Lectures
-- **GET** `/sections/<section_id>/lectures/` — List section lectures
-- **POST** `/sections/<section_id>/lectures/create/` — Create lecture (supports `video_file` upload for video type)
-- **GET** `/lectures/<lecture_id>/` — Lecture detail
-- **PATCH** `/lectures/<lecture_id>/` — Update lecture
-- **PUT** `/lectures/<lecture_id>/` — Replace lecture
-- **DELETE** `/lectures/<lecture_id>/` — Delete lecture
+- **GET** `/sections/<section_id>/lectures/` - List section lectures
+- **POST** `/sections/<section_id>/lectures/create/` - Create lecture (supports `video_file` upload for video type)
+- **GET** `/lectures/<lecture_id>/` - Lecture detail
+- **PATCH** `/lectures/<lecture_id>/` - Update lecture
+- **PUT** `/lectures/<lecture_id>/` - Replace lecture
+- **DELETE** `/lectures/<lecture_id>/` - Delete lecture
+
+Video lecture responses include the active `VideoAsset`, HLS playlist/rendition metadata, processing status, and `duration_seconds` when `ffprobe` can read the uploaded source duration.
 
 ## Admin Features
 
@@ -217,7 +239,7 @@ All endpoints include comprehensive error handling:
    - `new_password`
    - `confirm_password`
 
-**Note:** The `reset_token` is system-generated and sent in the OTP verify response — not typed by the user.
+**Note:** The `reset_token` is system-generated and sent in the OTP verify response - not typed by the user.
 
 ## Testing & Documentation
 
@@ -266,13 +288,29 @@ Configured in .env:
 - MEDIA_ROOT
 - MEDIA_URL
 - FFMPEG_BINARY_PATH
-- FFPROBE_BINARY_PATH (optional, recommended)
+- FFPROBE_BINARY_PATH
 - LOG_DIR (optional; defaults to `<project>/logs`)
 - GOOGLE_OAUTH_CLIENT_ID
 - GOOGLE_OAUTH_CLIENT_SECRET
 - GOOGLE_OAUTH_ALLOWED_CLIENT_IDS
 
 Sample values are provided in .env.example.
+
+For local Windows installs, use the absolute `.exe` paths:
+
+```env
+FFMPEG_BINARY_PATH=C:\path\to\ffmpeg.exe
+FFPROBE_BINARY_PATH=C:\path\to\ffprobe.exe
+```
+
+For Linux production servers or Docker images where FFmpeg is installed via the OS package manager, these are usually:
+
+```env
+FFMPEG_BINARY_PATH=/usr/bin/ffmpeg
+FFPROBE_BINARY_PATH=/usr/bin/ffprobe
+```
+
+If `ffmpeg` and `ffprobe` are available in the process `PATH`, the default command names also work. FFmpeg/FFprobe must be installed wherever the Celery worker runs, because video transcoding happens in the worker process.
 
 ## Google Sign-In
 
@@ -323,6 +361,9 @@ python manage.py shell
 # Run tests
 python manage.py test
 
+# Run course app tests/checks only
+python manage.py test courses
+
 # Check code for errors
 python manage.py check
 
@@ -350,36 +391,64 @@ python manage.py shell -c "from auth.models import User; print(User.objects.dele
 
 ```
 career_college_backend/
-├── auth/                          # User authentication & profiles
-│   ├── models.py                  # Custom User model, profiles (Learner, Instructor, PartnerInstitution)
-│   ├── serializers.py             # Serializers for auth endpoints
-│   ├── views.py & all_views/      # Auth viewsets (registration, login, OTP, password reset)
-│   ├── utils/                     # Email utilities, password validators
-│   └── migrations/                # Database migrations
-├── id_verification/               # Instructor identity verification
-│   ├── models.py                  # IdentityVerification model (state machine)
-│   ├── serializers.py             # Serializers for instructor & admin endpoints
-│   ├── views.py & all_views/      # Instructor & admin viewsets
-│   ├── admin.py                   # Django admin customization
-│   └── migrations/                # Database migrations
-├── courses/                       # Course marketplace + content upload/transcoding
-│   ├── models.py                  # NidusCourse, CourseCategory, sections, lectures, video assets/jobs
-│   ├── serializers.py             # Course/section/lecture serializers
-│   ├── all_views/                 # APIView-based endpoints
-│   ├── services.py                # Course business logic + upload orchestration
-│   ├── tasks.py                   # Celery task entrypoints
-│   ├── transcoding.py             # FFmpeg/ffprobe transcoding logic
-│   └── migrations/                # Database migrations
-├── core/                          # Shared utilities
-│   ├── pagination.py              # StandardResultsSetPagination
-│   ├── permissions.py             # Custom permission classes
-│   └── middleware.py              # Custom middleware
-├── templates/                     # Email templates
-├── manage.py                      # Django management script
-├── requirements.txt               # Python dependencies
-├── .env.example                   # Template for environment variables
-├── POSTMAN_TESTING_GUIDE.md       # Auth/verification API testing guide
-└── COURSES_API_TESTING_GUIDE.md   # Courses API + transcoding testing guide
+|-- career_college_backend/         # Django project config
+|   |-- settings.py                 # Settings and environment variable loading
+|   |-- urls.py                     # Root URL routing
+|   |-- celery.py                   # Celery app configuration
+|   |-- asgi.py
+|   `-- wsgi.py
+|-- auth/                           # User authentication, profiles, OAuth, OTP
+|   |-- models.py                   # Custom User, learner/instructor/institution profiles
+|   |-- serializers.py              # Auth/profile serializers
+|   |-- views.py                    # Re-exports API views
+|   |-- urls.py                     # Auth/profile route definitions
+|   |-- all_views/                  # Auth, OTP, password, profile, Google, LinkedIn views
+|   |-- services/                   # OAuth and user provisioning services
+|   |-- utils/                      # Email, cookies, upload helpers, validators
+|   |-- admin.py
+|   |-- signals.py
+|   |-- tests.py
+|   `-- migrations/
+|-- id_verification/                # Instructor identity verification workflow
+|   |-- models.py                   # IdentityVerification state machine
+|   |-- serializers.py              # Instructor/admin verification serializers
+|   |-- views.py                    # Re-exports verification views
+|   |-- urls.py                     # Verification route definitions
+|   |-- all_views/                  # Instructor and admin verification views
+|   |-- admin.py
+|   |-- utils.py
+|   |-- tests.py
+|   `-- migrations/
+|-- courses/                        # Courses, course content, uploads, transcoding
+|   |-- models.py                   # Courses, metadata, sections, lectures, video assets/jobs
+|   |-- serializers.py              # Course, metadata, section, lecture, video serializers
+|   |-- views.py                    # Re-exports course API views
+|   |-- urls.py                     # Course, metadata, section, lecture routes
+|   |-- all_views/
+|   |   |-- course_views.py         # Course list/create/detail/update views
+|   |   `-- content_views.py        # Metadata, section, and lecture CRUD views
+|   |-- services.py                 # Query helpers and video upload orchestration
+|   |-- selectors.py                # Course querysets for instructor-owned courses
+|   |-- permissions.py              # Course-related permission helpers
+|   |-- tasks.py                    # Celery transcoding task entrypoints
+|   |-- transcoding.py              # FFmpeg/ffprobe HLS and duration logic
+|   |-- admin.py
+|   |-- tests.py                    # Empty test module marker
+|   |-- management/
+|   `-- migrations/
+|-- core/                           # Shared utilities
+|   |-- middleware.py
+|   |-- pagination.py
+|   `-- permissions.py
+|-- templates/
+|   `-- emails/send_email.html      # Email template
+|-- manage.py                       # Django management script
+|-- requirements.txt                # Python dependencies
+|-- .env.example                    # Template for environment variables
+|-- README.md                       # Project overview and setup
+|-- POSTMAN_TESTING_GUIDE.md        # Auth/verification API testing guide
+|-- COURSES_API_TESTING_GUIDE.md    # Courses API + transcoding testing guide
+`-- FRONTEND_ERROR_RESPONSE_FORMAT.md
 ```
 
 ## Key Models
@@ -416,13 +485,13 @@ DB_NAME=your_database_name
 
 ## Notes & Best Practices
 
-- **Keep .env private** — never commit it; use `.env.example` as the shared template
-- **Email testing locally** — use console backend in `.env.example` to print OTP in terminal
-- **OTP for testing** — check database or terminal output: `User.otp_code`
-- **Admin users** — created via `createsuperuser` are auto-verified and can log in immediately
-- **Soft deletes** — users deleted via API remain in database with `is_deleted=True`; use `User.objects.all_with_deleted()` in admin queries
-- **File uploads** — always use form-data (not JSON) for endpoints accepting files
-- **Verification workflow** — instructors can only have one active verification request (draft/submitted/under_review/action_required)
-- **Instructor verification** — documents required: document_type, document_number, issuing_country, document_front, selfie; optional: document_back, expiry_date, resume
-- **Email templates** — located in `templates/emails/`; customize branding, sender, content as needed
-- **Error handling** — all API errors return consistent format with `success: false`, `message`, and `errors` fields
+- **Keep .env private** - never commit it; use `.env.example` as the shared template
+- **Email testing locally** - use console backend in `.env.example` to print OTP in terminal
+- **OTP for testing** - check database or terminal output: `User.otp_code`
+- **Admin users** - created via `createsuperuser` are auto-verified and can log in immediately
+- **Soft deletes** - users deleted via API remain in database with `is_deleted=True`; use `User.objects.all_with_deleted()` in admin queries
+- **File uploads** - always use form-data (not JSON) for endpoints accepting files
+- **Verification workflow** - instructors can only have one active verification request (draft/submitted/under_review/action_required)
+- **Instructor verification** - documents required: document_type, document_number, issuing_country, document_front, selfie; optional: document_back, expiry_date, resume
+- **Email templates** - located in `templates/emails/`; customize branding, sender, content as needed
+- **Error handling** - all API errors return consistent format with `success: false`, `message`, and `errors` fields

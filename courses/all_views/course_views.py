@@ -1,3 +1,4 @@
+from django.db import IntegrityError
 from django.shortcuts import get_object_or_404
 from rest_framework import status
 from rest_framework.permissions import IsAuthenticated
@@ -43,7 +44,14 @@ class CourseCreateAPIView(APIView):
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
-        course = serializer.save()
+        try:
+            course = serializer.save()
+        except IntegrityError:
+            return Response(
+                {'success': False, 'message': 'Course contains duplicate related items.'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
         return Response(
             {
                 'success': True,
@@ -90,7 +98,14 @@ class CourseDetailView(APIView):
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
-        course = serializer.save()
+        try:
+            course = serializer.save()
+        except IntegrityError:
+            return Response(
+                {'success': False, 'message': 'Course contains duplicate related items.'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
         return Response(
             {
                 'success': True,

@@ -64,6 +64,7 @@ INSTALLED_APPS = [
     # Local
     'auth.apps.AuthConfig',
     'id_verification',
+    'courses.apps.CoursesConfig',
 ]
 
 MIDDLEWARE = [
@@ -210,8 +211,18 @@ USE_TZ = True
 STATIC_URL = 'static/'
 
 # Media files (user uploads)
-MEDIA_URL = '/media/'
-MEDIA_ROOT = BASE_DIR / 'media'
+MEDIA_URL = os.getenv('MEDIA_URL', '/media/')
+MEDIA_ROOT = Path(os.getenv('MEDIA_ROOT', str(BASE_DIR / 'media')))
+FFMPEG_BINARY_PATH = os.getenv('FFMPEG_BINARY_PATH', 'ffmpeg')
+FFPROBE_BINARY_PATH = os.getenv('FFPROBE_BINARY_PATH', 'ffprobe')
+
+# Celery
+CELERY_BROKER_URL = os.getenv('CELERY_BROKER_URL', 'redis://127.0.0.1:6379/0')
+CELERY_RESULT_BACKEND = os.getenv('CELERY_RESULT_BACKEND', CELERY_BROKER_URL)
+CELERY_ACCEPT_CONTENT = ['json']
+CELERY_TASK_SERIALIZER = 'json'
+CELERY_RESULT_SERIALIZER = 'json'
+CELERY_TIMEZONE = TIME_ZONE
 
 # Default primary key field type
 # https://docs.djangoproject.com/en/5.2/ref/settings/#default-auto-field
@@ -235,7 +246,7 @@ OTP_RATE_LIMIT = os.getenv('OTP_RATE_LIMIT')
 
 
 # Logging
-LOG_DIR = BASE_DIR / 'logs'
+LOG_DIR = Path(os.getenv('LOG_DIR', str(BASE_DIR / 'logs')))
 LOG_DIR.mkdir(exist_ok=True)
 
 LOGGING = {
@@ -270,9 +281,19 @@ LOGGING = {
             'level': 'DEBUG' if DEBUG else 'INFO',
             'propagate': False,
         },
+        'django.server': {
+            'handlers': ['console'],
+            'level': 'INFO',
+            'propagate': False,
+        },
+        'django.request': {
+            'handlers': ['console', 'file'],
+            'level': 'INFO',
+            'propagate': False,
+        },
         'django': {
             'handlers': ['console', 'file'],
-            'level': 'WARNING',
+            'level': 'INFO',
             'propagate': False,
         },
     },

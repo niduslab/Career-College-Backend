@@ -23,6 +23,7 @@ urlpatterns = [
     path('admin/', admin.site.urls),
     path('api/v1/auth/', include('auth.urls', namespace='auth')),
     path('api/v1/verification/', include('id_verification.urls', namespace='id_verification')),
+    path('api/v1/courses/', include('courses.urls', namespace='courses')),
 ]
 
 if settings.DEBUG:

@@ -6,9 +6,8 @@ from rest_framework.response import Response
 from rest_framework.views import APIView
 
 from core.pagination import StandardResultsSetPagination
-from core.permissions import IsEmailVerified
+from core.permissions import IsEmailVerified, IsVerifiedInstructor
 from courses.models import NidusCourse
-from courses.permissions import IsVerifiedInstructor
 from courses.selectors import get_instructor_courses
 from courses.serializers import (
     NidusCourseCreateUpdateSerializer,

@@ -14,6 +14,14 @@ from courses.all_views import (
     LectureCreateAPIView,
     LectureDetailAPIView,
     LectureListAPIView,
+    QuizAnswerDetailAPIView,
+    QuizAnswerListCreateAPIView,
+    QuizCreateAPIView,
+    QuizDetailAPIView,
+    QuizQuestionDetailAPIView,
+    QuizQuestionListCreateAPIView,
+    SectionContentListCreateAPIView,
+    SectionContentReorderAPIView,
 )
 
 __all__ = [
@@ -32,4 +40,12 @@ __all__ = [
     'LectureListAPIView',
     'LectureCreateAPIView',
     'LectureDetailAPIView',
+    'SectionContentListCreateAPIView',
+    'SectionContentReorderAPIView',
+    'QuizCreateAPIView',
+    'QuizDetailAPIView',
+    'QuizQuestionListCreateAPIView',
+    'QuizQuestionDetailAPIView',
+    'QuizAnswerListCreateAPIView',
+    'QuizAnswerDetailAPIView',
 ]

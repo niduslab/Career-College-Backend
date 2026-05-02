@@ -10,14 +10,21 @@ from courses.models import (
     CourseSection,
     Lecture,
     NidusCourse,
+    Quiz,
+    QuizAnswer,
+    QuizQuestion,
+    SectionContent,
     VideoAsset,
 )
 
 
+# ---------------------------------------------------------------------------
+# Helpers (unchanged)
+# ---------------------------------------------------------------------------
+
 def _normalize_media_relative_path(path_value):
     if not isinstance(path_value, str):
         return path_value
-
     normalized = path_value.replace('\\', '/').lstrip('/')
     if normalized.startswith('media/'):
         return normalized[len('media/'):]
@@ -27,19 +34,20 @@ def _normalize_media_relative_path(path_value):
 def _normalize_renditions_playlists(renditions):
     if not isinstance(renditions, list):
         return renditions
-
     normalized_renditions = []
     for item in renditions:
         if not isinstance(item, dict):
             normalized_renditions.append(item)
             continue
-
         row = dict(item)
         row['playlist'] = _normalize_media_relative_path(row.get('playlist', ''))
         normalized_renditions.append(row)
-
     return normalized_renditions
 
+
+# ---------------------------------------------------------------------------
+# Auth / institution brief serializers (unchanged)
+# ---------------------------------------------------------------------------
 
 class InstructorBriefSerializer(serializers.ModelSerializer):
     class Meta:
@@ -61,6 +69,10 @@ class CourseCategoryBriefSerializer(serializers.ModelSerializer):
         fields = ['id', 'name', 'slug']
         read_only_fields = fields
 
+
+# ---------------------------------------------------------------------------
+# Course item serializers (unchanged)
+# ---------------------------------------------------------------------------
 
 class CourseLearningObjectiveSerializer(serializers.ModelSerializer):
     class Meta:
@@ -101,6 +113,10 @@ class CourseAudienceSerializer(serializers.ModelSerializer):
         return text
 
 
+# ---------------------------------------------------------------------------
+# Course serializers (unchanged)
+# ---------------------------------------------------------------------------
+
 class NidusCourseSerializer(serializers.ModelSerializer):
     created_by = InstructorBriefSerializer(read_only=True)
     instructors = InstructorBriefSerializer(read_only=True, many=True)
@@ -113,28 +129,11 @@ class NidusCourseSerializer(serializers.ModelSerializer):
     class Meta:
         model = NidusCourse
         fields = [
-            'id',
-            'title',
-            'slug',
-            'description',
-            'thumbnail',
-            'price',
-            'language',
-            'level',
-            'duration_minutes',
-            'status',
-            'is_published',
-            'rejection_reason',
-            'published_at',
-            'created_by',
-            'instructors',
-            'partner_institutions',
-            'category',
-            'learning_objectives',
-            'prerequisites',
-            'audiences',
-            'created_at',
-            'updated_at',
+            'id', 'title', 'slug', 'description', 'thumbnail', 'price',
+            'language', 'level', 'duration_minutes', 'status', 'is_published',
+            'rejection_reason', 'published_at', 'created_by', 'instructors',
+            'partner_institutions', 'category', 'learning_objectives',
+            'prerequisites', 'audiences', 'created_at', 'updated_at',
         ]
         read_only_fields = fields
 
@@ -162,21 +161,10 @@ class NidusCourseCreateUpdateSerializer(serializers.ModelSerializer):
     class Meta:
         model = NidusCourse
         fields = [
-            'title',
-            'description',
-            'thumbnail',
-            'price',
-            'language',
-            'level',
-            'duration_minutes',
-            'status',
-            'rejection_reason',
-            'instructors',
-            'partner_institutions',
-            'category',
-            'learning_objectives',
-            'prerequisites',
-            'audiences',
+            'title', 'description', 'thumbnail', 'price', 'language', 'level',
+            'duration_minutes', 'status', 'rejection_reason', 'instructors',
+            'partner_institutions', 'category', 'learning_objectives',
+            'prerequisites', 'audiences',
         ]
 
     def validate_title(self, value):
@@ -189,7 +177,9 @@ class NidusCourseCreateUpdateSerializer(serializers.ModelSerializer):
         status_value = attrs.get('status')
         rejection_reason = attrs.get('rejection_reason', '')
         if status_value == NidusCourse.CourseStatus.REJECTED and not rejection_reason.strip():
-            raise serializers.ValidationError({'rejection_reason': 'Rejection reason is required for rejected status.'})
+            raise serializers.ValidationError(
+                {'rejection_reason': 'Rejection reason is required for rejected status.'}
+            )
         return attrs
 
     def _replace_items(self, model_class, course, items):
@@ -261,6 +251,10 @@ class NidusCourseCreateUpdateSerializer(serializers.ModelSerializer):
             return instance
 
 
+# ---------------------------------------------------------------------------
+# VideoAsset serializer (unchanged)
+# ---------------------------------------------------------------------------
+
 class VideoAssetSerializer(serializers.ModelSerializer):
     master_playlist = serializers.SerializerMethodField()
     renditions = serializers.SerializerMethodField()
@@ -268,18 +262,9 @@ class VideoAssetSerializer(serializers.ModelSerializer):
     class Meta:
         model = VideoAsset
         fields = [
-            'id',
-            'video_file',
-            'original_filename',
-            'mime_type',
-            'file_size',
-            'duration_seconds',
-            'master_playlist',
-            'renditions',
-            'is_active',
-            'status',
-            'created_at',
-            'updated_at',
+            'id', 'video_file', 'original_filename', 'mime_type', 'file_size',
+            'duration_seconds', 'master_playlist', 'renditions', 'is_active',
+            'status', 'created_at', 'updated_at',
         ]
         read_only_fields = fields
 
@@ -290,6 +275,10 @@ class VideoAssetSerializer(serializers.ModelSerializer):
         return _normalize_renditions_playlists(obj.renditions)
 
 
+# ---------------------------------------------------------------------------
+# Section serializers (unchanged)
+# ---------------------------------------------------------------------------
+
 class CourseSectionSerializer(serializers.ModelSerializer):
     course_id = serializers.IntegerField(source='course.id', read_only=True)
     course_title = serializers.CharField(source='course.title', read_only=True)
@@ -297,14 +286,8 @@ class CourseSectionSerializer(serializers.ModelSerializer):
     class Meta:
         model = CourseSection
         fields = [
-            'id',
-            'course_id',
-            'course_title',
-            'title',
-            'description',
-            'position',
-            'created_at',
-            'updated_at',
+            'id', 'course_id', 'course_title', 'title', 'description',
+            'position', 'created_at', 'updated_at',
         ]
         read_only_fields = ['id', 'course_id', 'course_title', 'created_at', 'updated_at']
 
@@ -321,6 +304,10 @@ class CourseSectionCreateUpdateSerializer(serializers.ModelSerializer):
         return title
 
 
+# ---------------------------------------------------------------------------
+# Lecture serializers — position field removed
+# ---------------------------------------------------------------------------
+
 class LectureSerializer(serializers.ModelSerializer):
     section_id = serializers.IntegerField(source='section.id', read_only=True)
     stream_master_playlist = serializers.SerializerMethodField()
@@ -330,18 +317,10 @@ class LectureSerializer(serializers.ModelSerializer):
     class Meta:
         model = Lecture
         fields = [
-            'id',
-            'section_id',
-            'title',
-            'position',
-            'content_type',
-            'article_content',
-            'stream_master_playlist',
-            'stream_renditions',
-            'transcoding_error',
-            'active_video_asset',
-            'created_at',
-            'updated_at',
+            'id', 'section_id', 'title',
+            'content_type', 'article_content',
+            'stream_master_playlist', 'stream_renditions', 'transcoding_error',
+            'active_video_asset', 'created_at', 'updated_at',
         ]
         read_only_fields = fields
 
@@ -363,13 +342,7 @@ class LectureCreateUpdateSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = Lecture
-        fields = [
-            'title',
-            'position',
-            'content_type',
-            'article_content',
-            'video_file',
-        ]
+        fields = ['title', 'content_type', 'article_content', 'video_file']
 
     def validate_title(self, value):
         title = value.strip()
@@ -396,7 +369,6 @@ class LectureCreateUpdateSerializer(serializers.ModelSerializer):
         if content_type == Lecture.ContentType.VIDEO:
             if (article_content or '').strip():
                 raise serializers.ValidationError({'article_content': 'Video lectures cannot include article content.'})
-
             creating = self.instance is None
             if creating and not video_file:
                 raise serializers.ValidationError({'video_file': 'Video lectures require a video file on creation.'})
@@ -407,24 +379,192 @@ class LectureCreateUpdateSerializer(serializers.ModelSerializer):
         video_file = validated_data.pop('video_file', None)
         section = self.context['section']
         lecture = Lecture.objects.create(section=section, **validated_data)
-
         if video_file:
             from courses.services import replace_lecture_video_and_enqueue_transcoding
-
             replace_lecture_video_and_enqueue_transcoding(lecture=lecture, uploaded_file=video_file)
-
         return lecture
 
     def update(self, instance, validated_data):
         video_file = validated_data.pop('video_file', None)
-
         for attr, value in validated_data.items():
             setattr(instance, attr, value)
         instance.save()
-
         if video_file:
             from courses.services import replace_lecture_video_and_enqueue_transcoding
-
             replace_lecture_video_and_enqueue_transcoding(lecture=instance, uploaded_file=video_file)
+        return instance
 
+
+# ---------------------------------------------------------------------------
+# SectionContent serializer
+# Bulk-loading maps (lectures, quizzes) are passed via serializer context
+# by the view to avoid N+1 queries.
+# ---------------------------------------------------------------------------
+
+class SectionContentSerializer(serializers.ModelSerializer):
+    content = serializers.SerializerMethodField()
+
+    class Meta:
+        model = SectionContent
+        fields = ['id', 'section', 'item_type', 'object_id', 'position', 'content', 'created_at', 'updated_at']
+        read_only_fields = fields
+
+    def get_content(self, obj):
+        lectures: dict = self.context.get('lectures', {})
+        quizzes: dict = self.context.get('quizzes', {})
+
+        if obj.item_type == SectionContent.ItemType.LECTURE:
+            lecture = lectures.get(obj.object_id)
+            if lecture:
+                return {'id': lecture.id, 'title': lecture.title, 'content_type': lecture.content_type}
+
+        elif obj.item_type == SectionContent.ItemType.QUIZ:
+            quiz = quizzes.get(obj.object_id)
+            if quiz:
+                return {'id': quiz.id, 'title': quiz.title}
+
+        return None
+
+
+# ---------------------------------------------------------------------------
+# Quiz serializers
+# ---------------------------------------------------------------------------
+
+class QuizSerializer(serializers.ModelSerializer):
+    section_id = serializers.IntegerField(source='section.id', read_only=True)
+    question_count = serializers.SerializerMethodField()
+
+    class Meta:
+        model = Quiz
+        fields = [
+            'id', 'section_id', 'title', 'description',
+            'question_count',
+            'created_at', 'updated_at',
+        ]
+        read_only_fields = fields
+
+    def get_question_count(self, obj):
+        return obj.questions.count()
+
+
+class QuizCreateUpdateSerializer(serializers.ModelSerializer):
+    # Required when creating via POST /api/quizzes/ (section in body).
+    # Optional when creating via section-contents endpoint (section in context).
+    section = serializers.PrimaryKeyRelatedField(
+        queryset=CourseSection.objects.all(),
+        required=False,
+    )
+
+    class Meta:
+        model = Quiz
+        fields = ['section', 'title', 'description']
+
+    def validate_title(self, value):
+        title = value.strip()
+        if len(title) < 2:
+            raise serializers.ValidationError('Quiz title must be at least 2 characters long.')
+        return title
+
+    def validate(self, attrs):
+        # Section is only required on creation; updates never need to re-supply it.
+        if self.instance is not None:
+            attrs.pop('section', None)
+            return attrs
+
+        # On create: section may come from context (contents endpoint) or body (quizzes endpoint).
+        if not attrs.get('section'):
+            section = self.context.get('section')
+            if not section:
+                raise serializers.ValidationError({'section': 'Section is required.'})
+            attrs['section'] = section
+        return attrs
+
+    def create(self, validated_data):
+        return Quiz.objects.create(**validated_data)
+
+    def update(self, instance, validated_data):
+        validated_data.pop('section', None)  # section is immutable after creation
+        for attr, value in validated_data.items():
+            setattr(instance, attr, value)
+        instance.save()
+        return instance
+
+
+# ---------------------------------------------------------------------------
+# QuizQuestion serializer
+# ---------------------------------------------------------------------------
+
+class QuizQuestionSerializer(serializers.ModelSerializer):
+    quiz_id = serializers.IntegerField(source='quiz.id', read_only=True)
+
+    class Meta:
+        model = QuizQuestion
+        fields = ['id', 'quiz_id', 'question_text', 'position']
+        read_only_fields = ['id', 'quiz_id']
+
+    def validate_question_text(self, value):
+        text = value.strip()
+        if not text:
+            raise serializers.ValidationError('Question text cannot be empty.')
+        return text
+
+    def create(self, validated_data):
+        quiz = self.context['quiz']
+        return QuizQuestion.objects.create(quiz=quiz, **validated_data)
+
+    def update(self, instance, validated_data):
+        for attr, value in validated_data.items():
+            setattr(instance, attr, value)
+        instance.save()
+        return instance
+
+
+# ---------------------------------------------------------------------------
+# QuizAnswer serializer
+# ---------------------------------------------------------------------------
+
+class QuizAnswerSerializer(serializers.ModelSerializer):
+    question_id = serializers.IntegerField(source='question.id', read_only=True)
+
+    class Meta:
+        model = QuizAnswer
+        fields = ['id', 'question_id', 'answer_text', 'is_correct']
+        read_only_fields = ['id', 'question_id']
+
+    def validate_answer_text(self, value):
+        text = value.strip()
+        if not text:
+            raise serializers.ValidationError('Answer text cannot be empty.')
+        return text
+
+    def validate(self, attrs):
+        # Determine whether the answer will be marked correct after this operation.
+        is_correct = attrs.get('is_correct', getattr(self.instance, 'is_correct', False))
+        if not is_correct:
+            return attrs
+
+        # Resolve the question: from context on create, from instance on update.
+        if self.instance is not None:
+            question = self.instance.question
+        else:
+            question = self.context.get('question')
+
+        if question is not None:
+            qs = QuizAnswer.objects.filter(question=question, is_correct=True)
+            if self.instance is not None:
+                qs = qs.exclude(pk=self.instance.pk)
+            if qs.exists():
+                raise serializers.ValidationError(
+                    {'is_correct': 'A correct answer already exists for this question.'}
+                )
+        return attrs
+
+    def create(self, validated_data):
+        question = self.context['question']
+        return QuizAnswer.objects.create(question=question, **validated_data)
+
+    def update(self, instance, validated_data):
+        for attr, value in validated_data.items():
+            setattr(instance, attr, value)
+        instance.save()
         return instance

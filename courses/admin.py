@@ -1,6 +1,21 @@
 from django.contrib import admin
 
-from courses.models import CourseAudience, CourseCategory, CourseLearningObjective, CoursePreRequisite, NidusCourse
+from courses.models import (
+    CourseAudience,
+    CourseCategory,
+    CourseLearningObjective,
+    CoursePreRequisite,
+    CourseSection,
+    Lecture,
+    NidusCourse,
+    Quiz,
+    QuizAnswer,
+    QuizQuestion,
+    SectionContent,
+    VideoAsset,
+    VideoProcessingJob,
+    WatchProgress,
+)
 
 
 class CourseLearningObjectiveInline(admin.TabularInline):
@@ -75,3 +90,77 @@ class CourseAudienceAdmin(admin.ModelAdmin):
     search_fields = ('course__title', 'text')
     list_filter = ('course',)
     ordering = ('course', 'display_order', 'id')
+
+
+@admin.register(CourseSection)
+class CourseSectionAdmin(admin.ModelAdmin):
+    list_display = ('id', 'course', 'title', 'position', 'created_at')
+    list_filter = ('course',)
+    search_fields = ('title', 'course__title')
+    ordering = ('course', 'position', 'id')
+
+
+@admin.register(SectionContent)
+class SectionContentAdmin(admin.ModelAdmin):
+    list_display = ('id', 'section', 'item_type', 'content_type', 'object_id', 'position', 'created_at')
+    list_filter = ('item_type', 'content_type', 'section')
+    search_fields = ('section__title', 'section__course__title')
+    ordering = ('section', 'position', 'id')
+
+
+@admin.register(Lecture)
+class LectureAdmin(admin.ModelAdmin):
+    list_display = ('id', 'title', 'section', 'content_type', 'created_at')
+    list_filter = ('content_type', 'section')
+    search_fields = ('title', 'section__title', 'section__course__title')
+    ordering = ('section', 'id')
+
+
+@admin.register(VideoAsset)
+class VideoAssetAdmin(admin.ModelAdmin):
+    list_display = ('id', 'lecture', 'status', 'is_active', 'file_size', 'created_at')
+    list_filter = ('status', 'is_active')
+    search_fields = ('lecture__title', 'original_filename', 'mime_type')
+    ordering = ('-created_at',)
+
+
+@admin.register(VideoProcessingJob)
+class VideoProcessingJobAdmin(admin.ModelAdmin):
+    list_display = ('id', 'video_asset', 'status', 'started_at', 'completed_at', 'created_at')
+    list_filter = ('status',)
+    search_fields = ('video_asset__lecture__title',)
+    ordering = ('-created_at',)
+
+
+
+
+@admin.register(WatchProgress)
+class WatchProgressAdmin(admin.ModelAdmin):
+    list_display = ('id', 'user', 'lecture', 'watched_seconds', 'is_completed', 'last_watched_at')
+    list_filter = ('is_completed',)
+    search_fields = ('user__email', 'user__full_name', 'lecture__title')
+    ordering = ('-last_watched_at',)
+
+@admin.register(Quiz)
+class QuizAdmin(admin.ModelAdmin):
+    list_display = ('id', 'title', 'section', 'created_at')
+    list_filter = ('section',)
+    search_fields = ('title', 'section__title', 'section__course__title')
+    filter_horizontal = ('related_lectures',)
+    ordering = ('-created_at',)
+
+
+@admin.register(QuizQuestion)
+class QuizQuestionAdmin(admin.ModelAdmin):
+    list_display = ('id', 'quiz', 'position', 'question_text')
+    list_filter = ('quiz',)
+    search_fields = ('question_text', 'quiz__title')
+    ordering = ('quiz', 'position', 'id')
+
+
+@admin.register(QuizAnswer)
+class QuizAnswerAdmin(admin.ModelAdmin):
+    list_display = ('id', 'question', 'answer_text', 'is_correct')
+    list_filter = ('is_correct', 'question__quiz')
+    search_fields = ('answer_text', 'question__question_text', 'question__quiz__title')
+    ordering = ('question', 'id')

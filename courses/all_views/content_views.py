@@ -1,4 +1,4 @@
-from django.db import IntegrityError
+from django.db import IntegrityError, transaction
 from django.shortcuts import get_object_or_404
 from rest_framework import status
 from rest_framework.parsers import FormParser, JSONParser, MultiPartParser
@@ -6,7 +6,18 @@ from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
-from courses.models import CourseAudience, CourseLearningObjective, CoursePreRequisite, CourseSection, Lecture, NidusCourse
+from courses.models import (
+    CourseAudience,
+    CourseLearningObjective,
+    CoursePreRequisite,
+    CourseSection,
+    Lecture,
+    NidusCourse,
+    Quiz,
+    QuizAnswer,
+    QuizQuestion,
+    SectionContent,
+)
 from courses.serializers import (
     CourseAudienceSerializer,
     CourseLearningObjectiveSerializer,
@@ -15,9 +26,24 @@ from courses.serializers import (
     CourseSectionSerializer,
     LectureCreateUpdateSerializer,
     LectureSerializer,
+    QuizAnswerSerializer,
+    QuizCreateUpdateSerializer,
+    QuizQuestionSerializer,
+    QuizSerializer,
+    SectionContentSerializer,
 )
-from courses.services import get_course_sections, get_section_lectures
+from courses.services import (
+    create_section_content_for_object,
+    get_course_sections,
+    get_next_section_content_position,
+    get_section_lectures,
+    reorder_section_content,
+)
 
+
+# =============================================================================
+# Section views (unchanged)
+# =============================================================================
 
 class CourseSectionListAPIView(APIView):
     permission_classes = [IsAuthenticated]
@@ -51,7 +77,6 @@ class CourseSectionCreateAPIView(APIView):
                 {'success': False, 'message': 'Validation failed.', 'errors': serializer.errors},
                 status=status.HTTP_400_BAD_REQUEST,
             )
-
         try:
             section = serializer.save(course=course)
         except IntegrityError:
@@ -59,13 +84,8 @@ class CourseSectionCreateAPIView(APIView):
                 {'success': False, 'message': 'A section already exists at this position.'},
                 status=status.HTTP_400_BAD_REQUEST,
             )
-
         return Response(
-            {
-                'success': True,
-                'message': 'Section created successfully.',
-                'data': CourseSectionSerializer(section).data,
-            },
+            {'success': True, 'message': 'Section created successfully.', 'data': CourseSectionSerializer(section).data},
             status=status.HTTP_201_CREATED,
         )
 
@@ -93,7 +113,6 @@ class CourseSectionDetailAPIView(APIView):
                 {'success': False, 'message': 'Validation failed.', 'errors': serializer.errors},
                 status=status.HTTP_400_BAD_REQUEST,
             )
-
         try:
             section = serializer.save()
         except IntegrityError:
@@ -101,7 +120,6 @@ class CourseSectionDetailAPIView(APIView):
                 {'success': False, 'message': 'A section already exists at this position.'},
                 status=status.HTTP_400_BAD_REQUEST,
             )
-
         return Response(
             {'success': True, 'message': 'Section updated successfully.', 'data': CourseSectionSerializer(section).data},
             status=status.HTTP_200_OK,
@@ -115,7 +133,6 @@ class CourseSectionDetailAPIView(APIView):
                 {'success': False, 'message': 'Validation failed.', 'errors': serializer.errors},
                 status=status.HTTP_400_BAD_REQUEST,
             )
-
         try:
             section = serializer.save()
         except IntegrityError:
@@ -123,7 +140,6 @@ class CourseSectionDetailAPIView(APIView):
                 {'success': False, 'message': 'A section already exists at this position.'},
                 status=status.HTTP_400_BAD_REQUEST,
             )
-
         return Response(
             {'success': True, 'message': 'Section replaced successfully.', 'data': CourseSectionSerializer(section).data},
             status=status.HTTP_200_OK,
@@ -134,6 +150,10 @@ class CourseSectionDetailAPIView(APIView):
         section.delete()
         return Response({'success': True, 'message': 'Section deleted successfully.'}, status=status.HTTP_204_NO_CONTENT)
 
+
+# =============================================================================
+# Lecture views — position references removed; SectionContent created on POST
+# =============================================================================
 
 class LectureListAPIView(APIView):
     permission_classes = [IsAuthenticated]
@@ -149,9 +169,6 @@ class LectureListAPIView(APIView):
     def get(self, request, section_id):
         section = self._get_owned_section(request, section_id)
         queryset = get_section_lectures(section)
-        ordering = request.query_params.get('ordering')
-        if ordering in ('position', '-position'):
-            queryset = queryset.order_by(ordering, 'id')
         serializer = LectureSerializer(queryset, many=True)
         return Response({'success': True, 'data': serializer.data}, status=status.HTTP_200_OK)
 
@@ -176,25 +193,29 @@ class LectureCreateAPIView(APIView):
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
-        try:
-            lecture = serializer.save()
-        except IntegrityError:
+        position = _parse_optional_position(request.data.get('position'))
+        if position is None and 'position' in request.data:
             return Response(
-                {'success': False, 'message': 'A lecture already exists at this position.'},
-                status=status.HTTP_400_BAD_REQUEST,
-            )
-        except ValueError as exc:
-            return Response(
-                {'success': False, 'message': str(exc)},
+                {'success': False, 'message': 'position must be a positive integer.'},
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
+        try:
+            with transaction.atomic():
+                lecture = serializer.save()
+                create_section_content_for_object(
+                    section, lecture, SectionContent.ItemType.LECTURE, position
+                )
+        except IntegrityError:
+            return Response(
+                {'success': False, 'message': 'A content item already exists at that position.'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        except ValueError as exc:
+            return Response({'success': False, 'message': str(exc)}, status=status.HTTP_400_BAD_REQUEST)
+
         return Response(
-            {
-                'success': True,
-                'message': 'Lecture created successfully.',
-                'data': LectureSerializer(lecture).data,
-            },
+            {'success': True, 'message': 'Lecture created successfully.', 'data': LectureSerializer(lecture).data},
             status=status.HTTP_201_CREATED,
         )
 
@@ -216,26 +237,18 @@ class LectureDetailAPIView(APIView):
 
     def patch(self, request, lecture_id):
         lecture = self._get_owned_lecture(request, lecture_id)
-        serializer = LectureCreateUpdateSerializer(lecture, data=request.data, partial=True, context={'section': lecture.section})
+        serializer = LectureCreateUpdateSerializer(
+            lecture, data=request.data, partial=True, context={'section': lecture.section}
+        )
         if not serializer.is_valid():
             return Response(
                 {'success': False, 'message': 'Validation failed.', 'errors': serializer.errors},
                 status=status.HTTP_400_BAD_REQUEST,
             )
-
         try:
             lecture = serializer.save()
-        except IntegrityError:
-            return Response(
-                {'success': False, 'message': 'A lecture already exists at this position.'},
-                status=status.HTTP_400_BAD_REQUEST,
-            )
         except ValueError as exc:
-            return Response(
-                {'success': False, 'message': str(exc)},
-                status=status.HTTP_400_BAD_REQUEST,
-            )
-
+            return Response({'success': False, 'message': str(exc)}, status=status.HTTP_400_BAD_REQUEST)
         return Response(
             {'success': True, 'message': 'Lecture updated successfully.', 'data': LectureSerializer(lecture).data},
             status=status.HTTP_200_OK,
@@ -243,26 +256,18 @@ class LectureDetailAPIView(APIView):
 
     def put(self, request, lecture_id):
         lecture = self._get_owned_lecture(request, lecture_id)
-        serializer = LectureCreateUpdateSerializer(lecture, data=request.data, context={'section': lecture.section})
+        serializer = LectureCreateUpdateSerializer(
+            lecture, data=request.data, context={'section': lecture.section}
+        )
         if not serializer.is_valid():
             return Response(
                 {'success': False, 'message': 'Validation failed.', 'errors': serializer.errors},
                 status=status.HTTP_400_BAD_REQUEST,
             )
-
         try:
             lecture = serializer.save()
-        except IntegrityError:
-            return Response(
-                {'success': False, 'message': 'A lecture already exists at this position.'},
-                status=status.HTTP_400_BAD_REQUEST,
-            )
         except ValueError as exc:
-            return Response(
-                {'success': False, 'message': str(exc)},
-                status=status.HTTP_400_BAD_REQUEST,
-            )
-
+            return Response({'success': False, 'message': str(exc)}, status=status.HTTP_400_BAD_REQUEST)
         return Response(
             {'success': True, 'message': 'Lecture replaced successfully.', 'data': LectureSerializer(lecture).data},
             status=status.HTTP_200_OK,
@@ -270,9 +275,442 @@ class LectureDetailAPIView(APIView):
 
     def delete(self, request, lecture_id):
         lecture = self._get_owned_lecture(request, lecture_id)
+        # GenericRelation on Lecture cascades SectionContent deletion automatically.
         lecture.delete()
         return Response({'success': True, 'message': 'Lecture deleted successfully.'}, status=status.HTTP_204_NO_CONTENT)
 
+
+# =============================================================================
+# SectionContent views
+# =============================================================================
+
+class SectionContentListCreateAPIView(APIView):
+    """
+    GET  /api/sections/{section_id}/contents/  — ordered curriculum list
+    POST /api/sections/{section_id}/contents/  — create lecture or quiz + slot
+    """
+    permission_classes = [IsAuthenticated]
+    parser_classes = [JSONParser, FormParser, MultiPartParser]
+
+    def _get_owned_section(self, request, section_id):
+        return get_object_or_404(
+            CourseSection.objects.select_related('course'),
+            pk=section_id,
+            course__instructors=request.user,
+        )
+
+    def get(self, request, section_id):
+        section = self._get_owned_section(request, section_id)
+
+        contents = list(
+            SectionContent.objects
+            .filter(section=section)
+            .order_by('position', 'id')
+        )
+
+        # Bulk-load content objects to avoid N+1 queries.
+        lecture_ids = [c.object_id for c in contents if c.item_type == SectionContent.ItemType.LECTURE]
+        quiz_ids = [c.object_id for c in contents if c.item_type == SectionContent.ItemType.QUIZ]
+
+        lectures = (
+            {lec.id: lec for lec in Lecture.objects.filter(id__in=lecture_ids)}
+            if lecture_ids else {}
+        )
+        quizzes = (
+            {q.id: q for q in Quiz.objects.filter(id__in=quiz_ids)}
+            if quiz_ids else {}
+        )
+
+        serializer = SectionContentSerializer(
+            contents, many=True, context={'lectures': lectures, 'quizzes': quizzes}
+        )
+        return Response({'success': True, 'data': serializer.data}, status=status.HTTP_200_OK)
+
+    def post(self, request, section_id):
+        section = self._get_owned_section(request, section_id)
+        item_type = request.data.get('item_type', '')
+
+        if item_type not in (SectionContent.ItemType.LECTURE, SectionContent.ItemType.QUIZ):
+            return Response(
+                {'success': False, 'message': "item_type must be 'lecture' or 'quiz'."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        position = _parse_optional_position(request.data.get('position'))
+        if position is None and 'position' in request.data:
+            return Response(
+                {'success': False, 'message': 'position must be a positive integer.'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        if item_type == SectionContent.ItemType.LECTURE:
+            return self._create_lecture(request, section, position)
+        return self._create_quiz(request, section, position)
+
+    def _create_lecture(self, request, section, position):
+        serializer = LectureCreateUpdateSerializer(data=request.data, context={'section': section})
+        if not serializer.is_valid():
+            return Response(
+                {'success': False, 'message': 'Validation failed.', 'errors': serializer.errors},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        try:
+            with transaction.atomic():
+                lecture = serializer.save()
+                sc = create_section_content_for_object(
+                    section, lecture, SectionContent.ItemType.LECTURE, position
+                )
+        except IntegrityError:
+            return Response(
+                {'success': False, 'message': 'A content item already exists at that position.'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        except ValueError as exc:
+            return Response({'success': False, 'message': str(exc)}, status=status.HTTP_400_BAD_REQUEST)
+
+        return Response(
+            {
+                'success': True,
+                'message': 'Lecture created successfully.',
+                'data': SectionContentSerializer(
+                    sc, context={'lectures': {lecture.id: lecture}, 'quizzes': {}}
+                ).data,
+            },
+            status=status.HTTP_201_CREATED,
+        )
+
+    def _create_quiz(self, request, section, position):
+        serializer = QuizCreateUpdateSerializer(data=request.data, context={'section': section})
+        if not serializer.is_valid():
+            return Response(
+                {'success': False, 'message': 'Validation failed.', 'errors': serializer.errors},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        try:
+            with transaction.atomic():
+                quiz = serializer.save()
+                sc = create_section_content_for_object(
+                    section, quiz, SectionContent.ItemType.QUIZ, position
+                )
+        except IntegrityError:
+            return Response(
+                {'success': False, 'message': 'A content item already exists at that position.'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        return Response(
+            {
+                'success': True,
+                'message': 'Quiz created successfully.',
+                'data': SectionContentSerializer(
+                    sc, context={'lectures': {}, 'quizzes': {quiz.id: quiz}}
+                ).data,
+            },
+            status=status.HTTP_201_CREATED,
+        )
+
+
+class SectionContentReorderAPIView(APIView):
+    """
+    PATCH /api/contents/{id}/reorder/  — update SectionContent.position only
+    """
+    permission_classes = [IsAuthenticated]
+    parser_classes = [JSONParser, FormParser, MultiPartParser]
+
+    def _get_owned_content(self, request, content_id):
+        return get_object_or_404(
+            SectionContent.objects.select_related('section__course'),
+            pk=content_id,
+            section__course__instructors=request.user,
+        )
+
+    def patch(self, request, content_id):
+        sc = self._get_owned_content(request, content_id)
+
+        new_position = request.data.get('position')
+        if new_position is None:
+            return Response(
+                {'success': False, 'message': 'position is required.'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        try:
+            new_position = int(new_position)
+            if new_position < 1:
+                raise ValueError
+        except (ValueError, TypeError):
+            return Response(
+                {'success': False, 'message': 'position must be a positive integer.'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        try:
+            sc = reorder_section_content(sc, new_position)
+        except ValueError as exc:
+            return Response({'success': False, 'message': str(exc)}, status=status.HTTP_400_BAD_REQUEST)
+        except IntegrityError:
+            return Response(
+                {'success': False, 'message': 'A content item already exists at that position.'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        return Response(
+            {'success': True, 'message': 'Content reordered successfully.', 'data': SectionContentSerializer(sc).data},
+            status=status.HTTP_200_OK,
+        )
+
+
+# =============================================================================
+# Quiz views
+# =============================================================================
+
+class QuizCreateAPIView(APIView):
+    """POST /api/quizzes/"""
+    permission_classes = [IsAuthenticated]
+    parser_classes = [JSONParser, FormParser, MultiPartParser]
+
+    def post(self, request):
+        serializer = QuizCreateUpdateSerializer(data=request.data)
+        if not serializer.is_valid():
+            return Response(
+                {'success': False, 'message': 'Validation failed.', 'errors': serializer.errors},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        # Verify the requesting user is an instructor for this section's course.
+        section = get_object_or_404(
+            CourseSection.objects.select_related('course'),
+            pk=serializer.validated_data['section'].pk,
+            course__instructors=request.user,
+        )
+
+        position = _parse_optional_position(request.data.get('position'))
+        if position is None and 'position' in request.data:
+            return Response(
+                {'success': False, 'message': 'position must be a positive integer.'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        try:
+            with transaction.atomic():
+                quiz = serializer.save(section=section)
+                create_section_content_for_object(section, quiz, SectionContent.ItemType.QUIZ, position)
+        except IntegrityError:
+            return Response(
+                {'success': False, 'message': 'A content item already exists at that position.'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        return Response(
+            {'success': True, 'message': 'Quiz created successfully.', 'data': QuizSerializer(quiz).data},
+            status=status.HTTP_201_CREATED,
+        )
+
+
+class QuizDetailAPIView(APIView):
+    """GET / PATCH / DELETE /api/quizzes/{id}/"""
+    permission_classes = [IsAuthenticated]
+    parser_classes = [JSONParser, FormParser, MultiPartParser]
+
+    def _get_owned_quiz(self, request, quiz_id):
+        return get_object_or_404(
+            Quiz.objects.select_related('section__course'),
+            pk=quiz_id,
+            section__course__instructors=request.user,
+        )
+
+    def get(self, request, quiz_id):
+        quiz = self._get_owned_quiz(request, quiz_id)
+        return Response({'success': True, 'data': QuizSerializer(quiz).data}, status=status.HTTP_200_OK)
+
+    def patch(self, request, quiz_id):
+        quiz = self._get_owned_quiz(request, quiz_id)
+        serializer = QuizCreateUpdateSerializer(quiz, data=request.data, partial=True)
+        if not serializer.is_valid():
+            return Response(
+                {'success': False, 'message': 'Validation failed.', 'errors': serializer.errors},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        quiz = serializer.save()
+        return Response(
+            {'success': True, 'message': 'Quiz updated successfully.', 'data': QuizSerializer(quiz).data},
+            status=status.HTTP_200_OK,
+        )
+
+    def delete(self, request, quiz_id):
+        quiz = self._get_owned_quiz(request, quiz_id)
+        # GenericRelation on Quiz cascades SectionContent deletion automatically.
+        with transaction.atomic():
+            quiz.delete()
+        return Response({'success': True, 'message': 'Quiz deleted successfully.'}, status=status.HTTP_204_NO_CONTENT)
+
+
+# =============================================================================
+# QuizQuestion views
+# =============================================================================
+
+class QuizQuestionListCreateAPIView(APIView):
+    """GET / POST /api/quizzes/{quiz_id}/questions/"""
+    permission_classes = [IsAuthenticated]
+    parser_classes = [JSONParser, FormParser, MultiPartParser]
+
+    def _get_owned_quiz(self, request, quiz_id):
+        return get_object_or_404(
+            Quiz.objects.select_related('section__course'),
+            pk=quiz_id,
+            section__course__instructors=request.user,
+        )
+
+    def get(self, request, quiz_id):
+        quiz = self._get_owned_quiz(request, quiz_id)
+        questions = quiz.questions.order_by('position', 'id')
+        serializer = QuizQuestionSerializer(questions, many=True)
+        return Response({'success': True, 'data': serializer.data}, status=status.HTTP_200_OK)
+
+    def post(self, request, quiz_id):
+        quiz = self._get_owned_quiz(request, quiz_id)
+        serializer = QuizQuestionSerializer(data=request.data, context={'quiz': quiz})
+        if not serializer.is_valid():
+            return Response(
+                {'success': False, 'message': 'Validation failed.', 'errors': serializer.errors},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        try:
+            question = serializer.save()
+        except IntegrityError:
+            return Response(
+                {'success': False, 'message': 'A question already exists at that position in this quiz.'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        return Response(
+            {'success': True, 'message': 'Question created successfully.', 'data': QuizQuestionSerializer(question).data},
+            status=status.HTTP_201_CREATED,
+        )
+
+
+class QuizQuestionDetailAPIView(APIView):
+    """GET / PATCH / DELETE /api/quiz-questions/{id}/"""
+    permission_classes = [IsAuthenticated]
+    parser_classes = [JSONParser, FormParser, MultiPartParser]
+
+    def _get_owned_question(self, request, question_id):
+        return get_object_or_404(
+            QuizQuestion.objects.select_related('quiz__section__course'),
+            pk=question_id,
+            quiz__section__course__instructors=request.user,
+        )
+
+    def get(self, request, question_id):
+        question = self._get_owned_question(request, question_id)
+        return Response(
+            {'success': True, 'data': QuizQuestionSerializer(question).data}, status=status.HTTP_200_OK
+        )
+
+    def patch(self, request, question_id):
+        question = self._get_owned_question(request, question_id)
+        serializer = QuizQuestionSerializer(question, data=request.data, partial=True)
+        if not serializer.is_valid():
+            return Response(
+                {'success': False, 'message': 'Validation failed.', 'errors': serializer.errors},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        try:
+            question = serializer.save()
+        except IntegrityError:
+            return Response(
+                {'success': False, 'message': 'A question already exists at that position in this quiz.'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        return Response(
+            {'success': True, 'message': 'Question updated successfully.', 'data': QuizQuestionSerializer(question).data},
+            status=status.HTTP_200_OK,
+        )
+
+    def delete(self, request, question_id):
+        question = self._get_owned_question(request, question_id)
+        question.delete()
+        return Response(
+            {'success': True, 'message': 'Question deleted successfully.'}, status=status.HTTP_204_NO_CONTENT
+        )
+
+
+# =============================================================================
+# QuizAnswer views
+# =============================================================================
+
+class QuizAnswerListCreateAPIView(APIView):
+    """GET / POST /api/quiz-questions/{question_id}/answers/"""
+    permission_classes = [IsAuthenticated]
+    parser_classes = [JSONParser, FormParser, MultiPartParser]
+
+    def _get_owned_question(self, request, question_id):
+        return get_object_or_404(
+            QuizQuestion.objects.select_related('quiz__section__course'),
+            pk=question_id,
+            quiz__section__course__instructors=request.user,
+        )
+
+    def get(self, request, question_id):
+        question = self._get_owned_question(request, question_id)
+        answers = question.answers.order_by('id')
+        serializer = QuizAnswerSerializer(answers, many=True)
+        return Response({'success': True, 'data': serializer.data}, status=status.HTTP_200_OK)
+
+    def post(self, request, question_id):
+        question = self._get_owned_question(request, question_id)
+        serializer = QuizAnswerSerializer(data=request.data, context={'question': question})
+        if not serializer.is_valid():
+            return Response(
+                {'success': False, 'message': 'Validation failed.', 'errors': serializer.errors},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        answer = serializer.save()
+        return Response(
+            {'success': True, 'message': 'Answer created successfully.', 'data': QuizAnswerSerializer(answer).data},
+            status=status.HTTP_201_CREATED,
+        )
+
+
+class QuizAnswerDetailAPIView(APIView):
+    """GET / PATCH / DELETE /api/quiz-answers/{id}/"""
+    permission_classes = [IsAuthenticated]
+    parser_classes = [JSONParser, FormParser, MultiPartParser]
+
+    def _get_owned_answer(self, request, answer_id):
+        return get_object_or_404(
+            QuizAnswer.objects.select_related('question__quiz__section__course'),
+            pk=answer_id,
+            question__quiz__section__course__instructors=request.user,
+        )
+
+    def get(self, request, answer_id):
+        answer = self._get_owned_answer(request, answer_id)
+        return Response({'success': True, 'data': QuizAnswerSerializer(answer).data}, status=status.HTTP_200_OK)
+
+    def patch(self, request, answer_id):
+        answer = self._get_owned_answer(request, answer_id)
+        serializer = QuizAnswerSerializer(answer, data=request.data, partial=True)
+        if not serializer.is_valid():
+            return Response(
+                {'success': False, 'message': 'Validation failed.', 'errors': serializer.errors},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        answer = serializer.save()
+        return Response(
+            {'success': True, 'message': 'Answer updated successfully.', 'data': QuizAnswerSerializer(answer).data},
+            status=status.HTTP_200_OK,
+        )
+
+    def delete(self, request, answer_id):
+        answer = self._get_owned_answer(request, answer_id)
+        answer.delete()
+        return Response(
+            {'success': True, 'message': 'Answer deleted successfully.'}, status=status.HTTP_204_NO_CONTENT
+        )
+
+
+# =============================================================================
+# Course item base classes (unchanged)
+# =============================================================================
 
 class CourseItemListCreateBaseAPIView(APIView):
     permission_classes = [IsAuthenticated]
@@ -301,7 +739,6 @@ class CourseItemListCreateBaseAPIView(APIView):
                 {'success': False, 'message': 'Validation failed.', 'errors': serializer.errors},
                 status=status.HTTP_400_BAD_REQUEST,
             )
-
         try:
             item = serializer.save(course=course)
         except IntegrityError:
@@ -309,13 +746,8 @@ class CourseItemListCreateBaseAPIView(APIView):
                 {'success': False, 'message': f'{self.item_label} already exists for this course.'},
                 status=status.HTTP_400_BAD_REQUEST,
             )
-
         return Response(
-            {
-                'success': True,
-                'message': f'{self.item_label} created successfully.',
-                'data': self.serializer_class(item).data,
-            },
+            {'success': True, 'message': f'{self.item_label} created successfully.', 'data': self.serializer_class(item).data},
             status=status.HTTP_201_CREATED,
         )
 
@@ -346,7 +778,6 @@ class CourseItemDetailBaseAPIView(APIView):
                 {'success': False, 'message': 'Validation failed.', 'errors': serializer.errors},
                 status=status.HTTP_400_BAD_REQUEST,
             )
-
         try:
             item = serializer.save()
         except IntegrityError:
@@ -354,13 +785,8 @@ class CourseItemDetailBaseAPIView(APIView):
                 {'success': False, 'message': f'{self.item_label} already exists for this course.'},
                 status=status.HTTP_400_BAD_REQUEST,
             )
-
         return Response(
-            {
-                'success': True,
-                'message': f'{self.item_label} updated successfully.',
-                'data': self.serializer_class(item).data,
-            },
+            {'success': True, 'message': f'{self.item_label} updated successfully.', 'data': self.serializer_class(item).data},
             status=status.HTTP_200_OK,
         )
 
@@ -372,7 +798,6 @@ class CourseItemDetailBaseAPIView(APIView):
                 {'success': False, 'message': 'Validation failed.', 'errors': serializer.errors},
                 status=status.HTTP_400_BAD_REQUEST,
             )
-
         try:
             item = serializer.save()
         except IntegrityError:
@@ -380,20 +805,18 @@ class CourseItemDetailBaseAPIView(APIView):
                 {'success': False, 'message': f'{self.item_label} already exists for this course.'},
                 status=status.HTTP_400_BAD_REQUEST,
             )
-
         return Response(
-            {
-                'success': True,
-                'message': f'{self.item_label} replaced successfully.',
-                'data': self.serializer_class(item).data,
-            },
+            {'success': True, 'message': f'{self.item_label} replaced successfully.', 'data': self.serializer_class(item).data},
             status=status.HTTP_200_OK,
         )
 
     def delete(self, request, item_id):
         item = self._get_owned_item(request, item_id)
         item.delete()
-        return Response({'success': True, 'message': f'{self.item_label} deleted successfully.'}, status=status.HTTP_204_NO_CONTENT)
+        return Response(
+            {'success': True, 'message': f'{self.item_label} deleted successfully.'},
+            status=status.HTTP_204_NO_CONTENT,
+        )
 
 
 class CourseLearningObjectiveListCreateAPIView(CourseItemListCreateBaseAPIView):
@@ -430,3 +853,20 @@ class CourseAudienceDetailAPIView(CourseItemDetailBaseAPIView):
     model_class = CourseAudience
     serializer_class = CourseAudienceSerializer
     item_label = 'Audience'
+
+
+# =============================================================================
+# Shared helpers
+# =============================================================================
+
+def _parse_optional_position(raw) -> int | None:
+    """Return a validated positive integer or None. None means 'not provided'."""
+    if raw is None:
+        return None
+    try:
+        value = int(raw)
+        if value < 1:
+            raise ValueError
+        return value
+    except (ValueError, TypeError):
+        return None

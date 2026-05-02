@@ -248,6 +248,18 @@ OTP_RATE_LIMIT = os.getenv('OTP_RATE_LIMIT')
 # Logging
 LOG_DIR = Path(os.getenv('LOG_DIR', str(BASE_DIR / 'logs')))
 LOG_DIR.mkdir(exist_ok=True)
+LOG_FILE_PATH = LOG_DIR / 'app.log'
+
+def _is_log_file_writable(path: Path) -> bool:
+    try:
+        with path.open('a', encoding='utf-8'):
+            pass
+        return True
+    except OSError:
+        return False
+
+FILE_LOGGING_ENABLED = _is_log_file_writable(LOG_FILE_PATH)
+DEFAULT_LOG_HANDLERS = ['console', 'file'] if FILE_LOGGING_ENABLED else ['console']
 
 LOGGING = {
     'version': 1,
@@ -269,7 +281,7 @@ LOGGING = {
         },
         'file': {
             'class': 'logging.handlers.RotatingFileHandler',
-            'filename': str(LOG_DIR / 'app.log'),
+            'filename': str(LOG_FILE_PATH),
             'maxBytes': 5 * 1024 * 1024,  # 5 MB
             'backupCount': 5,
             'formatter': 'verbose',
@@ -277,7 +289,7 @@ LOGGING = {
     },
     'loggers': {
         'auth': {
-            'handlers': ['console', 'file'],
+            'handlers': DEFAULT_LOG_HANDLERS,
             'level': 'DEBUG' if DEBUG else 'INFO',
             'propagate': False,
         },
@@ -287,18 +299,18 @@ LOGGING = {
             'propagate': False,
         },
         'django.request': {
-            'handlers': ['console', 'file'],
+            'handlers': DEFAULT_LOG_HANDLERS,
             'level': 'INFO',
             'propagate': False,
         },
         'django': {
-            'handlers': ['console', 'file'],
+            'handlers': DEFAULT_LOG_HANDLERS,
             'level': 'INFO',
             'propagate': False,
         },
     },
     'root': {
-        'handlers': ['console', 'file'],
+        'handlers': DEFAULT_LOG_HANDLERS,
         'level': 'INFO',
     },
 }

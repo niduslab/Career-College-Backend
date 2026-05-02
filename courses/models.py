@@ -2,6 +2,8 @@ import os
 import uuid
 
 from django.conf import settings
+from django.contrib.contenttypes.fields import GenericForeignKey, GenericRelation
+from django.contrib.contenttypes.models import ContentType as DjContentType
 from django.core.exceptions import ValidationError
 from django.core.validators import MinValueValidator
 from django.db import models
@@ -326,6 +328,74 @@ class CourseSection(models.Model):
         return f'{self.course.title} - {self.title}'
 
 
+# =============================================================================
+# NEW: SectionContent — single ordering layer for all mixed content in a section
+# =============================================================================
+
+class SectionContent(TimestampedModel):
+    """
+    Ordered slot linking a CourseSection to any content item (Lecture, Quiz, etc.).
+    Owns the position/ordering concern so that Lecture, Quiz, and future content
+    models stay focused on their own domain and need no position field.
+    """
+
+    class ItemType(models.TextChoices):
+        LECTURE = 'lecture', 'Lecture'
+        QUIZ = 'quiz', 'Quiz'
+        ASSIGNMENT = 'assignment', 'Assignment'
+        CODING = 'coding', 'Coding Exercise'
+
+    section = models.ForeignKey(
+        CourseSection,
+        on_delete=models.CASCADE,
+        related_name='contents',
+    )
+    # Denormalized type tag: fast WHERE/filter without a JOIN to django_content_type.
+    item_type = models.CharField(
+        max_length=20,
+        choices=ItemType.choices,
+        db_index=True,
+        help_text='Discriminator for the type of content object in this slot.',
+    )
+    # Standard GenericForeignKey trio.
+    content_type = models.ForeignKey(
+        DjContentType,
+        on_delete=models.CASCADE,
+        help_text='Django ContentType pointing to the concrete content model.',
+    )
+    object_id = models.PositiveIntegerField(
+        help_text='Primary key of the related content object.',
+    )
+    content_object = GenericForeignKey('content_type', 'object_id')
+    position = models.PositiveIntegerField(default=1, db_index=True)
+
+    class Meta:
+        db_table = 'section_contents'
+        verbose_name = 'Section Content'
+        verbose_name_plural = 'Section Contents'
+        ordering = ['section_id', 'position', 'id']
+        constraints = [
+            models.UniqueConstraint(
+                fields=['section', 'position'],
+                name='uniq_scontent_section_position',
+            ),
+        ]
+        indexes = [
+            models.Index(fields=['section', 'position'], name='idx_scontent_section_pos'),
+            # Supports reverse GFK lookups: "which slot owns this object?"
+            models.Index(fields=['content_type', 'object_id'], name='idx_scontent_ct_object'),
+            # Supports curriculum queries filtered by content kind.
+            models.Index(fields=['item_type', 'section'], name='idx_scontent_itemtype_section'),
+        ]
+
+    def __str__(self):
+        return f'Section {self.section_id} @ position {self.position} ({self.item_type})'
+
+
+# =============================================================================
+# MODIFIED: Lecture — position removed; ordering now delegated to SectionContent
+# =============================================================================
+
 class Lecture(TimestampedModel):
     """Content item inside a section. Supports video and article lectures."""
 
@@ -339,7 +409,7 @@ class Lecture(TimestampedModel):
         related_name='lectures',
     )
     title = models.CharField(max_length=255)
-    position = models.PositiveIntegerField(default=1, db_index=True)
+    # position removed — ordering is owned by SectionContent
     content_type = models.CharField(
         max_length=20,
         choices=ContentType.choices,
@@ -352,14 +422,22 @@ class Lecture(TimestampedModel):
     stream_master_playlist = models.CharField(max_length=500, blank=True, default='')
     stream_renditions = models.JSONField(default=list, blank=True)
     transcoding_error = models.TextField(blank=True, default='')
+    # Cascade-deletes SectionContent rows when this lecture is deleted.
+    section_content = GenericRelation(
+        SectionContent,
+        content_type_field='content_type',
+        object_id_field='object_id',
+        related_query_name='lecture',
+    )
 
     class Meta:
         db_table = 'lectures'
         verbose_name = 'Lecture'
         verbose_name_plural = 'Lectures'
-        ordering = ['section_id', 'position', 'id']
+        # position dropped from ordering; SectionContent.position is authoritative
+        ordering = ['section_id', 'id']
         constraints = [
-            models.UniqueConstraint(fields=['section', 'position'], name='uniq_lecture_section_position'),
+            # uniq_lecture_section_position removed alongside the position field
             models.CheckConstraint(
                 check=(
                     (
@@ -375,7 +453,7 @@ class Lecture(TimestampedModel):
             ),
         ]
         indexes = [
-            models.Index(fields=['section', 'position'], name='idx_lecture_section_position'),
+            # idx_lecture_section_position removed alongside the position field
             models.Index(fields=['content_type', 'section'], name='idx_lecture_type_section'),
         ]
 
@@ -495,7 +573,6 @@ class VideoProcessingJob(TimestampedModel):
     def __str__(self):
         return f'Job {self.pk} - {self.status}'
 
-
 class WatchProgress(TimestampedModel):
     """Per-user progress tracking for lecture playback/completion."""
 
@@ -533,3 +610,131 @@ class WatchProgress(TimestampedModel):
 
     def __str__(self):
         return f'{self.user} - {self.lecture} ({self.watched_seconds}s)'
+
+# =============================================================================
+# NEW: Quiz system — MCQ-based assessments integrated via SectionContent
+# =============================================================================
+
+class Quiz(TimestampedModel):
+    """Practice quiz belonging to a section."""
+
+    section = models.ForeignKey(
+        CourseSection,
+        on_delete=models.CASCADE,
+        related_name='quizzes',
+    )
+    title = models.CharField(max_length=255)
+    description = models.TextField(blank=True, default='')
+    related_lectures = models.ManyToManyField(
+        'Lecture',
+        related_name='related_quizzes',
+        blank=True,
+        help_text='Lectures this quiz is intended to assess. All must belong to the same section.',
+    )
+    # Cascade-deletes SectionContent rows when this quiz is deleted.
+    section_content = GenericRelation(
+        SectionContent,
+        content_type_field='content_type',
+        object_id_field='object_id',
+        related_query_name='quiz',
+    )
+
+    class Meta:
+        db_table = 'quizzes'
+        verbose_name = 'Quiz'
+        verbose_name_plural = 'Quizzes'
+        ordering = ['-created_at']
+        indexes = [
+            models.Index(fields=['section', '-created_at'], name='idx_quiz_section_date'),
+        ]
+
+    def validate_related_lectures(self):
+        """
+        Enforce that every related lecture belongs to this quiz's section.
+        M2M cannot be validated in clean() on unsaved instances; call this
+        explicitly from the serializer after the M2M relationship is set.
+        """
+        invalid = self.related_lectures.exclude(section=self.section)
+        if invalid.exists():
+            raise ValidationError(
+                {'related_lectures': 'All related lectures must belong to the same section as this quiz.'}
+            )
+
+    def __str__(self):
+        return f'{self.title} (Section: {self.section_id})'
+
+
+class QuizQuestion(models.Model):
+    """Single MCQ question within a quiz."""
+
+    quiz = models.ForeignKey(
+        Quiz,
+        on_delete=models.CASCADE,
+        related_name='questions',
+    )
+    question_text = models.TextField()
+    position = models.PositiveIntegerField(default=1, db_index=True)
+
+    class Meta:
+        db_table = 'quiz_questions'
+        verbose_name = 'Quiz Question'
+        verbose_name_plural = 'Quiz Questions'
+        ordering = ['quiz_id', 'position', 'id']
+        constraints = [
+            models.UniqueConstraint(
+                fields=['quiz', 'position'],
+                name='uniq_quizquestion_quiz_position',
+            ),
+        ]
+        indexes = [
+            models.Index(fields=['quiz', 'position'], name='idx_qquestion_quiz_position'),
+        ]
+
+    def __str__(self):
+        return f'Q{self.position}: {self.question_text[:80]}'
+
+
+class QuizAnswer(models.Model):
+    """Answer option for a quiz question. Exactly one answer per question may be correct."""
+
+    question = models.ForeignKey(
+        QuizQuestion,
+        on_delete=models.CASCADE,
+        related_name='answers',
+    )
+    answer_text = models.CharField(max_length=500)
+    is_correct = models.BooleanField(default=False, db_index=True)
+
+    class Meta:
+        db_table = 'quiz_answers'
+        verbose_name = 'Quiz Answer'
+        verbose_name_plural = 'Quiz Answers'
+        ordering = ['question_id', 'id']
+        constraints = [
+            # Partial unique index: at most one row with is_correct=True per question.
+            # Enforced at DB level (PostgreSQL); clean() covers other backends.
+            models.UniqueConstraint(
+                fields=['question'],
+                condition=models.Q(is_correct=True),
+                name='uniq_correct_answer_per_question',
+            ),
+        ]
+        indexes = [
+            models.Index(fields=['question', 'is_correct'], name='idx_qanswer_question_correct'),
+        ]
+
+    def clean(self):
+        super().clean()
+        if self.is_correct:
+            qs = QuizAnswer.objects.filter(question=self.question, is_correct=True)
+            if self.pk:
+                qs = qs.exclude(pk=self.pk)
+            if qs.exists():
+                raise ValidationError({'is_correct': 'Each question may have only one correct answer.'})
+
+    def __str__(self):
+        marker = ' [correct]' if self.is_correct else ''
+        return f'{self.answer_text}{marker}'
+
+
+# =============================================================================

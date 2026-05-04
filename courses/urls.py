@@ -1,6 +1,11 @@
 from django.urls import path
 
 from courses.views import (
+    CodingExerciseDetailAPIView,
+    CodingExerciseLanguageConfigDetailAPIView,
+    CodingExerciseLanguageConfigListCreateAPIView,
+    CodingTestCaseDetailAPIView,
+    CodingTestCaseListCreateAPIView,
     CourseAudienceDetailAPIView,
     CourseAudienceListCreateAPIView,
     CourseCreateAPIView,
@@ -13,12 +18,10 @@ from courses.views import (
     CourseSectionCreateAPIView,
     CourseSectionDetailAPIView,
     CourseSectionListAPIView,
-    LectureCreateAPIView,
     LectureDetailAPIView,
     LectureListAPIView,
     QuizAnswerDetailAPIView,
     QuizAnswerListCreateAPIView,
-    QuizCreateAPIView,
     QuizDetailAPIView,
     QuizQuestionDetailAPIView,
     QuizQuestionListCreateAPIView,
@@ -60,16 +63,14 @@ urlpatterns = [
     path('contents/<int:content_id>/reorder/', SectionContentReorderAPIView.as_view(), name='section-content-reorder'),
 
     # -------------------------------------------------------------------------
-    # Lectures (legacy direct endpoints — kept for backward compatibility)
+    # Lectures
     # -------------------------------------------------------------------------
     path('sections/<int:section_id>/lectures/', LectureListAPIView.as_view(), name='lecture-list'),
-    path('sections/<int:section_id>/lectures/create/', LectureCreateAPIView.as_view(), name='lecture-create'),
     path('lectures/<int:lecture_id>/', LectureDetailAPIView.as_view(), name='lecture-detail'),
 
     # -------------------------------------------------------------------------
     # Quizzes
     # -------------------------------------------------------------------------
-    path('quizzes/', QuizCreateAPIView.as_view(), name='quiz-create'),
     path('quizzes/<int:quiz_id>/', QuizDetailAPIView.as_view(), name='quiz-detail'),
 
     # -------------------------------------------------------------------------
@@ -83,4 +84,13 @@ urlpatterns = [
     # -------------------------------------------------------------------------
     path('quiz-questions/<int:question_id>/answers/', QuizAnswerListCreateAPIView.as_view(), name='quiz-answer-list-create'),
     path('quiz-answers/<int:answer_id>/', QuizAnswerDetailAPIView.as_view(), name='quiz-answer-detail'),
+
+    # -------------------------------------------------------------------------
+    # Coding exercises
+    # -------------------------------------------------------------------------
+    path('coding-exercises/<int:exercise_id>/', CodingExerciseDetailAPIView.as_view(), name='coding-exercise-detail'),
+    path('coding-exercises/<int:exercise_id>/language-configs/', CodingExerciseLanguageConfigListCreateAPIView.as_view(), name='coding-lang-config-list-create'),
+    path('coding-exercises/<int:exercise_id>/language-configs/<int:config_id>/', CodingExerciseLanguageConfigDetailAPIView.as_view(), name='coding-lang-config-detail'),
+    path('coding-exercises/<int:exercise_id>/testcases/', CodingTestCaseListCreateAPIView.as_view(), name='coding-testcase-list-create'),
+    path('coding-exercises/<int:exercise_id>/testcases/<int:tc_id>/', CodingTestCaseDetailAPIView.as_view(), name='coding-testcase-detail'),
 ]

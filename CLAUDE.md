@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-A Django REST Framework backend for a course marketplace platform (Coursera-like). Users can be learners, instructors, partner institutions, or admins. Instructors create courses with mixed content (lectures + quizzes), upload videos that are async-transcoded to HLS, and must pass identity verification before publishing.
+A Django REST Framework backend for a course marketplace platform (Coursera-like). Users can be learners, instructors, partner institutions, or admins. Instructors create courses with mixed content (lectures, quizzes, coding exercises), upload videos that are async-transcoded to HLS, and must pass identity verification before publishing.
 
 ## Development Setup
 
@@ -45,7 +45,7 @@ python manage.py reindex_section_content_positions --dry-run
 | App | Path prefix | Responsibility |
 |-----|-------------|----------------|
 | `auth` | `/api/v1/auth/` | Registration, OTP, JWT, OAuth (Google/LinkedIn), profiles |
-| `courses` | `/api/v1/courses/` | Course authoring, curriculum, lectures, video pipeline, quizzes |
+| `courses` | `/api/v1/courses/` | Course authoring, curriculum, lectures, video pipeline, quizzes, coding exercises |
 | `id_verification` | `/api/v1/verification/` | Instructor identity verification state machine |
 | `core` | — | Shared permissions, pagination, middleware |
 
@@ -55,7 +55,7 @@ python manage.py reindex_section_content_positions --dry-run
 
 ### Course Content Ordering: SectionContent
 
-The `SectionContent` model (in `courses/`) is the **single source of truth for ordering** within a section. It holds a `GenericForeignKey` that points to either a `Lecture` or a `Quiz`. When adding new content types, create the model and then create a `SectionContent` row linking it into the section — do not add ordering directly to content models. Reordering logic lives in `courses/services.py` → `reorder_section_content()`.
+The `SectionContent` model (in `courses/`) is the **single source of truth for ordering** within a section. It holds a `GenericForeignKey` that points to a `Lecture`, `Quiz`, or `CodingExercise`. When adding new content types, create the model and then create a `SectionContent` row linking it into the section — do not add ordering directly to content models. Each content model must have a `GenericRelation` to `SectionContent` so that deleting the object cascades and removes its curriculum slot automatically. Reordering logic lives in `courses/services.py` → `reorder_section_content()`.
 
 ### Video Pipeline
 
@@ -252,4 +252,4 @@ For local dev, `EMAIL_BACKEND=django.core.mail.backends.console.EmailBackend` pr
 
 ## Docs
 
-Detailed design rationale is in `docs/architecture/` (9 files). `09-workflows-and-architecture-why.md` explains the reasoning behind each major workflow and is worth reading before making structural changes. `FRONTEND_ERROR_RESPONSE_FORMAT.md` defines the error shape all views must follow.
+Detailed design rationale is in `docs/architecture/` (10 files). `09-workflows-and-architecture-why.md` explains the reasoning behind each major workflow and is worth reading before making structural changes. `10-coding-exercises.md` covers the coding exercise data model, authoring API, and design decisions. `FRONTEND_ERROR_RESPONSE_FORMAT.md` defines the error shape all views must follow.

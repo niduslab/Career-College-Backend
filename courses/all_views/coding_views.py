@@ -1,6 +1,7 @@
 import logging
 
-from django.db import IntegrityError
+from django.db import IntegrityError, transaction
+from django.db.models import F
 from django.shortcuts import get_object_or_404
 from rest_framework import status
 from rest_framework.parsers import FormParser, JSONParser, MultiPartParser
@@ -174,7 +175,7 @@ class CodingExerciseLanguageConfigDetailAPIView(APIView):
         config.delete()
         return Response(
             {'success': True, 'message': 'Language config deleted successfully.'},
-            status=status.HTTP_204_NO_CONTENT,
+            status=status.HTTP_200_OK,
         )
 
 
@@ -267,8 +268,16 @@ class CodingTestCaseDetailAPIView(APIView):
 
     def delete(self, request, exercise_id, tc_id):
         test_case = self._get_owned_test_case(request, exercise_id, tc_id)
-        test_case.delete()
+        with transaction.atomic():
+            deleted_position = test_case.position
+            owned_exercise_id = test_case.exercise_id
+            test_case.delete()
+            # Keep positions contiguous after deletion: 1,2,3... with no gaps.
+            CodingTestCase.objects.filter(
+                exercise_id=owned_exercise_id,
+                position__gt=deleted_position,
+            ).update(position=F('position') - 1)
         return Response(
             {'success': True, 'message': 'Test case deleted successfully.'},
-            status=status.HTTP_204_NO_CONTENT,
+            status=status.HTTP_200_OK,
         )

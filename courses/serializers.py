@@ -3,6 +3,8 @@ from rest_framework import serializers
 
 from auth.models import PartnerInstitutionProfile, User
 from courses.models import (
+    Assignment,
+    AssignmentQuestion,
     CodingExercise,
     CodingExerciseLanguageConfig,
     CodingTestCase,
@@ -416,6 +418,7 @@ class SectionContentSerializer(serializers.ModelSerializer):
         lectures: dict = self.context.get('lectures', {})
         quizzes: dict = self.context.get('quizzes', {})
         coding_exercises: dict = self.context.get('coding_exercises', {})
+        assignments: dict = self.context.get('assignments', {})
 
         if obj.item_type == SectionContent.ItemType.LECTURE:
             lecture = lectures.get(obj.object_id)
@@ -435,6 +438,15 @@ class SectionContentSerializer(serializers.ModelSerializer):
                     'title': ex.title,
                     'difficulty': ex.difficulty,
                     'default_language': ex.default_language,
+                }
+
+        elif obj.item_type == SectionContent.ItemType.ASSIGNMENT:
+            assignment = assignments.get(obj.object_id)
+            if assignment:
+                return {
+                    'id': assignment.id,
+                    'title': assignment.title,
+                    'passing_score': assignment.passing_score,
                 }
 
         return None
@@ -671,3 +683,75 @@ class CodingExerciseCreateUpdateSerializer(serializers.ModelSerializer):
                 {'default_language': 'default_language must be in supported_languages.'}
             )
         return attrs
+
+
+# ---------------------------------------------------------------------------
+# Assignment serializers
+# ---------------------------------------------------------------------------
+
+def _request_user_is_instructor(request) -> bool:
+    user = getattr(request, 'user', None)
+    return bool(
+        user
+        and getattr(user, 'is_authenticated', False)
+        and getattr(user, 'user_type', None) == 'instructor'
+    )
+
+
+class AssignmentQuestionSerializer(serializers.ModelSerializer):
+    assignment_id = serializers.IntegerField(source='assignment.id', read_only=True)
+
+    class Meta:
+        model = AssignmentQuestion
+        fields = [
+            'id', 'assignment_id', 'question_text', 'model_answer',
+            'points', 'hint', 'position',
+        ]
+        read_only_fields = ['id', 'assignment_id', 'position']
+
+    def validate_question_text(self, value):
+        text = value.strip()
+        if not text:
+            raise serializers.ValidationError('Question text cannot be empty.')
+        return text
+
+    def to_representation(self, instance):
+        data = super().to_representation(instance)
+        # model_answer is instructor-only; strip it for everyone else.
+        request = self.context.get('request')
+        if not _request_user_is_instructor(request):
+            data.pop('model_answer', None)
+        return data
+
+
+class AssignmentSerializer(serializers.ModelSerializer):
+    section_id = serializers.IntegerField(source='section.id', read_only=True)
+    questions = AssignmentQuestionSerializer(many=True, read_only=True)
+    max_score = serializers.SerializerMethodField()
+
+    class Meta:
+        model = Assignment
+        fields = [
+            'id', 'section_id', 'title', 'description', 'instructions',
+            'passing_score', 'max_score', 'questions',
+            'created_at', 'updated_at',
+        ]
+        read_only_fields = fields
+
+    def get_max_score(self, obj) -> int:
+        # Aggregate Sum at the DB layer; fall back to 0 when the assignment has no questions.
+        from django.db.models import Sum
+
+        return obj.questions.aggregate(total=Sum('points'))['total'] or 0
+
+
+class AssignmentCreateUpdateSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = Assignment
+        fields = ['title', 'description', 'instructions', 'passing_score']
+
+    def validate_title(self, value):
+        title = value.strip()
+        if len(title) < 2:
+            raise serializers.ValidationError('Assignment title must be at least 2 characters long.')
+        return title

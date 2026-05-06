@@ -40,6 +40,8 @@ answer_id=
 exercise_id=
 config_id=
 tc_id=
+assignment_id=
+aq_id=
 ```
 
 ## 4) Required Headers
@@ -535,13 +537,363 @@ Create coding exercises via `sections/{id}/contents/` (section 7.2b). All endpoi
 }
 ```
 
-## 11) Common Error Responses You Should Test
+## 11) Assignment API Flow
 
-### 11.1 Invalid `item_type` in section contents
-- Request:
+Assignments are open-ended (free-text) questions with instructor-provided model answers. Like lectures, quizzes, and coding exercises, an assignment **must be created through the section-content endpoint** (`sections/{id}/contents/` with `item_type: "assignment"`). The dedicated `/assignments/...` URLs handle list / read / update / delete and the question sub-resource.
+
+All write endpoints require a verified-instructor JWT. `model_answer` on a question is instructor-only and is stripped from learner-facing responses (Part 2 enforcement).
+
+### 11.1 Create Assignment via Section Content
+- Method: `POST`
+- URL: `{{base_url}}/sections/{{section_id}}/contents/`
+- Body:
 ```json
 {
   "item_type": "assignment",
+  "title": "Reflection Essay",
+  "description": "Reflect on the REST fundamentals lecture.",
+  "instructions": "Write at least 300 words. Cite at least one example.",
+  "passing_score": 60,
+  "position": 4
+}
+```
+- Expected status: `201`
+- Expected response shape:
+```json
+{
+  "success": true,
+  "message": "Assignment created successfully.",
+  "data": {
+    "id": 207,
+    "section": 11,
+    "item_type": "assignment",
+    "object_id": 1,
+    "position": 4,
+    "content": {
+      "id": 1,
+      "title": "Reflection Essay",
+      "passing_score": 60
+    }
+  }
+}
+```
+- Save:
+  - `data.id` as `content_id` (the section-content slot id)
+  - `data.object_id` as `assignment_id` (the actual assignment id)
+
+### 11.2 List Assignments in a Section
+- Method: `GET`
+- URL: `{{base_url}}/sections/{{section_id}}/assignments/`
+- Expected status: `200`
+- Returns assignments belonging to that section, newest first. Each row includes nested `questions` and a computed `max_score` (sum of question points).
+
+### 11.3 Get Assignment Detail
+- Method: `GET`
+- URL: `{{base_url}}/assignments/{{assignment_id}}/`
+- Expected status: `200`
+- Expected response shape:
+```json
+{
+  "success": true,
+  "data": {
+    "id": 1,
+    "section_id": 11,
+    "title": "Reflection Essay",
+    "description": "Reflect on the REST fundamentals lecture.",
+    "instructions": "Write at least 300 words. Cite at least one example.",
+    "passing_score": 60,
+    "max_score": 0,
+    "questions": [],
+    "created_at": "2026-05-06T05:33:41Z",
+    "updated_at": "2026-05-06T05:33:41Z"
+  }
+}
+```
+
+> **Note:** the dedicated assignment endpoint **does not accept POST**. Sending `POST {{base_url}}/sections/{{section_id}}/assignments/` returns `405 Method Not Allowed`. Always create through `sections/{id}/contents/` (section 11.1).
+
+### 11.4 Patch Assignment
+- Method: `PATCH`
+- URL: `{{base_url}}/assignments/{{assignment_id}}/`
+- Body:
+```json
+{
+  "title": "Reflection Essay (Updated)",
+  "passing_score": 70
+}
+```
+- Expected status: `200`
+- Allowed partial-update fields: `title`, `description`, `instructions`, `passing_score`.
+
+### 11.5 Delete Assignment
+- Method: `DELETE`
+- URL: `{{base_url}}/assignments/{{assignment_id}}/`
+- Expected status: `200`
+- Example response:
+```json
+{
+  "success": true,
+  "message": "Assignment deleted successfully."
+}
+```
+- Expected behavior: deletes the assignment, cascades all its questions, and removes its `SectionContent` slot automatically (cascade via `GenericRelation`).
+
+---
+
+### 11.6 Add Assignment Question
+- Method: `POST`
+- URL: `{{base_url}}/assignments/{{assignment_id}}/questions/`
+- Body:
+```json
+{
+  "question_text": "What surprised you most about REST design?",
+  "model_answer": "Reference reflection: idempotency boundaries, statelessness trade-offs.",
+  "points": 10,
+  "hint": "Reference at least one HTTP verb."
+}
+```
+- Expected status: `201`
+- Expected response shape:
+```json
+{
+  "success": true,
+  "message": "Question created successfully.",
+  "data": {
+    "id": 1,
+    "assignment_id": 1,
+    "question_text": "What surprised you most about REST design?",
+    "model_answer": "Reference reflection: idempotency boundaries, statelessness trade-offs.",
+    "points": 10,
+    "hint": "Reference at least one HTTP verb.",
+    "position": 1
+  }
+}
+```
+- Save `data.id` as `aq_id`.
+- `position` is server-assigned (next available slot for that assignment) — do not send it in the body.
+
+### 11.7 List Assignment Questions
+- Method: `GET`
+- URL: `{{base_url}}/assignments/{{assignment_id}}/questions/`
+- Expected status: `200`
+- Results are ordered by `position`.
+
+### 11.8 Get / Patch / Delete Assignment Question
+- `GET  {{base_url}}/assignment-questions/{{aq_id}}/`
+- `PATCH {{base_url}}/assignment-questions/{{aq_id}}/`
+  - Demo patch body:
+```json
+{
+  "model_answer": "Updated reference answer.",
+  "points": 15
+}
+```
+  - Expected status: `200`
+  - Allowed partial-update fields: `question_text`, `model_answer`, `points`, `hint`.
+- `DELETE {{base_url}}/assignment-questions/{{aq_id}}/`
+  - Expected status: `200`
+  - Example response:
+```json
+{
+  "success": true,
+  "message": "Question deleted successfully."
+}
+```
+  - Expected behavior: deletes the question and compacts trailing positions (e.g., positions `1, 2, 3` → delete `2` → `1, 2`).
+
+### 11.9 Reorder Assignment Questions
+- Method: `PATCH`
+- URL: `{{base_url}}/assignments/{{assignment_id}}/questions/reorder/`
+- Body:
+```json
+{
+  "ordered_ids": [3, 1, 2]
+}
+```
+- Expected status: `200`
+- Expected behavior: positions are reassigned to match the order of `ordered_ids` (here: question `3` → position `1`, question `1` → position `2`, question `2` → position `3`).
+
+---
+
+### 11.10 Assignment Validation Error Cases
+
+**Title too short**
+- Body:
+```json
+{
+  "item_type": "assignment",
+  "title": "A"
+}
+```
+- Expected status: `400`
+- Example response:
+```json
+{
+  "success": false,
+  "message": "Validation failed.",
+  "errors": {
+    "title": ["Assignment title must be at least 2 characters long."]
+  }
+}
+```
+
+**Title missing**
+- Body:
+```json
+{
+  "item_type": "assignment"
+}
+```
+- Expected status: `400`
+- Example response:
+```json
+{
+  "success": false,
+  "message": "Validation failed.",
+  "errors": {
+    "title": ["This field is required."]
+  }
+}
+```
+
+**Empty question text**
+- POST to `assignments/{{assignment_id}}/questions/` with:
+```json
+{
+  "question_text": "   "
+}
+```
+- Expected status: `400`
+- Example response:
+```json
+{
+  "success": false,
+  "message": "Validation failed.",
+  "errors": {
+    "question_text": ["Question text cannot be empty."]
+  }
+}
+```
+
+**Reorder with mismatched IDs**
+- Assignment has questions `[1, 2, 3]`. Body:
+```json
+{
+  "ordered_ids": [1, 2, 99]
+}
+```
+- Expected status: `400`
+- Example response:
+```json
+{
+  "success": false,
+  "message": "ordered_ids must match the questions belonging to this assignment."
+}
+```
+
+**Reorder with duplicate IDs**
+- Body:
+```json
+{
+  "ordered_ids": [1, 1, 2]
+}
+```
+- Expected status: `400`
+- Example response:
+```json
+{
+  "success": false,
+  "message": "ordered_ids contains duplicates."
+}
+```
+
+**Reorder with empty list**
+- Body:
+```json
+{
+  "ordered_ids": []
+}
+```
+- Expected status: `400`
+- Example response:
+```json
+{
+  "success": false,
+  "message": "ordered_ids must be a non-empty list."
+}
+```
+
+**Reorder with non-integer IDs**
+- Body:
+```json
+{
+  "ordered_ids": ["abc", "def"]
+}
+```
+- Expected status: `400`
+- Example response:
+```json
+{
+  "success": false,
+  "message": "ordered_ids must contain integers only."
+}
+```
+
+---
+
+### 11.11 Assignment Auth & Ownership Error Cases
+
+**Unauthenticated create**
+- POST `sections/{{section_id}}/contents/` with `item_type: "assignment"` and **no** `Authorization` header.
+- Expected status: `401`
+
+**Unverified instructor tries to create**
+- Authenticated as an instructor whose `InstructorProfile.is_verified` is `false`.
+- Expected status: `403`
+- Example response:
+```json
+{
+  "success": false,
+  "message": "Only verified instructors can perform this action.",
+  "detail": "Only verified instructors can perform this action."
+}
+```
+
+**Learner tries to create**
+- Authenticated as a `learner` user.
+- Expected status: `403`
+
+**Verified instructor not on the course**
+- Authenticated as a verified instructor who is **not** in `course.instructors`.
+- POST `sections/{{section_id}}/contents/` for that course's section.
+- Expected status: `404`
+- Example response:
+```json
+{
+  "success": false,
+  "detail": "No CourseSection matches the given query."
+}
+```
+
+**Cross-instructor read of someone else's assignment**
+- `GET {{base_url}}/assignments/{{assignment_id}}/` while authenticated as an instructor not on that course.
+- Expected status: `404` (the API returns 404 instead of 403 to avoid leaking the existence of resources you don't own).
+
+**Unverified instructor patches an assignment they own**
+- An unverified instructor on the course can `GET` but not `PATCH`/`PUT`/`DELETE`.
+- Expected status on patch: `403`.
+
+**POST to dedicated assignment list endpoint**
+- `POST {{base_url}}/sections/{{section_id}}/assignments/`
+- Expected status: `405 Method Not Allowed`. Use `sections/{id}/contents/` instead.
+
+## 12) Common Error Responses You Should Test
+
+### 12.1 Invalid `item_type` in section contents
+- Request:
+```json
+{
+  "item_type": "video",
   "title": "Invalid Type"
 }
 ```
@@ -550,11 +902,11 @@ Create coding exercises via `sections/{id}/contents/` (section 7.2b). All endpoi
 ```json
 {
   "success": false,
-  "message": "item_type must be 'lecture', 'quiz', or 'coding'."
+  "message": "item_type must be 'lecture', 'quiz', 'coding', or 'assignment'."
 }
 ```
 
-### 11.2 Invalid reorder position
+### 12.2 Invalid reorder position
 - Request:
 ```json
 {
@@ -570,7 +922,7 @@ Create coding exercises via `sections/{id}/contents/` (section 7.2b). All endpoi
 }
 ```
 
-### 11.3 Two correct answers for one question
+### 12.3 Two correct answers for one question
 - Try creating a second answer with `"is_correct": true` for the same question.
 - Expected status: `400`
 - Example response:
@@ -586,23 +938,28 @@ Create coding exercises via `sections/{id}/contents/` (section 7.2b). All endpoi
 }
 ```
 
-## 12) Quick Manual End-to-End Scenario
+## 13) Quick Manual End-to-End Scenario
 1. Create course → save `course_id`.
 2. Create section → save `section_id`.
 3. Create one article lecture via `sections/{id}/contents/` (`item_type: "lecture"`).
 4. Create one quiz via `sections/{id}/contents/` (`item_type: "quiz"`) → save `quiz_id`.
 5. Create one coding exercise via `sections/{id}/contents/` (`item_type: "coding"`) → save `exercise_id`.
-6. List `sections/{id}/contents/` — verify all three items appear with correct `content` summaries.
-7. Reorder coding exercise to position `1`; verify list updates with shifted items.
-8. Add a Python language config to the exercise (`POST coding-exercises/{id}/language-configs/`).
-9. Add two test cases (one visible, one hidden) to the exercise.
-10. `GET coding-exercises/{id}/` — verify `language_configs` and `test_cases` arrays are populated.
-11. Add one question and two answers (one correct) to quiz.
-12. Patch exercise difficulty to `"hard"` and verify update.
-13. Delete the exercise — re-fetch `sections/{id}/contents/` and confirm the coding slot is gone.
+6. Create one assignment via `sections/{id}/contents/` (`item_type: "assignment"`) → save `assignment_id`.
+7. List `sections/{id}/contents/` — verify all four items appear with correct `content` summaries.
+8. Reorder coding exercise to position `1`; verify list updates with shifted items.
+9. Add a Python language config to the exercise (`POST coding-exercises/{id}/language-configs/`).
+10. Add two test cases (one visible, one hidden) to the exercise.
+11. `GET coding-exercises/{id}/` — verify `language_configs` and `test_cases` arrays are populated.
+12. Add one question and two answers (one correct) to quiz.
+13. Add three questions to the assignment (`POST assignments/{id}/questions/`); reorder them via `assignments/{id}/questions/reorder/`; `GET assignments/{id}/` and verify `max_score` equals the sum of question points.
+14. Patch exercise difficulty to `"hard"` and verify update.
+15. Delete the exercise — re-fetch `sections/{id}/contents/` and confirm the coding slot is gone.
+16. Delete the assignment — re-fetch `sections/{id}/contents/` and confirm the assignment slot is gone (its questions cascade away too).
 
-## 13) Notes
-- All ownership checks are instructor-scoped; if the course/section/exercise is not yours, API returns `404`.
+## 14) Notes
+- All ownership checks are instructor-scoped; if the course/section/exercise/assignment is not yours, API returns `404`.
 - `solution_code` on language configs is stored server-side and must never appear in learner-facing responses (Part 2 enforcement).
 - Hidden test cases (`is_hidden: true`) are for grading only and must never be exposed to learners (Part 2 enforcement).
+- `model_answer` on assignment questions is instructor-only and is stripped from learner-facing responses (Part 2 enforcement).
 - For video lectures, transcoding states usually move from `processing` to `ready` (or `failed` on error).
+- Assignments, lectures, quizzes, and coding exercises share one ordering layer (`SectionContent`); reorder via `PATCH contents/{content_id}/reorder/` regardless of item type.

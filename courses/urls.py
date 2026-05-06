@@ -1,6 +1,11 @@
 from django.urls import path
 
 from courses.views import (
+    AssignmentDetailAPIView,
+    AssignmentListAPIView,
+    AssignmentQuestionDetailAPIView,
+    AssignmentQuestionListCreateAPIView,
+    AssignmentQuestionReorderAPIView,
     CodingExerciseDetailAPIView,
     CodingExerciseLanguageConfigDetailAPIView,
     CodingExerciseLanguageConfigListCreateAPIView,
@@ -84,6 +89,15 @@ urlpatterns = [
     # -------------------------------------------------------------------------
     path('quiz-questions/<int:question_id>/answers/', QuizAnswerListCreateAPIView.as_view(), name='quiz-answer-list-create'),
     path('quiz-answers/<int:answer_id>/', QuizAnswerDetailAPIView.as_view(), name='quiz-answer-detail'),
+
+    # -------------------------------------------------------------------------
+    # Assignments
+    # -------------------------------------------------------------------------
+    path('sections/<int:section_id>/assignments/', AssignmentListAPIView.as_view(), name='assignment-list-create'),
+    path('assignments/<int:assignment_id>/', AssignmentDetailAPIView.as_view(), name='assignment-detail'),
+    path('assignments/<int:assignment_id>/questions/', AssignmentQuestionListCreateAPIView.as_view(), name='assignment-question-list-create'),
+    path('assignments/<int:assignment_id>/questions/reorder/', AssignmentQuestionReorderAPIView.as_view(), name='assignment-question-reorder'),
+    path('assignment-questions/<int:question_id>/', AssignmentQuestionDetailAPIView.as_view(), name='assignment-question-detail'),
 
     # -------------------------------------------------------------------------
     # Coding exercises

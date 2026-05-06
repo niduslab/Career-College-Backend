@@ -14,6 +14,7 @@ This folder is a quick-start map for new backend developers.
 8. `08-core-infrastructure.md`
 9. `09-workflows-and-architecture-why.md`
 10. `10-coding-exercises.md`
+11. `11-assignments-crud.md`
 
 ## Scope
 

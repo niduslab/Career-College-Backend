@@ -8,6 +8,7 @@ from rest_framework.views import APIView
 
 from core.permissions import IsVerifiedInstructor
 from courses.models import (
+    Assignment,
     CodingExercise,
     CourseAudience,
     CourseLearningObjective,
@@ -21,6 +22,7 @@ from courses.models import (
     SectionContent,
 )
 from courses.serializers import (
+    AssignmentCreateUpdateSerializer,
     CodingExerciseCreateUpdateSerializer,
     CodingExerciseSerializer,
     CourseAudienceSerializer,
@@ -269,6 +271,7 @@ class SectionContentListCreateAPIView(APIView):
         lecture_ids = [c.object_id for c in contents if c.item_type == SectionContent.ItemType.LECTURE]
         quiz_ids = [c.object_id for c in contents if c.item_type == SectionContent.ItemType.QUIZ]
         coding_ids = [c.object_id for c in contents if c.item_type == SectionContent.ItemType.CODING]
+        assignment_ids = [c.object_id for c in contents if c.item_type == SectionContent.ItemType.ASSIGNMENT]
 
         lectures = (
             {lec.id: lec for lec in Lecture.objects.filter(id__in=lecture_ids)}
@@ -282,11 +285,20 @@ class SectionContentListCreateAPIView(APIView):
             {ex.id: ex for ex in CodingExercise.objects.filter(id__in=coding_ids)}
             if coding_ids else {}
         )
+        assignments = (
+            {a.id: a for a in Assignment.objects.filter(id__in=assignment_ids)}
+            if assignment_ids else {}
+        )
 
         serializer = SectionContentSerializer(
             contents,
             many=True,
-            context={'lectures': lectures, 'quizzes': quizzes, 'coding_exercises': coding_exercises},
+            context={
+                'lectures': lectures,
+                'quizzes': quizzes,
+                'coding_exercises': coding_exercises,
+                'assignments': assignments,
+            },
         )
         return Response({'success': True, 'data': serializer.data}, status=status.HTTP_200_OK)
 
@@ -298,10 +310,11 @@ class SectionContentListCreateAPIView(APIView):
             SectionContent.ItemType.LECTURE,
             SectionContent.ItemType.QUIZ,
             SectionContent.ItemType.CODING,
+            SectionContent.ItemType.ASSIGNMENT,
         }
         if item_type not in _VALID_ITEM_TYPES:
             return Response(
-                {'success': False, 'message': "item_type must be 'lecture', 'quiz', or 'coding'."},
+                {'success': False, 'message': "item_type must be 'lecture', 'quiz', 'coding', or 'assignment'."},
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
@@ -316,6 +329,8 @@ class SectionContentListCreateAPIView(APIView):
             return self._create_lecture(request, section, position)
         if item_type == SectionContent.ItemType.QUIZ:
             return self._create_quiz(request, section, position)
+        if item_type == SectionContent.ItemType.ASSIGNMENT:
+            return self._create_assignment(request, section, position)
         return self._create_coding_exercise(request, section, position)
 
     def _create_lecture(self, request, section, position):
@@ -375,6 +390,41 @@ class SectionContentListCreateAPIView(APIView):
                 'message': 'Quiz created successfully.',
                 'data': SectionContentSerializer(
                     sc, context={'lectures': {}, 'quizzes': {quiz.id: quiz}, 'coding_exercises': {}}
+                ).data,
+            },
+            status=status.HTTP_201_CREATED,
+        )
+
+    def _create_assignment(self, request, section, position):
+        serializer = AssignmentCreateUpdateSerializer(data=request.data)
+        if not serializer.is_valid():
+            return Response(
+                {'success': False, 'message': 'Validation failed.', 'errors': serializer.errors},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        try:
+            with transaction.atomic():
+                assignment = Assignment.objects.create(section=section, **serializer.validated_data)
+                sc = create_section_content_for_object(
+                    section, assignment, SectionContent.ItemType.ASSIGNMENT, position
+                )
+        except IntegrityError:
+            return Response(
+                {'success': False, 'message': 'A content item already exists at that position.'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        return Response(
+            {
+                'success': True,
+                'message': 'Assignment created successfully.',
+                'data': SectionContentSerializer(
+                    sc,
+                    context={
+                        'lectures': {},
+                        'quizzes': {},
+                        'coding_exercises': {},
+                        'assignments': {assignment.id: assignment},
+                    },
                 ).data,
             },
             status=status.HTTP_201_CREATED,

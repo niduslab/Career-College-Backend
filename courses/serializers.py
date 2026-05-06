@@ -630,6 +630,9 @@ class CodingExerciseCreateUpdateSerializer(serializers.ModelSerializer):
             'title', 'description', 'problem_statement',
             'difficulty', 'default_language', 'supported_languages', 'time_limit_ms',
         ]
+        extra_kwargs = {
+            'supported_languages': {'required': True},
+        }
 
     def validate_title(self, value):
         title = value.strip()
@@ -656,10 +659,15 @@ class CodingExerciseCreateUpdateSerializer(serializers.ModelSerializer):
                 default_language = self.instance.default_language
             if supported_languages is None:
                 supported_languages = self.instance.supported_languages
+        else:
+            model = self.Meta.model
+            if default_language is None:
+                default_language = model._meta.get_field('default_language').get_default()
+            if supported_languages is None:
+                supported_languages = model._meta.get_field('supported_languages').get_default()
 
-        if default_language and supported_languages:
-            if default_language not in supported_languages:
-                raise serializers.ValidationError(
-                    {'default_language': 'default_language must be in supported_languages.'}
-                )
+        if default_language not in supported_languages:
+            raise serializers.ValidationError(
+                {'default_language': 'default_language must be in supported_languages.'}
+            )
         return attrs

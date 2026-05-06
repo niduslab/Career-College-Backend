@@ -56,8 +56,8 @@ class CodingExerciseDetailAPIView(APIView):
             )
         try:
             exercise = serializer.save()
-        except Exception as exc:
-            logger.error(f'Coding exercise update failed for user {request.user.id}: {exc}')
+        except Exception:
+            logger.exception('Coding exercise update failed for user %s', request.user.id)
             return Response(
                 {'success': False, 'message': 'An unexpected error occurred. Please try again.'},
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR,

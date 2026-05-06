@@ -113,7 +113,7 @@ EMAIL_BACKEND=django.core.mail.backends.console.EmailBackend
 
 - Practice-oriented: no passing score, no time limit
 - Questions are ordered within a quiz; answers enforce exactly one correct option per question
-- Can be created curriculum-first (through section contents) or directly (then placed via `SectionContent`)
+-  - Created through section contents and positioned in the curriculum via `SectionContent`
 
 ### Coding Exercises (Part 1 — CRUD)
 

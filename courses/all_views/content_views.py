@@ -6,6 +6,7 @@ from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
+from core.permissions import IsVerifiedInstructor
 from courses.models import (
     CodingExercise,
     CourseAudience,
@@ -245,7 +246,7 @@ class SectionContentListCreateAPIView(APIView):
     GET  /api/sections/{section_id}/contents/  — ordered curriculum list
     POST /api/sections/{section_id}/contents/  — create lecture or quiz + slot
     """
-    permission_classes = [IsAuthenticated]
+    permission_classes = [IsAuthenticated, IsVerifiedInstructor]
     parser_classes = [JSONParser, FormParser, MultiPartParser]
 
     def _get_owned_section(self, request, section_id):

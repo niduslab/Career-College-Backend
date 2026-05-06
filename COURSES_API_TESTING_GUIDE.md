@@ -37,6 +37,9 @@ content_id=
 quiz_id=
 question_id=
 answer_id=
+exercise_id=
+config_id=
+tc_id=
 ```
 
 ## 4) Required Headers
@@ -127,11 +130,11 @@ Content-Type: application/json
 - `PUT {{base_url}}/sections/{{section_id}}/`
 - `DELETE {{base_url}}/sections/{{section_id}}/`
 
-## 7) Section Content API (recommended curriculum endpoints)
+## 7) Section Content API (the only creation path for all content)
 
-These endpoints let you mix lectures and quizzes in one ordered list.
+All lectures, quizzes, and coding exercises must be created through this endpoint. There are no separate creation endpoints for individual content types.
 
-### 7.1 Create Lecture via Section Content (JSON article)
+### 7.1 Create Article Lecture
 - Method: `POST`
 - URL: `{{base_url}}/sections/{{section_id}}/contents/`
 - Body:
@@ -164,6 +167,19 @@ These endpoints let you mix lectures and quizzes in one ordered list.
   }
 }
 ```
+- Save `data.object_id` as `lecture_id`.
+
+### 7.1b Create Video Lecture (multipart/form-data)
+- Method: `POST`
+- URL: `{{base_url}}/sections/{{section_id}}/contents/`
+- Body type: `form-data`
+  - `item_type` = `lecture`
+  - `title` = `Intro Video`
+  - `content_type` = `video`
+  - `video_file` = (select file)
+  - `position` = `2` (optional)
+- Expected status: `201`
+- After creation the video is queued for transcoding. Poll `GET {{base_url}}/lectures/{{lecture_id}}/` until `active_video_asset.status` is `ready` or `failed`.
 
 ### 7.2 Create Quiz via Section Content
 - Method: `POST`
@@ -182,11 +198,51 @@ These endpoints let you mix lectures and quizzes in one ordered list.
   - `data.id` as `content_id` (section content row id)
   - `data.object_id` as `quiz_id` (actual quiz id)
 
+### 7.2b Create Coding Exercise via Section Content
+- Method: `POST`
+- URL: `{{base_url}}/sections/{{section_id}}/contents/`
+- Body:
+```json
+{
+  "item_type": "coding",
+  "title": "Reverse a String",
+  "description": "Practice string manipulation.",
+  "problem_statement": "Given a string s, return the string reversed.",
+  "difficulty": "easy",
+  "default_language": "python",
+  "supported_languages": ["python", "javascript"],
+  "time_limit_ms": 2000,
+  "position": 3
+}
+```
+- Expected status: `201`
+- Expected response shape:
+```json
+{
+  "success": true,
+  "message": "Coding exercise created successfully.",
+  "data": {
+    "id": 501,
+    "section": 11,
+    "item_type": "coding",
+    "object_id": 1,
+    "position": 3,
+    "content": {
+      "id": 1,
+      "title": "Reverse a String",
+      "difficulty": "easy",
+      "default_language": "python"
+    }
+  }
+}
+```
+- Save `data.object_id` as `exercise_id`.
+
 ### 7.3 List Ordered Curriculum
 - Method: `GET`
 - URL: `{{base_url}}/sections/{{section_id}}/contents/`
 - Expected status: `200`
-- You should see mixed ordered rows for lectures and quizzes.
+- Returns all content items (lectures, quizzes, coding exercises) ordered by `position`.
 
 ### 7.4 Reorder Curriculum Item
 - Method: `PATCH`
@@ -203,57 +259,30 @@ These endpoints let you mix lectures and quizzes in one ordered list.
   - Other items shift automatically.
   - No need for empty target slots.
 
-## 8) Legacy Lecture Endpoints (still available)
+## 8) Lecture Endpoints (read / update / delete)
 
-### 8.1 Create Article Lecture
-- Method: `POST`
-- URL: `{{base_url}}/sections/{{section_id}}/lectures/create/`
-- Body:
-```json
-{
-  "title": "Database Modeling",
-  "content_type": "article",
-  "article_content": "Normalization, indexes, and relations."
-}
-```
-- Expected status: `201`
+Create lectures via `sections/{id}/contents/` (section 7). These endpoints are for reading and modifying existing lectures.
 
-### 8.2 Create Video Lecture (multipart/form-data)
-- Method: `POST`
-- URL: `{{base_url}}/sections/{{section_id}}/lectures/create/`
-- Body type: `form-data`
-  - `title` = `Intro Video`
-  - `content_type` = `video`
-  - `video_file` = (select file)
-  - Optional `position` = `3`
-- Expected status: `201`
-- Check processing via `GET {{base_url}}/lectures/{{lecture_id}}/`.
-
-### 8.3 Lecture Read / Update / Delete
+### 8.1 List Lectures in a Section
 - `GET {{base_url}}/sections/{{section_id}}/lectures/`
+
+### 8.2 Get / Patch / Put / Delete Lecture
 - `GET {{base_url}}/lectures/{{lecture_id}}/`
 - `PATCH {{base_url}}/lectures/{{lecture_id}}/`
+  - Demo patch body:
+```json
+{
+  "title": "REST Fundamentals (Updated)"
+}
+```
 - `PUT {{base_url}}/lectures/{{lecture_id}}/`
 - `DELETE {{base_url}}/lectures/{{lecture_id}}/`
 
-## 9) Quiz API Flow (direct quiz endpoints)
+## 9) Quiz API Flow
 
-### 9.1 Create Quiz (direct endpoint)
-- Method: `POST`
-- URL: `{{base_url}}/quizzes/`
-- Body:
-```json
-{
-  "section": {{section_id}},
-  "title": "Django ORM Quiz",
-  "description": "Model querying and relations",
-  "position": 3
-}
-```
-- Expected status: `201`
-- Save `data.id` as `quiz_id`.
+Create quizzes via `sections/{id}/contents/` (section 7.2). These endpoints are for reading and modifying existing quizzes and their questions/answers.
 
-### 9.2 Get / Patch / Delete Quiz
+### 9.1 Get / Patch / Delete Quiz
 - `GET {{base_url}}/quizzes/{{quiz_id}}/`
 - `PATCH {{base_url}}/quizzes/{{quiz_id}}/`
   - Demo patch body:
@@ -264,7 +293,7 @@ These endpoints let you mix lectures and quizzes in one ordered list.
 ```
 - `DELETE {{base_url}}/quizzes/{{quiz_id}}/`
 
-### 9.3 Create Quiz Question
+### 9.2 Create Quiz Question
 - Method: `POST`
 - URL: `{{base_url}}/quizzes/{{quiz_id}}/questions/`
 - Body:
@@ -277,15 +306,15 @@ These endpoints let you mix lectures and quizzes in one ordered list.
 - Expected status: `201`
 - Save `data.id` as `question_id`.
 
-### 9.4 List Quiz Questions
+### 9.3 List Quiz Questions
 - Method: `GET`
 - URL: `{{base_url}}/quizzes/{{quiz_id}}/questions/`
 
-### 9.5 Update/Delete Question
+### 9.4 Update/Delete Question
 - `PATCH {{base_url}}/quiz-questions/{{question_id}}/`
 - `DELETE {{base_url}}/quiz-questions/{{question_id}}/`
 
-### 9.6 Create Quiz Answers
+### 9.5 Create Quiz Answers
 - Method: `POST`
 - URL: `{{base_url}}/quiz-questions/{{question_id}}/answers/`
 - Body (correct):
@@ -304,19 +333,152 @@ These endpoints let you mix lectures and quizzes in one ordered list.
 ```
 - Save first created answer id as `answer_id`.
 
-### 9.7 List / Update / Delete Answers
+### 9.6 List / Update / Delete Answers
 - `GET {{base_url}}/quiz-questions/{{question_id}}/answers/`
 - `PATCH {{base_url}}/quiz-answers/{{answer_id}}/`
 - `DELETE {{base_url}}/quiz-answers/{{answer_id}}/`
 
-## 10) Common Error Responses You Should Test
+## 10) Coding Exercise API Flow
 
-### 10.1 Missing section on direct quiz create
-- Request:
+Create coding exercises via `sections/{id}/contents/` (section 7.2b). All endpoints below require a verified instructor JWT. The exercise must belong to a section of a course you instruct — otherwise the API returns `404`.
+
+### 10.1 Get Coding Exercise Detail
+- Method: `GET`
+- URL: `{{base_url}}/coding-exercises/{{exercise_id}}/`
+- Expected status: `200`
+
+### 10.2 Patch Coding Exercise
+- Method: `PATCH`
+- URL: `{{base_url}}/coding-exercises/{{exercise_id}}/`
+- Body:
 ```json
 {
-  "title": "Quiz Without Section",
-  "description": "No section supplied"
+  "difficulty": "hard",
+  "time_limit_ms": 5000
+}
+```
+- Expected status: `200`
+
+### 10.3 Delete Coding Exercise
+- Method: `DELETE`
+- URL: `{{base_url}}/coding-exercises/{{exercise_id}}/`
+- Expected status: `204`
+- Expected behavior: deletes the exercise and its `SectionContent` slot automatically (cascade via `GenericRelation`).
+
+---
+
+### 10.4 Add Language Config
+- Method: `POST`
+- URL: `{{base_url}}/coding-exercises/{{exercise_id}}/language-configs/`
+- Body:
+```json
+{
+  "language": "python",
+  "starter_code": "def two_sum(nums, target):\n    pass",
+  "solution_code": "def two_sum(nums, target):\n    seen = {}\n    for i, n in enumerate(nums):\n        if target - n in seen:\n            return [seen[target - n], i]\n        seen[n] = i"
+}
+```
+- Expected status: `201`
+- Save `data.id` as `config_id`.
+- Valid `language` values: `python`, `javascript`, `cpp`, `java`.
+
+### 10.5 Duplicate Language Config (error case)
+- Repeat the same POST above with `"language": "python"`.
+- Expected status: `400`
+- Example response:
+```json
+{
+  "success": false,
+  "message": "A config for this language already exists on this exercise."
+}
+```
+
+### 10.6 List Language Configs
+- Method: `GET`
+- URL: `{{base_url}}/coding-exercises/{{exercise_id}}/language-configs/`
+- Expected status: `200`
+
+### 10.7 Get / Patch / Delete Language Config
+- `GET  {{base_url}}/coding-exercises/{{exercise_id}}/language-configs/{{config_id}}/`
+- `PATCH {{base_url}}/coding-exercises/{{exercise_id}}/language-configs/{{config_id}}/`
+  - Demo patch body:
+```json
+{
+  "starter_code": "def two_sum(nums, target):\n    # your code here\n    pass"
+}
+```
+- `DELETE {{base_url}}/coding-exercises/{{exercise_id}}/language-configs/{{config_id}}/`
+
+---
+
+### 10.8 Add Test Case
+- Method: `POST`
+- URL: `{{base_url}}/coding-exercises/{{exercise_id}}/testcases/`
+- Body (visible case):
+```json
+{
+  "input_data": "[2,7,11,15]\n9",
+  "expected_output": "[0,1]",
+  "is_hidden": false,
+  "explanation": "nums[0] + nums[1] == 9",
+  "position": 1
+}
+```
+- Expected status: `201`
+- Save `data.id` as `tc_id`.
+
+- Body (hidden/grading-only case):
+```json
+{
+  "input_data": "[3,2,4]\n6",
+  "expected_output": "[1,2]",
+  "is_hidden": true,
+  "explanation": "",
+  "position": 2
+}
+```
+
+### 10.9 Duplicate Test Case Position (error case)
+- Repeat POST with `"position": 1` for the same exercise.
+- Expected status: `400`
+- Example response:
+```json
+{
+  "success": false,
+  "message": "A test case already exists at that position for this exercise."
+}
+```
+
+### 10.10 List Test Cases
+- Method: `GET`
+- URL: `{{base_url}}/coding-exercises/{{exercise_id}}/testcases/`
+- Expected status: `200`
+- Results are ordered by `position`.
+
+### 10.11 Get / Patch / Delete Test Case
+- `GET  {{base_url}}/coding-exercises/{{exercise_id}}/testcases/{{tc_id}}/`
+- `PATCH {{base_url}}/coding-exercises/{{exercise_id}}/testcases/{{tc_id}}/`
+  - Demo patch body:
+```json
+{
+  "is_hidden": true
+}
+```
+- `DELETE {{base_url}}/coding-exercises/{{exercise_id}}/testcases/{{tc_id}}/`
+
+---
+
+### 10.12 Coding Exercise Validation Error Cases
+
+**default_language not in supported_languages**
+- Body:
+```json
+{
+  "section": {{section_id}},
+  "title": "Bad Exercise",
+  "problem_statement": "...",
+  "default_language": "cpp",
+  "supported_languages": ["python", "javascript"]
 }
 ```
 - Expected status: `400`
@@ -326,14 +488,56 @@ These endpoints let you mix lectures and quizzes in one ordered list.
   "success": false,
   "message": "Validation failed.",
   "errors": {
-    "section": [
-      "Section is required."
-    ]
+    "default_language": ["default_language must be in supported_languages."]
   }
 }
 ```
 
-### 10.2 Invalid `item_type` in section contents
+**Empty supported_languages list**
+- Body includes `"supported_languages": []`
+- Expected status: `400`
+- Example response:
+```json
+{
+  "success": false,
+  "message": "Validation failed.",
+  "errors": {
+    "supported_languages": ["supported_languages must be a non-empty list."]
+  }
+}
+```
+
+**Invalid language value**
+- Body includes `"supported_languages": ["python", "ruby"]`
+- Expected status: `400`
+- Example response:
+```json
+{
+  "success": false,
+  "message": "Validation failed.",
+  "errors": {
+    "supported_languages": ["Invalid languages: ['ruby']. Must be one of ['python', 'javascript', 'cpp', 'java']."]
+  }
+}
+```
+
+**Title too short**
+- Body includes `"title": "AB"`
+- Expected status: `400`
+- Example response:
+```json
+{
+  "success": false,
+  "message": "Validation failed.",
+  "errors": {
+    "title": ["Title must be at least 3 characters long."]
+  }
+}
+```
+
+## 11) Common Error Responses You Should Test
+
+### 11.1 Invalid `item_type` in section contents
 - Request:
 ```json
 {
@@ -346,11 +550,11 @@ These endpoints let you mix lectures and quizzes in one ordered list.
 ```json
 {
   "success": false,
-  "message": "item_type must be 'lecture' or 'quiz'."
+  "message": "item_type must be 'lecture', 'quiz', or 'coding'."
 }
 ```
 
-### 10.3 Invalid reorder position
+### 11.2 Invalid reorder position
 - Request:
 ```json
 {
@@ -366,7 +570,7 @@ These endpoints let you mix lectures and quizzes in one ordered list.
 }
 ```
 
-### 10.4 Two correct answers for one question
+### 11.3 Two correct answers for one question
 - Try creating a second answer with `"is_correct": true` for the same question.
 - Expected status: `400`
 - Example response:
@@ -382,16 +586,23 @@ These endpoints let you mix lectures and quizzes in one ordered list.
 }
 ```
 
-## 11) Quick Manual End-to-End Scenario
-1. Create course.
-2. Create section.
-3. Create one article lecture via `sections/{id}/contents/`.
-4. Create one quiz via `sections/{id}/contents/`.
-5. List `sections/{id}/contents/` and verify order.
-6. Reorder quiz to position `1`; verify list updates with shifted items.
-7. Add one question and two answers (one correct) to quiz.
-8. Patch quiz title and verify update works.
+## 12) Quick Manual End-to-End Scenario
+1. Create course → save `course_id`.
+2. Create section → save `section_id`.
+3. Create one article lecture via `sections/{id}/contents/` (`item_type: "lecture"`).
+4. Create one quiz via `sections/{id}/contents/` (`item_type: "quiz"`) → save `quiz_id`.
+5. Create one coding exercise via `sections/{id}/contents/` (`item_type: "coding"`) → save `exercise_id`.
+6. List `sections/{id}/contents/` — verify all three items appear with correct `content` summaries.
+7. Reorder coding exercise to position `1`; verify list updates with shifted items.
+8. Add a Python language config to the exercise (`POST coding-exercises/{id}/language-configs/`).
+9. Add two test cases (one visible, one hidden) to the exercise.
+10. `GET coding-exercises/{id}/` — verify `language_configs` and `test_cases` arrays are populated.
+11. Add one question and two answers (one correct) to quiz.
+12. Patch exercise difficulty to `"hard"` and verify update.
+13. Delete the exercise — re-fetch `sections/{id}/contents/` and confirm the coding slot is gone.
 
-## 12) Notes
-- All ownership checks are instructor-scoped; if the course/section/quiz is not yours, API returns `404`.
+## 13) Notes
+- All ownership checks are instructor-scoped; if the course/section/exercise is not yours, API returns `404`.
+- `solution_code` on language configs is stored server-side and must never appear in learner-facing responses (Part 2 enforcement).
+- Hidden test cases (`is_hidden: true`) are for grading only and must never be exposed to learners (Part 2 enforcement).
 - For video lectures, transcoding states usually move from `processing` to `ready` (or `failed` on error).

@@ -1,3 +1,10 @@
+from courses.all_views.coding_views import (
+    CodingExerciseDetailAPIView,
+    CodingExerciseLanguageConfigDetailAPIView,
+    CodingExerciseLanguageConfigListCreateAPIView,
+    CodingTestCaseDetailAPIView,
+    CodingTestCaseListCreateAPIView,
+)
 from courses.all_views.course_views import (
     CourseCreateAPIView,
     CourseDetailView,
@@ -13,12 +20,10 @@ from courses.all_views.content_views import (
     CourseSectionCreateAPIView,
     CourseSectionDetailAPIView,
     CourseSectionListAPIView,
-    LectureCreateAPIView,
     LectureDetailAPIView,
     LectureListAPIView,
     QuizAnswerDetailAPIView,
     QuizAnswerListCreateAPIView,
-    QuizCreateAPIView,
     QuizDetailAPIView,
     QuizQuestionDetailAPIView,
     QuizQuestionListCreateAPIView,
@@ -27,6 +32,11 @@ from courses.all_views.content_views import (
 )
 
 __all__ = [
+    'CodingExerciseDetailAPIView',
+    'CodingExerciseLanguageConfigListCreateAPIView',
+    'CodingExerciseLanguageConfigDetailAPIView',
+    'CodingTestCaseListCreateAPIView',
+    'CodingTestCaseDetailAPIView',
     'CourseListAPIView',
     'CourseCreateAPIView',
     'CourseDetailView',
@@ -40,11 +50,9 @@ __all__ = [
     'CourseSectionCreateAPIView',
     'CourseSectionDetailAPIView',
     'LectureListAPIView',
-    'LectureCreateAPIView',
     'LectureDetailAPIView',
     'SectionContentListCreateAPIView',
     'SectionContentReorderAPIView',
-    'QuizCreateAPIView',
     'QuizDetailAPIView',
     'QuizQuestionListCreateAPIView',
     'QuizQuestionDetailAPIView',

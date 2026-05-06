@@ -3,6 +3,9 @@ from rest_framework import serializers
 
 from auth.models import PartnerInstitutionProfile, User
 from courses.models import (
+    CodingExercise,
+    CodingExerciseLanguageConfig,
+    CodingTestCase,
     CourseAudience,
     CourseCategory,
     CourseLearningObjective,
@@ -412,6 +415,7 @@ class SectionContentSerializer(serializers.ModelSerializer):
     def get_content(self, obj):
         lectures: dict = self.context.get('lectures', {})
         quizzes: dict = self.context.get('quizzes', {})
+        coding_exercises: dict = self.context.get('coding_exercises', {})
 
         if obj.item_type == SectionContent.ItemType.LECTURE:
             lecture = lectures.get(obj.object_id)
@@ -422,6 +426,16 @@ class SectionContentSerializer(serializers.ModelSerializer):
             quiz = quizzes.get(obj.object_id)
             if quiz:
                 return {'id': quiz.id, 'title': quiz.title}
+
+        elif obj.item_type == SectionContent.ItemType.CODING:
+            ex = coding_exercises.get(obj.object_id)
+            if ex:
+                return {
+                    'id': ex.id,
+                    'title': ex.title,
+                    'difficulty': ex.difficulty,
+                    'default_language': ex.default_language,
+                }
 
         return None
 
@@ -568,3 +582,92 @@ class QuizAnswerSerializer(serializers.ModelSerializer):
             setattr(instance, attr, value)
         instance.save()
         return instance
+
+
+# ---------------------------------------------------------------------------
+# Coding exercise serializers (instructor-facing; no learner serializers in Part 1)
+# ---------------------------------------------------------------------------
+
+class CodingTestCaseSerializer(serializers.ModelSerializer):
+    exercise_id = serializers.IntegerField(source='exercise.id', read_only=True)
+
+    class Meta:
+        model = CodingTestCase
+        fields = ['id', 'exercise_id', 'input_data', 'expected_output', 'is_hidden', 'explanation', 'position']
+        read_only_fields = ['id', 'exercise_id']
+
+
+class CodingExerciseLanguageConfigSerializer(serializers.ModelSerializer):
+    exercise_id = serializers.IntegerField(source='exercise.id', read_only=True)
+
+    class Meta:
+        model = CodingExerciseLanguageConfig
+        fields = ['id', 'exercise_id', 'language', 'starter_code', 'solution_code']
+        read_only_fields = ['id', 'exercise_id']
+
+
+class CodingExerciseSerializer(serializers.ModelSerializer):
+    section_id = serializers.IntegerField(source='section.id', read_only=True)
+    language_configs = CodingExerciseLanguageConfigSerializer(many=True, read_only=True)
+    test_cases = CodingTestCaseSerializer(many=True, read_only=True)
+
+    class Meta:
+        model = CodingExercise
+        fields = [
+            'id', 'section_id', 'title', 'description', 'problem_statement',
+            'difficulty', 'default_language', 'supported_languages', 'time_limit_ms',
+            'language_configs', 'test_cases', 'created_at', 'updated_at',
+        ]
+        read_only_fields = fields
+
+
+class CodingExerciseCreateUpdateSerializer(serializers.ModelSerializer):
+    _VALID_LANGUAGES = ['python', 'javascript', 'cpp', 'java']
+
+    class Meta:
+        model = CodingExercise
+        fields = [
+            'title', 'description', 'problem_statement',
+            'difficulty', 'default_language', 'supported_languages', 'time_limit_ms',
+        ]
+        extra_kwargs = {
+            'supported_languages': {'required': True},
+        }
+
+    def validate_title(self, value):
+        title = value.strip()
+        if len(title) < 3:
+            raise serializers.ValidationError('Title must be at least 3 characters long.')
+        return title
+
+    def validate_supported_languages(self, value):
+        if not isinstance(value, list) or not value:
+            raise serializers.ValidationError('supported_languages must be a non-empty list.')
+        invalid = [lang for lang in value if lang not in self._VALID_LANGUAGES]
+        if invalid:
+            raise serializers.ValidationError(
+                f'Invalid languages: {invalid}. Must be one of {self._VALID_LANGUAGES}.'
+            )
+        return value
+
+    def validate(self, attrs):
+        default_language = attrs.get('default_language')
+        supported_languages = attrs.get('supported_languages')
+
+        if self.instance is not None:
+            if default_language is None:
+                default_language = self.instance.default_language
+            if supported_languages is None:
+                supported_languages = self.instance.supported_languages
+        else:
+            model = self.Meta.model
+            if default_language is None:
+                default_language = model._meta.get_field('default_language').get_default()
+            if supported_languages is None:
+                supported_languages = model._meta.get_field('supported_languages').get_default()
+
+        if default_language not in supported_languages:
+            raise serializers.ValidationError(
+                {'default_language': 'default_language must be in supported_languages.'}
+            )
+        return attrs

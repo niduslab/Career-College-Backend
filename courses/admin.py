@@ -1,6 +1,9 @@
 from django.contrib import admin
 
 from courses.models import (
+    CodingExercise,
+    CodingExerciseLanguageConfig,
+    CodingTestCase,
     CourseAudience,
     CourseCategory,
     CourseLearningObjective,
@@ -37,6 +40,20 @@ class CourseAudienceInline(admin.TabularInline):
     extra = 0
     fields = ('text', 'display_order')
     ordering = ('display_order', 'id')
+
+
+class CodingExerciseLanguageConfigInline(admin.TabularInline):
+    model = CodingExerciseLanguageConfig
+    extra = 0
+    fields = ('language', 'starter_code', 'solution_code')
+    ordering = ('id',)
+
+
+class CodingTestCaseInline(admin.TabularInline):
+    model = CodingTestCase
+    extra = 0
+    fields = ('position', 'is_hidden', 'input_data', 'expected_output', 'explanation')
+    ordering = ('position', 'id')
 
 
 @admin.register(NidusCourse)
@@ -164,3 +181,36 @@ class QuizAnswerAdmin(admin.ModelAdmin):
     list_filter = ('is_correct', 'question__quiz')
     search_fields = ('answer_text', 'question__question_text', 'question__quiz__title')
     ordering = ('question', 'id')
+
+
+@admin.register(CodingExercise)
+class CodingExerciseAdmin(admin.ModelAdmin):
+    list_display = (
+        'id',
+        'title',
+        'section',
+        'difficulty',
+        'default_language',
+        'time_limit_ms',
+        'created_at',
+    )
+    list_filter = ('difficulty', 'default_language', 'section')
+    search_fields = ('title', 'section__title', 'section__course__title')
+    ordering = ('-created_at',)
+    inlines = (CodingExerciseLanguageConfigInline, CodingTestCaseInline)
+
+
+@admin.register(CodingExerciseLanguageConfig)
+class CodingExerciseLanguageConfigAdmin(admin.ModelAdmin):
+    list_display = ('id', 'exercise', 'language', 'created_at')
+    list_filter = ('language', 'exercise__section')
+    search_fields = ('exercise__title', 'exercise__section__title', 'exercise__section__course__title')
+    ordering = ('exercise', 'language', 'id')
+
+
+@admin.register(CodingTestCase)
+class CodingTestCaseAdmin(admin.ModelAdmin):
+    list_display = ('id', 'exercise', 'position', 'is_hidden')
+    list_filter = ('is_hidden', 'exercise__section')
+    search_fields = ('exercise__title', 'exercise__section__title', 'exercise__section__course__title')
+    ordering = ('exercise', 'position', 'id')

@@ -1,3 +1,10 @@
+from courses.all_views.assignment_views import (
+    AssignmentDetailAPIView,
+    AssignmentListAPIView,
+    AssignmentQuestionDetailAPIView,
+    AssignmentQuestionListCreateAPIView,
+    AssignmentQuestionReorderAPIView,
+)
 from courses.all_views.coding_views import (
     CodingExerciseDetailAPIView,
     CodingExerciseLanguageConfigDetailAPIView,
@@ -32,6 +39,11 @@ from courses.all_views.content_views import (
 )
 
 __all__ = [
+    'AssignmentListAPIView',
+    'AssignmentDetailAPIView',
+    'AssignmentQuestionListCreateAPIView',
+    'AssignmentQuestionDetailAPIView',
+    'AssignmentQuestionReorderAPIView',
     'CodingExerciseDetailAPIView',
     'CodingExerciseLanguageConfigListCreateAPIView',
     'CodingExerciseLanguageConfigDetailAPIView',

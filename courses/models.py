@@ -852,3 +852,74 @@ class QuizAnswer(models.Model):
 
 
 # =============================================================================
+# Assignments — instructor-authored open-ended questions with model answers.
+# Ordered via SectionContent like Lecture / Quiz / CodingExercise.
+# =============================================================================
+
+class Assignment(TimestampedModel):
+    """Open-ended assignment attached to a section; ordered via SectionContent."""
+
+    section = models.ForeignKey(
+        CourseSection,
+        on_delete=models.CASCADE,
+        related_name='assignments',
+    )
+    title = models.CharField(max_length=255)
+    description = models.TextField(blank=True, default='')
+    instructions = models.TextField(blank=True, default='')
+    passing_score = models.PositiveIntegerField(default=0)
+    section_content = GenericRelation(
+        SectionContent,
+        content_type_field='content_type',
+        object_id_field='object_id',
+        related_query_name='assignment',
+    )
+
+    class Meta:
+        db_table = 'courses_assignment'
+        verbose_name = 'Assignment'
+        verbose_name_plural = 'Assignments'
+        ordering = ['-created_at']
+        indexes = [
+            models.Index(fields=['section', '-created_at'], name='idx_assignment_section_date'),
+        ]
+
+    def __str__(self):
+        return self.title
+
+
+class AssignmentQuestion(models.Model):
+    """Single open-ended question within an Assignment."""
+
+    assignment = models.ForeignKey(
+        Assignment,
+        on_delete=models.CASCADE,
+        related_name='questions',
+    )
+    question_text = models.TextField()
+    # model_answer is INSTRUCTOR-ONLY and must never be exposed to learners.
+    model_answer = models.TextField(blank=True, default='')
+    points = models.PositiveIntegerField(default=10)
+    hint = models.TextField(blank=True, default='')
+    position = models.PositiveIntegerField(db_index=True)
+
+    class Meta:
+        db_table = 'courses_assignment_question'
+        verbose_name = 'Assignment Question'
+        verbose_name_plural = 'Assignment Questions'
+        ordering = ['position']
+        constraints = [
+            models.UniqueConstraint(
+                fields=['assignment', 'position'],
+                name='uniq_aquestion_assignment_position',
+            ),
+        ]
+        indexes = [
+            models.Index(fields=['assignment', 'position'], name='idx_aquestion_assign_position'),
+        ]
+
+    def __str__(self):
+        return f'Q{self.position}: {self.question_text[:80]}'
+
+
+# =============================================================================

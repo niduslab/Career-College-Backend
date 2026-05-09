@@ -1,0 +1,332 @@
+import logging
+
+from django.db import IntegrityError
+from django.http import Http404
+from django.shortcuts import get_object_or_404
+from rest_framework import status
+from rest_framework.parsers import FormParser, JSONParser, MultiPartParser
+from rest_framework.permissions import IsAuthenticated
+from rest_framework.response import Response
+from rest_framework.views import APIView
+
+from core.permissions import IsEmailVerified, IsVerifiedInstructor
+from courses.models import Assignment, AssignmentQuestion, CourseSection
+from courses.serializers import (
+    AssignmentCreateUpdateSerializer,
+    AssignmentQuestionSerializer,
+    AssignmentSerializer,
+)
+from courses.services import (
+    add_question,
+    delete_assignment,
+    delete_question,
+    reorder_questions,
+    update_assignment,
+    update_question,
+)
+
+logger = logging.getLogger(__name__)
+
+
+# =============================================================================
+# Assignment list — scoped to a section
+# =============================================================================
+
+class AssignmentListAPIView(APIView):
+    """GET /api/v1/courses/sections/{section_id}/assignments/"""
+    permission_classes = [IsAuthenticated, IsEmailVerified]
+    parser_classes = [JSONParser, FormParser, MultiPartParser]
+
+    def _get_owned_section(self, request, section_id):
+        return get_object_or_404(
+            CourseSection.objects.select_related('course'),
+            pk=section_id,
+            course__instructors=request.user,
+        )
+
+    def get(self, request, section_id):
+        section = self._get_owned_section(request, section_id)
+        assignments = (
+            Assignment.objects
+            .filter(section=section)
+            .prefetch_related('questions')
+            .order_by('-created_at')
+        )
+        serializer = AssignmentSerializer(assignments, many=True, context={'request': request})
+        return Response({'success': True, 'data': serializer.data}, status=status.HTTP_200_OK)
+
+
+# =============================================================================
+# Assignment detail
+# =============================================================================
+
+class AssignmentDetailAPIView(APIView):
+    """GET / PATCH / DELETE /api/v1/courses/assignments/{assignment_id}/"""
+    permission_classes = [IsAuthenticated, IsEmailVerified]
+    parser_classes = [JSONParser, FormParser, MultiPartParser]
+
+    def get_permissions(self):
+        if self.request.method in ('PATCH', 'PUT', 'DELETE'):
+            return [IsAuthenticated(), IsEmailVerified(), IsVerifiedInstructor()]
+        return super().get_permissions()
+
+    def _get_owned_assignment(self, request, assignment_id):
+        return get_object_or_404(
+            Assignment.objects
+            .select_related('section__course')
+            .prefetch_related('questions'),
+            pk=assignment_id,
+            section__course__instructors=request.user,
+        )
+
+    def get(self, request, assignment_id):
+        assignment = self._get_owned_assignment(request, assignment_id)
+        return Response(
+            {'success': True, 'data': AssignmentSerializer(assignment, context={'request': request}).data},
+            status=status.HTTP_200_OK,
+        )
+
+    def patch(self, request, assignment_id):
+        # Confirm ownership before delegating to the service.
+        self._get_owned_assignment(request, assignment_id)
+
+        serializer = AssignmentCreateUpdateSerializer(data=request.data, partial=True)
+        if not serializer.is_valid():
+            return Response(
+                {'success': False, 'message': 'Validation failed.', 'errors': serializer.errors},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        try:
+            assignment = update_assignment(assignment_id, request.user, serializer.validated_data)
+        except Exception:
+            logger.exception('Assignment update failed for user %s', request.user.id)
+            return Response(
+                {'success': False, 'message': 'An unexpected error occurred. Please try again.'},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            )
+
+        return Response(
+            {
+                'success': True,
+                'message': 'Assignment updated successfully.',
+                'data': AssignmentSerializer(assignment, context={'request': request}).data,
+            },
+            status=status.HTTP_200_OK,
+        )
+
+    def delete(self, request, assignment_id):
+        # Confirm ownership before delegating.
+        self._get_owned_assignment(request, assignment_id)
+        try:
+            delete_assignment(assignment_id, request.user)
+        except Exception:
+            logger.exception('Assignment delete failed for user %s', request.user.id)
+            return Response(
+                {'success': False, 'message': 'An unexpected error occurred. Please try again.'},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            )
+
+        return Response(
+            {'success': True, 'message': 'Assignment deleted successfully.'},
+            status=status.HTTP_200_OK,
+        )
+
+
+# =============================================================================
+# Assignment question list/create
+# =============================================================================
+
+class AssignmentQuestionListCreateAPIView(APIView):
+    """GET / POST /api/v1/courses/assignments/{assignment_id}/questions/"""
+    permission_classes = [IsAuthenticated, IsEmailVerified]
+    parser_classes = [JSONParser, FormParser, MultiPartParser]
+
+    def get_permissions(self):
+        if self.request.method == 'POST':
+            return [IsAuthenticated(), IsEmailVerified(), IsVerifiedInstructor()]
+        return super().get_permissions()
+
+    def _get_owned_assignment(self, request, assignment_id):
+        return get_object_or_404(
+            Assignment.objects.select_related('section__course'),
+            pk=assignment_id,
+            section__course__instructors=request.user,
+        )
+
+    def get(self, request, assignment_id):
+        assignment = self._get_owned_assignment(request, assignment_id)
+        questions = assignment.questions.order_by('position', 'id')
+        serializer = AssignmentQuestionSerializer(questions, many=True, context={'request': request})
+        return Response({'success': True, 'data': serializer.data}, status=status.HTTP_200_OK)
+
+    def post(self, request, assignment_id):
+        # Confirm ownership before delegating.
+        self._get_owned_assignment(request, assignment_id)
+
+        serializer = AssignmentQuestionSerializer(data=request.data, context={'request': request})
+        if not serializer.is_valid():
+            return Response(
+                {'success': False, 'message': 'Validation failed.', 'errors': serializer.errors},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        # Filter to fields the service actually owns; position is assigned by the service.
+        write_fields = {'question_text', 'model_answer', 'points', 'hint'}
+        payload = {k: v for k, v in serializer.validated_data.items() if k in write_fields}
+
+        try:
+            question = add_question(assignment_id, request.user, payload)
+        except IntegrityError:
+            return Response(
+                {'success': False, 'message': 'A question already exists at that position in this assignment.'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        except Exception:
+            logger.exception('Assignment question create failed for user %s', request.user.id)
+            return Response(
+                {'success': False, 'message': 'An unexpected error occurred. Please try again.'},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            )
+
+        return Response(
+            {
+                'success': True,
+                'message': 'Question created successfully.',
+                'data': AssignmentQuestionSerializer(question, context={'request': request}).data,
+            },
+            status=status.HTTP_201_CREATED,
+        )
+
+
+# =============================================================================
+# Assignment question detail
+# =============================================================================
+
+class AssignmentQuestionDetailAPIView(APIView):
+    """GET / PATCH / DELETE /api/v1/courses/assignment-questions/{question_id}/"""
+    permission_classes = [IsAuthenticated, IsEmailVerified]
+    parser_classes = [JSONParser, FormParser, MultiPartParser]
+
+    def get_permissions(self):
+        if self.request.method in ('PATCH', 'PUT', 'DELETE'):
+            return [IsAuthenticated(), IsEmailVerified(), IsVerifiedInstructor()]
+        return super().get_permissions()
+
+    def _get_owned_question(self, request, question_id):
+        return get_object_or_404(
+            AssignmentQuestion.objects.select_related('assignment__section__course'),
+            pk=question_id,
+            assignment__section__course__instructors=request.user,
+        )
+
+    def get(self, request, question_id):
+        question = self._get_owned_question(request, question_id)
+        return Response(
+            {'success': True, 'data': AssignmentQuestionSerializer(question, context={'request': request}).data},
+            status=status.HTTP_200_OK,
+        )
+
+    def patch(self, request, question_id):
+        self._get_owned_question(request, question_id)
+
+        serializer = AssignmentQuestionSerializer(
+            data=request.data, partial=True, context={'request': request}
+        )
+        if not serializer.is_valid():
+            return Response(
+                {'success': False, 'message': 'Validation failed.', 'errors': serializer.errors},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        write_fields = {'question_text', 'model_answer', 'points', 'hint'}
+        payload = {k: v for k, v in serializer.validated_data.items() if k in write_fields}
+
+        try:
+            question = update_question(question_id, request.user, payload)
+        except Exception:
+            logger.exception('Assignment question update failed for user %s', request.user.id)
+            return Response(
+                {'success': False, 'message': 'An unexpected error occurred. Please try again.'},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            )
+
+        return Response(
+            {
+                'success': True,
+                'message': 'Question updated successfully.',
+                'data': AssignmentQuestionSerializer(question, context={'request': request}).data,
+            },
+            status=status.HTTP_200_OK,
+        )
+
+    def delete(self, request, question_id):
+        self._get_owned_question(request, question_id)
+        try:
+            delete_question(question_id, request.user)
+        except Exception:
+            logger.exception('Assignment question delete failed for user %s', request.user.id)
+            return Response(
+                {'success': False, 'message': 'An unexpected error occurred. Please try again.'},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            )
+        return Response(
+            {'success': True, 'message': 'Question deleted successfully.'},
+            status=status.HTTP_200_OK,
+        )
+
+
+# =============================================================================
+# Assignment question reorder
+# =============================================================================
+
+class AssignmentQuestionReorderAPIView(APIView):
+    """PATCH /api/v1/courses/assignments/{assignment_id}/questions/reorder/"""
+    permission_classes = [IsAuthenticated, IsEmailVerified, IsVerifiedInstructor]
+    parser_classes = [JSONParser, FormParser, MultiPartParser]
+
+    def patch(self, request, assignment_id):
+        ordered_ids = request.data.get('ordered_ids')
+        if not isinstance(ordered_ids, list) or not ordered_ids:
+            return Response(
+                {'success': False, 'message': 'ordered_ids must be a non-empty list.'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        try:
+            ordered_ids = [int(x) for x in ordered_ids]
+        except (TypeError, ValueError):
+            return Response(
+                {'success': False, 'message': 'ordered_ids must contain integers only.'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        try:
+            questions = reorder_questions(assignment_id, request.user, ordered_ids)
+        except Http404:
+            return Response(
+                {'success': False, 'message': 'Assignment not found.'},
+                status=status.HTTP_404_NOT_FOUND,
+            )
+        except ValueError as exc:
+            return Response(
+                {'success': False, 'message': str(exc)},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        except IntegrityError:
+            return Response(
+                {'success': False, 'message': 'Reorder failed due to a position conflict.'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        except Exception:
+            logger.exception('Assignment question reorder failed for user %s', request.user.id)
+            return Response(
+                {'success': False, 'message': 'An unexpected error occurred. Please try again.'},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            )
+
+        serializer = AssignmentQuestionSerializer(questions, many=True, context={'request': request})
+        return Response(
+            {'success': True, 'message': 'Questions reordered successfully.', 'data': serializer.data},
+            status=status.HTTP_200_OK,
+        )

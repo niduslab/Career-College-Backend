@@ -1,9 +1,11 @@
 import logging
 
 from django.db import IntegrityError
+from django.db.models import Sum, Value
+from django.db.models.functions import Coalesce
 from django.http import Http404
 from django.shortcuts import get_object_or_404
-from rest_framework import status
+from rest_framework import serializers, status
 from rest_framework.parsers import FormParser, JSONParser, MultiPartParser
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
@@ -28,6 +30,21 @@ from courses.services import (
 logger = logging.getLogger(__name__)
 
 
+class StrictIntegerField(serializers.IntegerField):
+    """Reject bools/floats/strings; accept only true integer JSON values."""
+    def to_internal_value(self, data):
+        if type(data) is not int:
+            raise serializers.ValidationError('A valid integer is required.')
+        return super().to_internal_value(data)
+
+
+class AssignmentQuestionReorderInputSerializer(serializers.Serializer):
+    ordered_ids = serializers.ListField(
+        child=StrictIntegerField(),
+        allow_empty=False,
+    )
+
+
 # =============================================================================
 # Assignment list — scoped to a section
 # =============================================================================
@@ -49,6 +66,7 @@ class AssignmentListAPIView(APIView):
         assignments = (
             Assignment.objects
             .filter(section=section)
+            .annotate(max_score=Coalesce(Sum('questions__points'), Value(0)))
             .prefetch_related('questions')
             .order_by('-created_at')
         )
@@ -73,6 +91,7 @@ class AssignmentDetailAPIView(APIView):
     def _get_owned_assignment(self, request, assignment_id):
         return get_object_or_404(
             Assignment.objects
+            .annotate(max_score=Coalesce(Sum('questions__points'), Value(0)))
             .select_related('section__course')
             .prefetch_related('questions'),
             pk=assignment_id,
@@ -286,20 +305,13 @@ class AssignmentQuestionReorderAPIView(APIView):
     parser_classes = [JSONParser, FormParser, MultiPartParser]
 
     def patch(self, request, assignment_id):
-        ordered_ids = request.data.get('ordered_ids')
-        if not isinstance(ordered_ids, list) or not ordered_ids:
+        input_serializer = AssignmentQuestionReorderInputSerializer(data=request.data)
+        if not input_serializer.is_valid():
             return Response(
-                {'success': False, 'message': 'ordered_ids must be a non-empty list.'},
+                {'success': False, 'message': 'ordered_ids must be a non-empty list of integers only.'},
                 status=status.HTTP_400_BAD_REQUEST,
             )
-
-        try:
-            ordered_ids = [int(x) for x in ordered_ids]
-        except (TypeError, ValueError):
-            return Response(
-                {'success': False, 'message': 'ordered_ids must contain integers only.'},
-                status=status.HTTP_400_BAD_REQUEST,
-            )
+        ordered_ids = input_serializer.validated_data['ordered_ids']
 
         try:
             questions = reorder_questions(assignment_id, request.user, ordered_ids)

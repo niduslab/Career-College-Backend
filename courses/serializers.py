@@ -285,7 +285,7 @@ class VideoAssetSerializer(serializers.ModelSerializer):
 # ---------------------------------------------------------------------------
 
 class CourseSectionSerializer(serializers.ModelSerializer):
-    course_id = serializers.IntegerField(source='course.id', read_only=True)
+    course_id = serializers.IntegerField(read_only=True)
     course_title = serializers.CharField(source='course.title', read_only=True)
 
     class Meta:
@@ -314,7 +314,7 @@ class CourseSectionCreateUpdateSerializer(serializers.ModelSerializer):
 # ---------------------------------------------------------------------------
 
 class LectureSerializer(serializers.ModelSerializer):
-    section_id = serializers.IntegerField(source='section.id', read_only=True)
+    section_id = serializers.IntegerField(read_only=True)
     stream_master_playlist = serializers.SerializerMethodField()
     stream_renditions = serializers.SerializerMethodField()
     active_video_asset = serializers.SerializerMethodField()
@@ -336,10 +336,13 @@ class LectureSerializer(serializers.ModelSerializer):
         return _normalize_renditions_playlists(obj.stream_renditions)
 
     def get_active_video_asset(self, obj):
-        asset = obj.video_assets.filter(is_active=True).order_by('-created_at').first()
-        if not asset:
+        # Iterate the prefetched list so list endpoints don't N+1.
+        # `.filter()` after `.prefetch_related('video_assets')` would discard the cache.
+        actives = [a for a in obj.video_assets.all() if a.is_active]
+        if not actives:
             return None
-        return VideoAssetSerializer(asset).data
+        actives.sort(key=lambda a: a.created_at, reverse=True)
+        return VideoAssetSerializer(actives[0]).data
 
 
 class LectureCreateUpdateSerializer(serializers.ModelSerializer):
@@ -457,7 +460,7 @@ class SectionContentSerializer(serializers.ModelSerializer):
 # ---------------------------------------------------------------------------
 
 class QuizSerializer(serializers.ModelSerializer):
-    section_id = serializers.IntegerField(source='section.id', read_only=True)
+    section_id = serializers.IntegerField(read_only=True)
     question_count = serializers.SerializerMethodField()
 
     class Meta:
@@ -521,7 +524,7 @@ class QuizCreateUpdateSerializer(serializers.ModelSerializer):
 # ---------------------------------------------------------------------------
 
 class QuizQuestionSerializer(serializers.ModelSerializer):
-    quiz_id = serializers.IntegerField(source='quiz.id', read_only=True)
+    quiz_id = serializers.IntegerField(read_only=True)
 
     class Meta:
         model = QuizQuestion
@@ -550,7 +553,7 @@ class QuizQuestionSerializer(serializers.ModelSerializer):
 # ---------------------------------------------------------------------------
 
 class QuizAnswerSerializer(serializers.ModelSerializer):
-    question_id = serializers.IntegerField(source='question.id', read_only=True)
+    question_id = serializers.IntegerField(read_only=True)
 
     class Meta:
         model = QuizAnswer
@@ -601,7 +604,7 @@ class QuizAnswerSerializer(serializers.ModelSerializer):
 # ---------------------------------------------------------------------------
 
 class CodingTestCaseSerializer(serializers.ModelSerializer):
-    exercise_id = serializers.IntegerField(source='exercise.id', read_only=True)
+    exercise_id = serializers.IntegerField(read_only=True)
 
     class Meta:
         model = CodingTestCase
@@ -610,7 +613,7 @@ class CodingTestCaseSerializer(serializers.ModelSerializer):
 
 
 class CodingExerciseLanguageConfigSerializer(serializers.ModelSerializer):
-    exercise_id = serializers.IntegerField(source='exercise.id', read_only=True)
+    exercise_id = serializers.IntegerField(read_only=True)
 
     class Meta:
         model = CodingExerciseLanguageConfig
@@ -619,7 +622,7 @@ class CodingExerciseLanguageConfigSerializer(serializers.ModelSerializer):
 
 
 class CodingExerciseSerializer(serializers.ModelSerializer):
-    section_id = serializers.IntegerField(source='section.id', read_only=True)
+    section_id = serializers.IntegerField(read_only=True)
     language_configs = CodingExerciseLanguageConfigSerializer(many=True, read_only=True)
     test_cases = CodingTestCaseSerializer(many=True, read_only=True)
 
@@ -699,7 +702,7 @@ def _request_user_is_instructor(request) -> bool:
 
 
 class AssignmentQuestionSerializer(serializers.ModelSerializer):
-    assignment_id = serializers.IntegerField(source='assignment.id', read_only=True)
+    assignment_id = serializers.IntegerField(read_only=True)
 
     class Meta:
         model = AssignmentQuestion
@@ -725,7 +728,7 @@ class AssignmentQuestionSerializer(serializers.ModelSerializer):
 
 
 class AssignmentSerializer(serializers.ModelSerializer):
-    section_id = serializers.IntegerField(source='section.id', read_only=True)
+    section_id = serializers.IntegerField(read_only=True)
     questions = AssignmentQuestionSerializer(many=True, read_only=True)
     max_score = serializers.SerializerMethodField()
 
@@ -739,7 +742,17 @@ class AssignmentSerializer(serializers.ModelSerializer):
         read_only_fields = fields
 
     def get_max_score(self, obj) -> int:
-        # Aggregate Sum at the DB layer; fall back to 0 when the assignment has no questions.
+        # Prefer annotated value from queryset (O(1) across lists).
+        annotated_total = getattr(obj, 'max_score', None)
+        if annotated_total is not None:
+            return int(annotated_total)
+
+        # If questions were prefetched, compute locally without extra DB hits.
+        prefetched = getattr(obj, '_prefetched_objects_cache', {})
+        if 'questions' in prefetched:
+            return sum((q.points or 0) for q in prefetched['questions'])
+
+        # Fallback for isolated objects that were not annotated/prefetched.
         from django.db.models import Sum
 
         return obj.questions.aggregate(total=Sum('points'))['total'] or 0

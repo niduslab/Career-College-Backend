@@ -1,5 +1,5 @@
 from django.db import transaction
-from django.db.models import F, Max
+from django.db.models import Case, F, IntegerField, Max, When
 from django.shortcuts import get_object_or_404
 
 from courses.models import (
@@ -146,10 +146,15 @@ def reorder_questions(assignment_id, user, ordered_ids) -> list[AssignmentQuesti
     AssignmentQuestion.objects.filter(assignment=assignment).update(
         position=F('position') + offset
     )
-    for new_position, question_id in enumerate(ordered_ids, start=1):
-        AssignmentQuestion.objects.filter(
-            assignment=assignment, pk=question_id
-        ).update(position=new_position)
+    when_clauses = [
+        When(pk=question_id, then=new_position)
+        for new_position, question_id in enumerate(ordered_ids, start=1)
+    ]
+    AssignmentQuestion.objects.filter(
+        assignment=assignment, pk__in=ordered_ids
+    ).update(
+        position=Case(*when_clauses, output_field=IntegerField())
+    )
 
     return list(
         AssignmentQuestion.objects

@@ -23,7 +23,13 @@ def get_publishable_courses() -> QuerySet[NidusCourse]:
 
 
 def get_course_sections(course: NidusCourse) -> QuerySet[CourseSection]:
-    return CourseSection.objects.filter(course=course).order_by('position', 'id')
+    # select_related('course') so CourseSectionSerializer.course_title doesn't N+1.
+    return (
+        CourseSection.objects
+        .filter(course=course)
+        .select_related('course')
+        .order_by('position', 'id')
+    )
 
 
 def get_section_lectures(section: CourseSection) -> QuerySet[Lecture]:

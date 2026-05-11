@@ -10,7 +10,7 @@ from django.db import models
 from django.utils import timezone
 from django.utils.text import slugify
 
-from auth.models import PartnerInstitutionProfile
+from authentication.models import PartnerInstitutionProfile
 
 
 def course_thumbnail_upload_path(instance, filename):

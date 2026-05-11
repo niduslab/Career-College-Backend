@@ -7,7 +7,7 @@ from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
-from auth.models import (
+from authentication.models import (
     Education,
     InstructorProfile,
     LearnerProfile,
@@ -15,7 +15,7 @@ from auth.models import (
     User,
     WorkExperience,
 )
-from auth.serializers import (
+from authentication.serializers import (
     EducationSerializer,
     InstructorListSerializer,
     InstructorProfileSerializer,

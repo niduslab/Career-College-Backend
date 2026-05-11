@@ -11,7 +11,7 @@ from django.contrib.auth import get_user_model
 from django.db import IntegrityError
 from rest_framework_simplejwt.tokens import RefreshToken
 
-from auth.utils.exceptions import (
+from authentication.utils.exceptions import (
     GoogleOAuthAccountConflictError,
     GoogleOAuthBlockedUserError,
 )

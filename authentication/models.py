@@ -9,7 +9,7 @@ import random
 import secrets
 import logging
 
-from auth.utils.upload_helpers import (
+from authentication.utils.upload_helpers import (
     institution_cover_path,
     institution_logo_path,
     instructor_photo_path,
@@ -151,14 +151,14 @@ class User(AbstractUser):
     groups = models.ManyToManyField(
         'auth.Group',
         blank=True,
-        related_name='accounts_user_set',
+        related_name='authentication_user_set',
         help_text='The groups this user belongs to.',
         verbose_name='groups',
     )
     user_permissions = models.ManyToManyField(
         'auth.Permission',
         blank=True,
-        related_name='accounts_user_set',
+        related_name='authentication_user_set',
         help_text='Specific permissions for this user.',
         verbose_name='user permissions',
     )

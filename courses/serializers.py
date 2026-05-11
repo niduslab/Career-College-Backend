@@ -1,7 +1,7 @@
 from django.db import transaction
 from rest_framework import serializers
 
-from auth.models import PartnerInstitutionProfile, User
+from authentication.models import PartnerInstitutionProfile, User
 from courses.models import (
     Assignment,
     AssignmentQuestion,

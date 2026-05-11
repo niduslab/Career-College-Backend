@@ -62,7 +62,7 @@ INSTALLED_APPS = [
     'allauth.socialaccount',
     'allauth.socialaccount.providers.google',
     # Local
-    'auth.apps.AuthConfig',
+    'authentication.apps.AuthenticationConfig',
     'id_verification',
     'courses.apps.CoursesConfig',
 ]
@@ -103,8 +103,12 @@ WSGI_APPLICATION = 'career_college_backend.wsgi.application'
 
 DATABASES = {
     'default': {
-        'ENGINE': os.getenv('DB_ENGINE', 'django.db.backends.sqlite3'),
-        'NAME': os.getenv('DB_NAME', str(BASE_DIR / 'db.sqlite3')),
+        'ENGINE': os.getenv('DB_ENGINE'),
+        'NAME': os.getenv('DB_NAME'),
+        'USER': os.getenv('DB_USER'),
+        'PASSWORD': os.getenv('DB_PASSWORD'),
+        'HOST': os.getenv('DB_HOST', '127.0.0.1'),
+        'PORT': os.getenv('DB_PORT', '5432'),
     }
 }
 
@@ -128,7 +132,7 @@ AUTH_PASSWORD_VALIDATORS = [
 ]
 
 
-AUTH_USER_MODEL = 'accounts.User'
+AUTH_USER_MODEL = 'authentication.User'
 SITE_ID = int(os.getenv('SITE_ID', '1'))
 
 AUTHENTICATION_BACKENDS = (
@@ -288,7 +292,7 @@ LOGGING = {
         },
     },
     'loggers': {
-        'auth': {
+        'authentication': {
             'handlers': DEFAULT_LOG_HANDLERS,
             'level': 'DEBUG' if DEBUG else 'INFO',
             'propagate': False,

@@ -3,7 +3,7 @@ import logging
 from django.db.models.signals import post_save
 from django.dispatch import receiver
 
-from auth.models import User, LearnerProfile, InstructorProfile, PartnerInstitutionProfile
+from authentication.models import User, LearnerProfile, InstructorProfile, PartnerInstitutionProfile
 
 logger = logging.getLogger(__name__)
 

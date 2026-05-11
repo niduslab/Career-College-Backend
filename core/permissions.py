@@ -1,6 +1,6 @@
 """Reusable DRF permission classes used across apps."""
 
-from auth.models import InstructorProfile
+from authentication.models import InstructorProfile
 from rest_framework.permissions import BasePermission
 
 

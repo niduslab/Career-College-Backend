@@ -6,12 +6,12 @@ from rest_framework.response import Response
 from rest_framework.throttling import AnonRateThrottle
 from rest_framework.views import APIView
 
-from auth.serializers import (
+from authentication.serializers import (
     ChangePasswordSerializer,
     ForgotPasswordSerializer,
     ResetPasswordSerializer,
 )
-from auth.utils import send_otp_email
+from authentication.utils import send_otp_email
 from django.conf import settings
 
 logger = logging.getLogger(__name__)

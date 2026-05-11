@@ -7,12 +7,12 @@ from rest_framework.views import APIView
 from rest_framework_simplejwt.exceptions import TokenError
 from rest_framework_simplejwt.serializers import TokenRefreshSerializer
 
-from auth.serializers import (
+from authentication.serializers import (
     LogoutSerializer,
     UserLoginSerializer,
     UserRegistrationSerializer,
 )
-from auth.utils import send_otp_email
+from authentication.utils import send_otp_email
 
 logger = logging.getLogger(__name__)
 

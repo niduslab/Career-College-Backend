@@ -16,20 +16,20 @@ from rest_framework.permissions import AllowAny
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
-from auth.services.google_oauth import (
+from authentication.services.google_oauth import (
     build_authorization_url,
     exchange_code_for_tokens,
     fetch_google_profile,
 )
-from auth.services.user_provisioning import (
+from authentication.services.user_provisioning import (
     ALLOWED_GOOGLE_SIGN_IN_USER_TYPES,
     build_user_payload,
     generate_jwt_tokens,
     get_or_create_google_user,
     sync_social_account,
 )
-from auth.utils.cookie_helpers import set_jwt_cookies
-from auth.utils.exceptions import (
+from authentication.utils.cookie_helpers import set_jwt_cookies
+from authentication.utils.exceptions import (
     GoogleOAuthAccountConflictError,
     GoogleOAuthBlockedUserError,
     GoogleOAuthCodeExchangeError,

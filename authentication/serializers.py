@@ -9,8 +9,8 @@ from datetime import timedelta
 from rest_framework import serializers
 from rest_framework_simplejwt.tokens import RefreshToken
 
-from auth.utils import validate_custom_password_strength
-from auth.models import (
+from authentication.utils import validate_custom_password_strength
+from authentication.models import (
     Education,
     InstructorProfile,
     LearnerProfile,

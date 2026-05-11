@@ -167,7 +167,7 @@ class NidusCourseCreateUpdateSerializer(serializers.ModelSerializer):
         model = NidusCourse
         fields = [
             'title', 'description', 'thumbnail', 'price', 'language', 'level',
-            'duration_minutes', 'status', 'rejection_reason', 'instructors',
+            'duration_minutes', 'instructors',
             'partner_institutions', 'category', 'learning_objectives',
             'prerequisites', 'audiences',
         ]
@@ -177,15 +177,6 @@ class NidusCourseCreateUpdateSerializer(serializers.ModelSerializer):
         if len(title) < 5:
             raise serializers.ValidationError('Title must be at least 5 characters long.')
         return title
-
-    def validate(self, attrs):
-        status_value = attrs.get('status')
-        rejection_reason = attrs.get('rejection_reason', '')
-        if status_value == NidusCourse.CourseStatus.REJECTED and not rejection_reason.strip():
-            raise serializers.ValidationError(
-                {'rejection_reason': 'Rejection reason is required for rejected status.'}
-            )
-        return attrs
 
     def _replace_items(self, model_class, course, items):
         model_class.objects.filter(course=course).delete()

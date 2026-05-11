@@ -11,6 +11,9 @@ from courses.views import (
     CodingExerciseLanguageConfigListCreateAPIView,
     CodingTestCaseDetailAPIView,
     CodingTestCaseListCreateAPIView,
+    CourseAdminReviewView,
+    CourseArchiveView,
+    CourseRestoreView,
     CourseAudienceDetailAPIView,
     CourseAudienceListCreateAPIView,
     CourseCreateAPIView,
@@ -20,9 +23,11 @@ from courses.views import (
     CourseListAPIView,
     CoursePreRequisiteDetailAPIView,
     CoursePreRequisiteListCreateAPIView,
+    CourseReworkView,
     CourseSectionCreateAPIView,
     CourseSectionDetailAPIView,
     CourseSectionListAPIView,
+    CourseSubmitForReviewView,
     LectureDetailAPIView,
     LectureListAPIView,
     QuizAnswerDetailAPIView,
@@ -43,6 +48,15 @@ urlpatterns = [
     path('', CourseListAPIView.as_view(), name='course-list'),
     path('create/', CourseCreateAPIView.as_view(), name='course-create'),
     path('<int:pk>/', CourseDetailView.as_view(), name='course-detail'),
+
+    # -------------------------------------------------------------------------
+    # Course status transitions
+    # -------------------------------------------------------------------------
+    path('<int:pk>/submit/', CourseSubmitForReviewView.as_view(), name='course-submit'),
+    path('<int:pk>/review/', CourseAdminReviewView.as_view(), name='course-review'),
+    path('<int:pk>/rework/', CourseReworkView.as_view(), name='course-rework'),
+    path('<int:pk>/archive/', CourseArchiveView.as_view(), name='course-archive'),
+    path('<int:pk>/restore/', CourseRestoreView.as_view(), name='course-restore'),
 
     # -------------------------------------------------------------------------
     # Course metadata (objectives / prerequisites / audiences)

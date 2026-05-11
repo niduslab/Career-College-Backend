@@ -98,10 +98,105 @@ Content-Type: application/json
 - Body:
 ```json
 {
-  "status": "under_review"
+  "title": "Python Backend Bootcamp (Updated)",
+  "price": "89.99"
 }
 ```
 - Expected status: `200`
+- Note: `status` and `rejection_reason` are not writable via PATCH. Use the dedicated transition endpoints below.
+
+## 5.5 Course Status Transitions
+
+### 5.5.1 Submit Course for Review (Instructor)
+- Method: `POST`
+- URL: `{{base_url}}/{{course_id}}/submit/`
+- Body: _(none required)_
+- Headers: verified instructor JWT
+- Expected status: `200`
+- Expected response:
+```json
+{
+  "success": true,
+  "message": "Course submitted for review.",
+  "data": { "id": 101, "status": "under_review" }
+}
+```
+- Will return `400` with an `errors` dict if completeness checks fail (missing title/description, empty section, pending videos, incomplete quizzes).
+
+### 5.5.2 Admin Approve Course
+- Method: `POST`
+- URL: `{{base_url}}/{{course_id}}/review/`
+- Headers: admin JWT (`is_staff` or `user_type: admin`)
+- Body:
+```json
+{ "action": "approve" }
+```
+- Expected status: `200`
+- Expected response:
+```json
+{
+  "success": true,
+  "message": "Course approved successfully.",
+  "data": { "id": 101, "status": "published" }
+}
+```
+
+### 5.5.3 Admin Reject Course
+- Method: `POST`
+- URL: `{{base_url}}/{{course_id}}/review/`
+- Headers: admin JWT
+- Body:
+```json
+{
+  "action": "reject",
+  "rejection_reason": "Missing captions on lecture 3. Please add subtitles."
+}
+```
+- Expected status: `200`
+- `rejection_reason` is **required** when action is `reject`. Omitting it returns `400`.
+
+### 5.5.4 Instructor Rework a Rejected Course
+- Method: `POST`
+- URL: `{{base_url}}/{{course_id}}/rework/`
+- Headers: verified instructor JWT (must be assigned to the course)
+- Body: _(none required)_
+- Expected status: `200`
+- Expected response:
+```json
+{
+  "success": true,
+  "message": "Course moved back to draft for reworking.",
+  "data": { "id": 101, "status": "draft" }
+}
+```
+- Only works when current status is `rejected`. Any other status returns `400`.
+
+### 5.5.5 Archive a Published Course
+- Method: `POST`
+- URL: `{{base_url}}/{{course_id}}/archive/`
+- Headers: instructor or admin JWT
+- Body: _(none required)_
+- Expected status: `200`
+- Expected response:
+```json
+{
+  "success": true,
+  "message": "Course archived successfully.",
+  "data": { "id": 101, "status": "archived" }
+}
+```
+- Only works when current status is `published`.
+
+### 5.5.6 Invalid Transition (error case)
+- Attempt to call `/submit/` on a course that is already `under_review`.
+- Expected status: `400`
+- Example response:
+```json
+{
+  "success": false,
+  "message": "Cannot transition from \"under_review\" to \"under_review\". Allowed: published, rejected."
+}
+```
 
 ## 6) Section API Flow
 
@@ -955,9 +1050,13 @@ All write endpoints require a verified-instructor JWT. `model_answer` on a quest
 14. Patch exercise difficulty to `"hard"` and verify update.
 15. Delete the exercise — re-fetch `sections/{id}/contents/` and confirm the coding slot is gone.
 16. Delete the assignment — re-fetch `sections/{id}/contents/` and confirm the assignment slot is gone (its questions cascade away too).
+17. Call `POST {{base_url}}/{{course_id}}/submit/` — expect `400` because the section now has no content (exercise was deleted). Re-add content, then re-submit — expect `200` with `status: under_review`.
+18. As an admin, call `POST {{base_url}}/{{course_id}}/review/` with `{"action": "approve"}` — expect `status: published`.
+19. Call `POST {{base_url}}/{{course_id}}/archive/` — expect `status: archived`.
 
 ## 14) Notes
 - All ownership checks are instructor-scoped; if the course/section/exercise/assignment is not yours, API returns `404`.
+- Status transitions (submit, review, rework, archive) are dedicated POST endpoints. Do not set `status` directly via PATCH — the field is not writable that way.
 - `solution_code` on language configs is stored server-side and must never appear in learner-facing responses (Part 2 enforcement).
 - Hidden test cases (`is_hidden: true`) are for grading only and must never be exposed to learners (Part 2 enforcement).
 - `model_answer` on assignment questions is instructor-only and is stripped from learner-facing responses (Part 2 enforcement).

@@ -15,11 +15,12 @@ This folder is a quick-start map for new backend developers.
 9. `09-workflows-and-architecture-why.md`
 10. `10-coding-exercises.md`
 11. `11-assignments-crud.md`
+12. `12-course-lifecycle.md`
 
 ## Scope
 
 - API base: `/api/v1/`
-- Main apps: `auth`, `courses`, `id_verification`, `core`
+- Main apps: `authentication`, `courses`, `id_verification`, `core`
 - This guide explains:
   - Database model fields (key entities)
   - System processes (request/flow behavior)

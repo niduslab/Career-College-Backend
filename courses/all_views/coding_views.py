@@ -25,6 +25,22 @@ from courses.serializers import (
 logger = logging.getLogger(__name__)
 
 
+def _guard_editable(course):
+    """Return a 422 Response if the course is locked for editing, else None."""
+    if not course.is_editable():
+        return Response(
+            {
+                'success': False,
+                'message': (
+                    f'This course is "{course.status}" and cannot be edited. '
+                    'Only courses in draft or rejected status can be modified.'
+                ),
+            },
+            status=status.HTTP_422_UNPROCESSABLE_ENTITY,
+        )
+    return None
+
+
 class CodingExerciseDetailAPIView(APIView):
     """GET / PATCH / DELETE /api/courses/coding-exercises/{exercise_id}/"""
     permission_classes = [IsAuthenticated, IsEmailVerified, IsVerifiedInstructor]
@@ -48,6 +64,7 @@ class CodingExerciseDetailAPIView(APIView):
 
     def patch(self, request, exercise_id):
         exercise = self._get_owned_exercise(request, exercise_id)
+        if err := _guard_editable(exercise.section.course): return err
         serializer = CodingExerciseCreateUpdateSerializer(exercise, data=request.data, partial=True)
         if not serializer.is_valid():
             return Response(
@@ -73,6 +90,7 @@ class CodingExerciseDetailAPIView(APIView):
 
     def delete(self, request, exercise_id):
         exercise = self._get_owned_exercise(request, exercise_id)
+        if err := _guard_editable(exercise.section.course): return err
         # GenericRelation on CodingExercise cascades SectionContent deletion automatically.
         exercise.delete()
         return Response(
@@ -101,6 +119,7 @@ class CodingExerciseLanguageConfigListCreateAPIView(APIView):
 
     def post(self, request, exercise_id):
         exercise = self._get_owned_exercise(request, exercise_id)
+        if err := _guard_editable(exercise.section.course): return err
         serializer = CodingExerciseLanguageConfigSerializer(data=request.data)
         if not serializer.is_valid():
             return Response(
@@ -148,6 +167,7 @@ class CodingExerciseLanguageConfigDetailAPIView(APIView):
 
     def patch(self, request, exercise_id, config_id):
         config = self._get_owned_config(request, exercise_id, config_id)
+        if err := _guard_editable(config.exercise.section.course): return err
         serializer = CodingExerciseLanguageConfigSerializer(config, data=request.data, partial=True)
         if not serializer.is_valid():
             return Response(
@@ -172,6 +192,7 @@ class CodingExerciseLanguageConfigDetailAPIView(APIView):
 
     def delete(self, request, exercise_id, config_id):
         config = self._get_owned_config(request, exercise_id, config_id)
+        if err := _guard_editable(config.exercise.section.course): return err
         config.delete()
         return Response(
             {'success': True, 'message': 'Language config deleted successfully.'},
@@ -199,6 +220,7 @@ class CodingTestCaseListCreateAPIView(APIView):
 
     def post(self, request, exercise_id):
         exercise = self._get_owned_exercise(request, exercise_id)
+        if err := _guard_editable(exercise.section.course): return err
         serializer = CodingTestCaseSerializer(data=request.data)
         if not serializer.is_valid():
             return Response(
@@ -244,6 +266,7 @@ class CodingTestCaseDetailAPIView(APIView):
 
     def patch(self, request, exercise_id, tc_id):
         test_case = self._get_owned_test_case(request, exercise_id, tc_id)
+        if err := _guard_editable(test_case.exercise.section.course): return err
         serializer = CodingTestCaseSerializer(test_case, data=request.data, partial=True)
         if not serializer.is_valid():
             return Response(
@@ -268,6 +291,7 @@ class CodingTestCaseDetailAPIView(APIView):
 
     def delete(self, request, exercise_id, tc_id):
         test_case = self._get_owned_test_case(request, exercise_id, tc_id)
+        if err := _guard_editable(test_case.exercise.section.course): return err
         with transaction.atomic():
             deleted_position = test_case.position
             owned_exercise_id = test_case.exercise_id

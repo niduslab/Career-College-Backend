@@ -6,7 +6,7 @@ from django.urls import reverse
 from rest_framework import status
 from rest_framework.test import APITestCase
 
-from auth.models import User
+from authentication.models import User
 
 
 GOOGLE_TOKEN_RESPONSE = {
@@ -43,7 +43,7 @@ GOOGLE_SETTINGS = {
 @override_settings(**GOOGLE_SETTINGS)
 class GoogleAuthRedirectViewTests(APITestCase):
     def test_redirect_to_google_consent(self):
-        url = reverse('auth:google-redirect')
+        url = reverse('authentication:google-redirect')
         response = self.client.get(url)
         self.assertEqual(response.status_code, 302)
         self.assertIn('accounts.google.com', response['Location'])
@@ -51,7 +51,7 @@ class GoogleAuthRedirectViewTests(APITestCase):
 
     @override_settings(GOOGLE_CLIENT_ID='')
     def test_redirect_returns_503_when_not_configured(self):
-        url = reverse('auth:google-redirect')
+        url = reverse('authentication:google-redirect')
         response = self.client.get(url)
         self.assertEqual(response.status_code, status.HTTP_503_SERVICE_UNAVAILABLE)
         self.assertFalse(response.data['success'])
@@ -66,7 +66,7 @@ class GoogleAuthCallbackViewTests(APITestCase):
     """Tests for callback in frontend mode (FRONTEND_GOOGLE_CALLBACK is set)."""
 
     def test_callback_redirects_to_frontend_with_code(self):
-        url = reverse('auth:google-callback')
+        url = reverse('authentication:google-callback')
         response = self.client.get(url, {'code': 'auth-code-123', 'state': 'abc'})
         self.assertEqual(response.status_code, 302)
         location = response['Location']
@@ -75,13 +75,13 @@ class GoogleAuthCallbackViewTests(APITestCase):
         self.assertIn('state=abc', location)
 
     def test_callback_redirects_to_error_url_on_error(self):
-        url = reverse('auth:google-callback')
+        url = reverse('authentication:google-callback')
         response = self.client.get(url, {'error': 'access_denied'})
         self.assertEqual(response.status_code, 302)
         self.assertIn('http://localhost:3000/auth/error', response['Location'])
 
     def test_callback_redirects_to_error_url_when_no_code(self):
-        url = reverse('auth:google-callback')
+        url = reverse('authentication:google-callback')
         response = self.client.get(url)
         self.assertEqual(response.status_code, 302)
         self.assertIn('http://localhost:3000/auth/error', response['Location'])
@@ -97,13 +97,13 @@ BACKEND_ONLY_SETTINGS = {
 class GoogleAuthCallbackBackendOnlyTests(APITestCase):
     """Tests for callback in backend-only mode (no frontend URL)."""
 
-    @patch('auth.all_views.google_views.fetch_google_profile')
-    @patch('auth.all_views.google_views.exchange_code_for_tokens')
+    @patch('authentication.all_views.google_views.fetch_google_profile')
+    @patch('authentication.all_views.google_views.exchange_code_for_tokens')
     def test_callback_exchanges_code_and_returns_json(self, mock_exchange, mock_profile):
         mock_exchange.return_value = GOOGLE_TOKEN_RESPONSE
         mock_profile.return_value = GOOGLE_PROFILE
 
-        url = reverse('auth:google-callback')
+        url = reverse('authentication:google-callback')
         # Simulate session user_type set by the redirect view
         session = self.client.session
         session['google_oauth_user_type'] = 'learner'
@@ -118,13 +118,13 @@ class GoogleAuthCallbackBackendOnlyTests(APITestCase):
         self.assertIn('refresh_token', response.cookies)
 
     def test_callback_returns_400_on_error(self):
-        url = reverse('auth:google-callback')
+        url = reverse('authentication:google-callback')
         response = self.client.get(url, {'error': 'access_denied'})
         self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
         self.assertFalse(response.data['success'])
 
     def test_callback_returns_400_when_no_code(self):
-        url = reverse('auth:google-callback')
+        url = reverse('authentication:google-callback')
         response = self.client.get(url)
         self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
         self.assertFalse(response.data['success'])
@@ -137,10 +137,10 @@ class GoogleAuthCallbackBackendOnlyTests(APITestCase):
 @override_settings(**GOOGLE_SETTINGS)
 class GoogleExchangeTokenViewTests(APITestCase):
     def setUp(self):
-        self.url = reverse('auth:google-exchange-token')
+        self.url = reverse('authentication:google-exchange-token')
 
-    @patch('auth.all_views.google_views.fetch_google_profile')
-    @patch('auth.all_views.google_views.exchange_code_for_tokens')
+    @patch('authentication.all_views.google_views.fetch_google_profile')
+    @patch('authentication.all_views.google_views.exchange_code_for_tokens')
     def test_creates_new_learner_and_sets_cookies(self, mock_exchange, mock_profile):
         mock_exchange.return_value = GOOGLE_TOKEN_RESPONSE
         mock_profile.return_value = GOOGLE_PROFILE
@@ -170,8 +170,8 @@ class GoogleExchangeTokenViewTests(APITestCase):
             SocialAccount.objects.filter(user=user, provider='google', uid='google-user-123').exists()
         )
 
-    @patch('auth.all_views.google_views.fetch_google_profile')
-    @patch('auth.all_views.google_views.exchange_code_for_tokens')
+    @patch('authentication.all_views.google_views.fetch_google_profile')
+    @patch('authentication.all_views.google_views.exchange_code_for_tokens')
     def test_creates_instructor_not_verified(self, mock_exchange, mock_profile):
         mock_exchange.return_value = GOOGLE_TOKEN_RESPONSE
         mock_profile.return_value = {
@@ -190,8 +190,8 @@ class GoogleExchangeTokenViewTests(APITestCase):
         user = User.objects.get(email='instructor@example.com')
         self.assertFalse(user.is_verified)
 
-    @patch('auth.all_views.google_views.fetch_google_profile')
-    @patch('auth.all_views.google_views.exchange_code_for_tokens')
+    @patch('authentication.all_views.google_views.fetch_google_profile')
+    @patch('authentication.all_views.google_views.exchange_code_for_tokens')
     def test_existing_user_signs_in(self, mock_exchange, mock_profile):
         mock_exchange.return_value = GOOGLE_TOKEN_RESPONSE
         mock_profile.return_value = GOOGLE_PROFILE
@@ -210,8 +210,8 @@ class GoogleExchangeTokenViewTests(APITestCase):
         self.assertFalse(response.data['data']['is_new_user'])
         self.assertEqual(response.data['data']['user_id'], user.pk)
 
-    @patch('auth.all_views.google_views.fetch_google_profile')
-    @patch('auth.all_views.google_views.exchange_code_for_tokens')
+    @patch('authentication.all_views.google_views.fetch_google_profile')
+    @patch('authentication.all_views.google_views.exchange_code_for_tokens')
     def test_rejects_deleted_user(self, mock_exchange, mock_profile):
         mock_exchange.return_value = GOOGLE_TOKEN_RESPONSE
         mock_profile.return_value = GOOGLE_PROFILE
@@ -231,8 +231,8 @@ class GoogleExchangeTokenViewTests(APITestCase):
         self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
         self.assertFalse(response.data['success'])
 
-    @patch('auth.all_views.google_views.fetch_google_profile')
-    @patch('auth.all_views.google_views.exchange_code_for_tokens')
+    @patch('authentication.all_views.google_views.fetch_google_profile')
+    @patch('authentication.all_views.google_views.exchange_code_for_tokens')
     def test_rejects_partner_institution_user(self, mock_exchange, mock_profile):
         mock_exchange.return_value = GOOGLE_TOKEN_RESPONSE
         mock_profile.return_value = {
@@ -267,8 +267,8 @@ class GoogleExchangeTokenViewTests(APITestCase):
         self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
         self.assertFalse(response.data['success'])
 
-    @patch('auth.all_views.google_views.fetch_google_profile')
-    @patch('auth.all_views.google_views.exchange_code_for_tokens')
+    @patch('authentication.all_views.google_views.fetch_google_profile')
+    @patch('authentication.all_views.google_views.exchange_code_for_tokens')
     def test_social_account_conflict_different_user(self, mock_exchange, mock_profile):
         mock_exchange.return_value = GOOGLE_TOKEN_RESPONSE
         mock_profile.return_value = GOOGLE_PROFILE
@@ -290,8 +290,8 @@ class GoogleExchangeTokenViewTests(APITestCase):
         self.assertEqual(response.status_code, status.HTTP_409_CONFLICT)
         self.assertFalse(response.data['success'])
 
-    @patch('auth.all_views.google_views.fetch_google_profile')
-    @patch('auth.all_views.google_views.exchange_code_for_tokens')
+    @patch('authentication.all_views.google_views.fetch_google_profile')
+    @patch('authentication.all_views.google_views.exchange_code_for_tokens')
     def test_fills_missing_full_name_on_existing_user(self, mock_exchange, mock_profile):
         mock_exchange.return_value = GOOGLE_TOKEN_RESPONSE
         mock_profile.return_value = GOOGLE_PROFILE

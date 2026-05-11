@@ -1,5 +1,5 @@
 from django.urls import path
-from auth.views import (
+from authentication.views import (
     GoogleAuthCallbackView,
     GoogleAuthRedirectView,
     GoogleExchangeTokenView,
@@ -26,7 +26,7 @@ from auth.views import (
     PublicInstitutionListView,
 )
 
-app_name = 'auth'
+app_name = 'authentication'
 
 urlpatterns = [
     # Registration & Login

@@ -1,4 +1,4 @@
-from auth.all_views import (
+from authentication.all_views import (
     GoogleAuthCallbackView,
     GoogleAuthRedirectView,
     GoogleExchangeTokenView,

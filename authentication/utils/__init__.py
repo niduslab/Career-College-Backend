@@ -1,5 +1,5 @@
-from auth.utils.email_utils import send_otp_email
-from auth.utils.exceptions import (
+from authentication.utils.email_utils import send_otp_email
+from authentication.utils.exceptions import (
     GoogleOAuthAccountConflictError,
     GoogleOAuthBlockedUserError,
     GoogleOAuthCodeExchangeError,
@@ -7,7 +7,7 @@ from auth.utils.exceptions import (
     GoogleOAuthError,
     GoogleOAuthProfileError,
 )
-from auth.utils.password_validators import validate_custom_password_strength
+from authentication.utils.password_validators import validate_custom_password_strength
 
 __all__ = [
     'send_otp_email',

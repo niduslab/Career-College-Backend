@@ -888,7 +888,7 @@ If the Google email matches an existing `partner_institution` account:
 ## Quick Test Flow — Registration/Login
 
 1. **Register** a learner (step 1)
-2. **Check OTP** — look in email or DB: `python manage.py shell -c "from auth.models import User; u=User.objects.get(email='john.learner@example.com'); print(u.otp_code)"`
+2. **Check OTP** — look in email or DB: `python manage.py shell -c "from authentication.models import User; u=User.objects.get(email='john.learner@example.com'); print(u.otp_code)"`
 3. **Verify OTP** (step 5) with the code
 4. **Login** (step 7) — save the `access` and `refresh` tokens
 5. **Logout** (step 9) with the tokens

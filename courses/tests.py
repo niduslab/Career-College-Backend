@@ -4,7 +4,7 @@ from django.urls import reverse
 from rest_framework import status
 from rest_framework.test import APITestCase
 
-from auth.models import InstructorProfile, User
+from authentication.models import InstructorProfile, User
 from courses.models import (
     Assignment,
     AssignmentQuestion,

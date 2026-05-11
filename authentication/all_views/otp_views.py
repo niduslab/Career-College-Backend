@@ -5,8 +5,8 @@ from rest_framework.response import Response
 from rest_framework import serializers, status
 from rest_framework.permissions import AllowAny
 from rest_framework.throttling import AnonRateThrottle
-from auth.serializers import VerifyOTPSerializer, ResendOTPSerializer
-from auth.utils import send_otp_email
+from authentication.serializers import VerifyOTPSerializer, ResendOTPSerializer
+from authentication.utils import send_otp_email
 from django.conf import settings
 
 logger = logging.getLogger(__name__)

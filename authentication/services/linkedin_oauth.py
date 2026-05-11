@@ -14,7 +14,7 @@ from urllib import error, parse, request
 
 from django.conf import settings
 
-from auth.utils.exceptions import (
+from authentication.utils.exceptions import (
     GoogleOAuthCodeExchangeError as LinkedInOAuthCodeExchangeError,
     GoogleOAuthConfigError as LinkedInOAuthConfigError,
     GoogleOAuthProfileError as LinkedInOAuthProfileError,

@@ -4,6 +4,19 @@ from authentication.models import InstructorProfile
 from rest_framework.permissions import BasePermission
 
 
+class IsPlatformAdmin(BasePermission):
+    """Allow access only to platform admin/staff users."""
+
+    message = 'Only administrators can perform this action.'
+
+    def has_permission(self, request, view):
+        return bool(
+            request.user
+            and request.user.is_authenticated
+            and (request.user.is_staff or request.user.user_type == 'admin')
+        )
+
+
 class IsAdminOrReadOnly(BasePermission):
     """Allow read access to everyone and write access only to admins."""
 

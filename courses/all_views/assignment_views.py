@@ -26,6 +26,7 @@ from courses.services import (
     update_assignment,
     update_question,
 )
+from courses.utils import guard_editable
 
 logger = logging.getLogger(__name__)
 
@@ -107,7 +108,9 @@ class AssignmentDetailAPIView(APIView):
 
     def patch(self, request, assignment_id):
         # Confirm ownership before delegating to the service.
-        self._get_owned_assignment(request, assignment_id)
+        assignment = self._get_owned_assignment(request, assignment_id)
+        if err := guard_editable(assignment.section.course):
+            return err
 
         serializer = AssignmentCreateUpdateSerializer(data=request.data, partial=True)
         if not serializer.is_valid():
@@ -136,7 +139,9 @@ class AssignmentDetailAPIView(APIView):
 
     def delete(self, request, assignment_id):
         # Confirm ownership before delegating.
-        self._get_owned_assignment(request, assignment_id)
+        assignment = self._get_owned_assignment(request, assignment_id)
+        if err := guard_editable(assignment.section.course):
+            return err
         try:
             delete_assignment(assignment_id, request.user)
         except Exception:
@@ -181,7 +186,9 @@ class AssignmentQuestionListCreateAPIView(APIView):
 
     def post(self, request, assignment_id):
         # Confirm ownership before delegating.
-        self._get_owned_assignment(request, assignment_id)
+        assignment = self._get_owned_assignment(request, assignment_id)
+        if err := guard_editable(assignment.section.course):
+            return err
 
         serializer = AssignmentQuestionSerializer(data=request.data, context={'request': request})
         if not serializer.is_valid():
@@ -247,7 +254,9 @@ class AssignmentQuestionDetailAPIView(APIView):
         )
 
     def patch(self, request, question_id):
-        self._get_owned_question(request, question_id)
+        question = self._get_owned_question(request, question_id)
+        if err := guard_editable(question.assignment.section.course):
+            return err
 
         serializer = AssignmentQuestionSerializer(
             data=request.data, partial=True, context={'request': request}
@@ -280,7 +289,9 @@ class AssignmentQuestionDetailAPIView(APIView):
         )
 
     def delete(self, request, question_id):
-        self._get_owned_question(request, question_id)
+        question = self._get_owned_question(request, question_id)
+        if err := guard_editable(question.assignment.section.course):
+            return err
         try:
             delete_question(question_id, request.user)
         except Exception:
@@ -312,6 +323,14 @@ class AssignmentQuestionReorderAPIView(APIView):
                 status=status.HTTP_400_BAD_REQUEST,
             )
         ordered_ids = input_serializer.validated_data['ordered_ids']
+
+        assignment = get_object_or_404(
+            Assignment.objects.select_related('section__course'),
+            pk=assignment_id,
+            section__course__instructors=request.user,
+        )
+        if err := guard_editable(assignment.section.course):
+            return err
 
         try:
             questions = reorder_questions(assignment_id, request.user, ordered_ids)

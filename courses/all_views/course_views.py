@@ -13,6 +13,7 @@ from courses.serializers import (
     NidusCourseCreateUpdateSerializer,
     NidusCourseSerializer,
 )
+from courses.utils import guard_editable
 
 
 class CourseListAPIView(APIView):
@@ -85,6 +86,8 @@ class CourseDetailView(APIView):
 
     def patch(self, request, pk):
         course = self._get_course(request, pk)
+        if err := guard_editable(course):
+            return err
         serializer = NidusCourseCreateUpdateSerializer(
             course,
             data=request.data,

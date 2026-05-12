@@ -1,3 +1,4 @@
+import logging
 import os
 import uuid
 
@@ -9,6 +10,8 @@ from django.core.validators import MinValueValidator
 from django.db import models
 from django.utils import timezone
 from django.utils.text import slugify
+
+logger = logging.getLogger(__name__)
 
 from authentication.models import PartnerInstitutionProfile
 
@@ -215,6 +218,132 @@ class NidusCourse(models.Model):
 
     def __str__(self):
         return f'{self.title} ({self.get_status_display()})'
+
+    # ── Editable statuses ───────────────────────────────────────────────────
+    EDITABLE_STATUSES = frozenset(('draft', 'rejected'))
+
+    def is_editable(self):
+        return self.status in self.EDITABLE_STATUSES
+
+    # ── Status transition state machine ─────────────────────────────────────
+    VALID_TRANSITIONS = {
+        'draft': ('under_review',),
+        'under_review': ('published', 'rejected'),
+        'rejected': ('draft',),
+        'published': ('archived',),
+        'archived': ('draft',),
+    }
+
+    # Minimum requirements before an instructor can submit for review.
+    REQUIRED_FOR_SUBMIT = ('title', 'description')
+
+    def transition_to(self, new_status, reviewer=None, rejection_reason=''):
+        """
+        Move the course to *new_status* with guard-rail checks.
+        Raises ``ValidationError`` on illegal transitions or missing data.
+        """
+        allowed = self.VALID_TRANSITIONS.get(self.status, ())
+        if new_status not in allowed:
+            raise ValidationError(
+                f'Cannot transition from "{self.status}" to "{new_status}". '
+                f'Allowed: {", ".join(allowed) if allowed else "none (terminal state)"}.'
+            )
+
+        # ── Submission completeness check ──
+        if new_status == 'under_review':
+            self._validate_course_completeness()
+
+        # ── Rejection requires a reason ──
+        if new_status == 'rejected' and not rejection_reason.strip():
+            raise ValidationError(
+                {'rejection_reason': 'A reason is required when rejecting a course.'}
+            )
+
+        # ── Admin actions require a reviewer ──
+        if new_status in ('published', 'rejected') and reviewer is None:
+            raise ValidationError('A reviewer (admin) is required for this transition.')
+
+        # ── Apply transition ──
+        self.status = new_status
+
+        if new_status == 'rejected':
+            self.rejection_reason = rejection_reason.strip()
+        else:
+            self.rejection_reason = ''
+
+        self.save()
+
+        logger.info(
+            'Course %s (%s) transitioned to %s by %s',
+            self.pk, self.slug, new_status,
+            reviewer.email if reviewer else 'instructor',
+        )
+
+    def _validate_course_completeness(self):
+        """
+        Ensure the course meets minimum quality standards before submission.
+        Collects all problems and raises a single ValidationError.
+        """
+        errors = {}
+
+        # ── Required fields ──
+        for field_name in self.REQUIRED_FOR_SUBMIT:
+            value = getattr(self, field_name, None)
+            if not value or (isinstance(value, str) and not value.strip()):
+                errors[field_name] = f'{field_name} is required before submitting.'
+
+        # ── Must have at least one section ──
+        section_count = self.sections.count()
+        if section_count == 0:
+            errors['sections'] = 'Course must have at least one section.'
+
+        # ── Every section must have at least one content item ──
+        # NOTE: SectionContent, VideoAsset, Quiz are defined later in this
+        # same file, so we reference them via late imports to avoid
+        # NameError at class-definition time.
+        if section_count > 0:
+            empty_sections = []
+            for section in self.sections.all():
+                if not section.contents.exists():
+                    empty_sections.append(section.title)
+            if empty_sections:
+                errors['empty_sections'] = (
+                    f'These sections have no content: {", ".join(empty_sections)}.'
+                )
+
+        # ── All video lectures must be done transcoding ──
+        pending_videos = (
+            VideoAsset.objects
+            .filter(
+                lecture__section__course=self,
+                is_active=True,
+            )
+            .exclude(status=VideoAsset.Status.READY)
+        )
+        pending_count = pending_videos.count()
+        if pending_count > 0:
+            errors['video_processing'] = (
+                f'{pending_count} video(s) are still processing or failed. '
+                'All videos must be ready before submission.'
+            )
+
+        # ── Every quiz must have at least one question with a correct answer ──
+        incomplete_quizzes = []
+        for quiz in Quiz.objects.filter(section__course=self):
+            questions = quiz.questions.all()
+            if not questions.exists():
+                incomplete_quizzes.append(f'"{quiz.title}" has no questions')
+            else:
+                for question in questions:
+                    if not question.answers.filter(is_correct=True).exists():
+                        incomplete_quizzes.append(
+                            f'"{quiz.title}" - Q{question.position} has no correct answer'
+                        )
+        if incomplete_quizzes:
+            errors['quizzes'] = f'Incomplete quizzes: {"; ".join(incomplete_quizzes)}.'
+
+        if errors:
+            raise ValidationError(errors)
 
 
 class CourseLearningObjective(models.Model):
@@ -825,8 +954,6 @@ class QuizAnswer(models.Model):
         verbose_name_plural = 'Quiz Answers'
         ordering = ['question_id', 'id']
         constraints = [
-            # Partial unique index: at most one row with is_correct=True per question.
-            # Enforced at DB level (PostgreSQL); clean() covers other backends.
             models.UniqueConstraint(
                 fields=['question'],
                 condition=models.Q(is_correct=True),

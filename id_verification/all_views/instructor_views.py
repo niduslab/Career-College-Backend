@@ -173,9 +173,14 @@ class VerificationSubmitView(APIView):
         try:
             verification.transition_to('submitted')
         except ValidationError as e:
+            if hasattr(e, 'message_dict'):
+                return Response(
+                    {'success': False, 'message': 'Submission failed.', 'errors': e.message_dict},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
             return Response(
-                {'success': False, 'message': 'Submission failed.', 'errors': e.message_dict if hasattr(e, 'message_dict') else {'detail': e.messages}},
-                status=status.HTTP_400_BAD_REQUEST,
+                {'success': False, 'message': e.messages[0]},
+                status=status.HTTP_422_UNPROCESSABLE_ENTITY,
             )
         except Exception:
             logger.exception('Unexpected error during verification submission pk=%s', pk)

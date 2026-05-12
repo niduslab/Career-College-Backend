@@ -159,7 +159,7 @@ class CourseSectionDetailAPIView(APIView):
         section = self._get_owned_section(request, section_id)
         if err := guard_editable(section.course): return err
         section.delete()
-        return Response({'success': True, 'message': 'Section deleted successfully.'}, status=status.HTTP_204_NO_CONTENT)
+        return Response({'success': True, 'message': 'Section deleted successfully.'}, status=status.HTTP_200_OK)
 
 
 # =============================================================================
@@ -244,7 +244,7 @@ class LectureDetailAPIView(APIView):
         if err := guard_editable(lecture.section.course): return err
         # GenericRelation on Lecture cascades SectionContent deletion automatically.
         lecture.delete()
-        return Response({'success': True, 'message': 'Lecture deleted successfully.'}, status=status.HTTP_204_NO_CONTENT)
+        return Response({'success': True, 'message': 'Lecture deleted successfully.'}, status=status.HTTP_200_OK)
 
 
 # =============================================================================
@@ -561,7 +561,7 @@ class QuizDetailAPIView(APIView):
         # GenericRelation on Quiz cascades SectionContent deletion automatically.
         with transaction.atomic():
             quiz.delete()
-        return Response({'success': True, 'message': 'Quiz deleted successfully.'}, status=status.HTTP_204_NO_CONTENT)
+        return Response({'success': True, 'message': 'Quiz deleted successfully.'}, status=status.HTTP_200_OK)
 
 
 # =============================================================================
@@ -652,7 +652,7 @@ class QuizQuestionDetailAPIView(APIView):
         if err := guard_editable(question.quiz.section.course): return err
         question.delete()
         return Response(
-            {'success': True, 'message': 'Question deleted successfully.'}, status=status.HTTP_204_NO_CONTENT
+            {'success': True, 'message': 'Question deleted successfully.'}, status=status.HTTP_200_OK
         )
 
 
@@ -730,7 +730,7 @@ class QuizAnswerDetailAPIView(APIView):
         if err := guard_editable(answer.question.quiz.section.course): return err
         answer.delete()
         return Response(
-            {'success': True, 'message': 'Answer deleted successfully.'}, status=status.HTTP_204_NO_CONTENT
+            {'success': True, 'message': 'Answer deleted successfully.'}, status=status.HTTP_200_OK
         )
 
 
@@ -845,7 +845,7 @@ class CourseItemDetailBaseAPIView(APIView):
         item.delete()
         return Response(
             {'success': True, 'message': f'{self.item_label} deleted successfully.'},
-            status=status.HTTP_204_NO_CONTENT,
+            status=status.HTTP_200_OK,
         )
 
 

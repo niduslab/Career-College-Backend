@@ -101,7 +101,7 @@ class ResendOTPView(APIView):
             if not email_sent:
                 logger.error(f'OTP resend email failed for {user.email} purpose={purpose}')
                 return Response({
-                    'error': True,
+                    'success': False,
                     'message': 'OTP generated but failed to send email. Please try again later.'
                 }, status=status.HTTP_503_SERVICE_UNAVAILABLE)
 

@@ -334,6 +334,34 @@ All authenticated endpoints require: `Authorization: Bearer <access_token>`
 | POST | `{id}/review/` | Admin | Approve (`action: approve`) or reject (`action: reject` + `rejection_reason`) |
 | POST | `{id}/rework/` | Instructor | Move rejected course back to draft |
 | POST | `{id}/archive/` | Instructor or Admin | Archive a published course |
+| POST | `{id}/restore/` | Instructor or Admin | Restore an archived course back to draft |
+
+##### Expected Responses (Status Lifecycle)
+
+`POST {id}/submit/`
+- `200 OK` on successful `draft -> under_review`
+- `400 Bad Request` for completeness/field validation failures (`errors` payload)
+- `422 Unprocessable Entity` for invalid transition/business-rule violations
+
+`POST {id}/review/`
+- `200 OK` on successful `under_review -> published` or `under_review -> rejected`
+- `400 Bad Request` for invalid action/rejection payload validation (`errors` payload)
+- `422 Unprocessable Entity` for invalid transition/business-rule violations
+
+`POST {id}/rework/`
+- `200 OK` on successful `rejected -> draft`
+- `400 Bad Request` for payload/field validation failures (`errors` payload)
+- `422 Unprocessable Entity` for invalid transition/business-rule violations
+
+`POST {id}/archive/`
+- `200 OK` on successful `published -> archived`
+- `400 Bad Request` for payload/field validation failures (`errors` payload)
+- `422 Unprocessable Entity` for invalid transition/business-rule violations
+
+`POST {id}/restore/`
+- `200 OK` on successful `archived -> draft`
+- `400 Bad Request` for payload/field validation failures (`errors` payload)
+- `422 Unprocessable Entity` for invalid transition/business-rule violations
 
 #### Course Metadata
 
@@ -416,6 +444,9 @@ All endpoints return the same envelope:
 
 // Not found (404)
 { "success": false, "message": "Course not found." }
+
+// Business logic violation (422)
+{ "success": false, "message": "Cannot transition from \"draft\" to \"published\"." }
 
 // Server error (500)
 { "success": false, "message": "An unexpected error occurred. Please try again." }

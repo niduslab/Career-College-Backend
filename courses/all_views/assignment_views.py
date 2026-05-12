@@ -26,6 +26,7 @@ from courses.services import (
     update_assignment,
     update_question,
 )
+from courses.utils import guard_editable
 
 logger = logging.getLogger(__name__)
 
@@ -43,22 +44,6 @@ class AssignmentQuestionReorderInputSerializer(serializers.Serializer):
         child=StrictIntegerField(),
         allow_empty=False,
     )
-
-
-def _guard_editable(course):
-    """Return a 422 Response if the course is locked for editing, else None."""
-    if not course.is_editable():
-        return Response(
-            {
-                'success': False,
-                'message': (
-                    f'This course is "{course.status}" and cannot be edited. '
-                    'Only courses in draft or rejected status can be modified.'
-                ),
-            },
-            status=status.HTTP_422_UNPROCESSABLE_ENTITY,
-        )
-    return None
 
 
 # =============================================================================
@@ -124,7 +109,7 @@ class AssignmentDetailAPIView(APIView):
     def patch(self, request, assignment_id):
         # Confirm ownership before delegating to the service.
         assignment = self._get_owned_assignment(request, assignment_id)
-        if err := _guard_editable(assignment.section.course):
+        if err := guard_editable(assignment.section.course):
             return err
 
         serializer = AssignmentCreateUpdateSerializer(data=request.data, partial=True)
@@ -155,7 +140,7 @@ class AssignmentDetailAPIView(APIView):
     def delete(self, request, assignment_id):
         # Confirm ownership before delegating.
         assignment = self._get_owned_assignment(request, assignment_id)
-        if err := _guard_editable(assignment.section.course):
+        if err := guard_editable(assignment.section.course):
             return err
         try:
             delete_assignment(assignment_id, request.user)
@@ -202,7 +187,7 @@ class AssignmentQuestionListCreateAPIView(APIView):
     def post(self, request, assignment_id):
         # Confirm ownership before delegating.
         assignment = self._get_owned_assignment(request, assignment_id)
-        if err := _guard_editable(assignment.section.course):
+        if err := guard_editable(assignment.section.course):
             return err
 
         serializer = AssignmentQuestionSerializer(data=request.data, context={'request': request})
@@ -270,7 +255,7 @@ class AssignmentQuestionDetailAPIView(APIView):
 
     def patch(self, request, question_id):
         question = self._get_owned_question(request, question_id)
-        if err := _guard_editable(question.assignment.section.course):
+        if err := guard_editable(question.assignment.section.course):
             return err
 
         serializer = AssignmentQuestionSerializer(
@@ -305,7 +290,7 @@ class AssignmentQuestionDetailAPIView(APIView):
 
     def delete(self, request, question_id):
         question = self._get_owned_question(request, question_id)
-        if err := _guard_editable(question.assignment.section.course):
+        if err := guard_editable(question.assignment.section.course):
             return err
         try:
             delete_question(question_id, request.user)
@@ -344,7 +329,7 @@ class AssignmentQuestionReorderAPIView(APIView):
             pk=assignment_id,
             section__course__instructors=request.user,
         )
-        if err := _guard_editable(assignment.section.course):
+        if err := guard_editable(assignment.section.course):
             return err
 
         try:

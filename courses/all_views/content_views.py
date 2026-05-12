@@ -45,22 +45,7 @@ from courses.services import (
     get_section_lectures,
     reorder_section_content,
 )
-
-
-def _guard_editable(course):
-    """Return a 422 Response if the course is locked for editing, else None."""
-    if not course.is_editable():
-        return Response(
-            {
-                'success': False,
-                'message': (
-                    f'This course is "{course.status}" and cannot be edited. '
-                    'Only courses in draft or rejected status can be modified.'
-                ),
-            },
-            status=status.HTTP_422_UNPROCESSABLE_ENTITY,
-        )
-    return None
+from courses.utils import guard_editable
 
 
 # =============================================================================
@@ -93,7 +78,7 @@ class CourseSectionCreateAPIView(APIView):
 
     def post(self, request, course_id):
         course = self._get_owned_course(request, course_id)
-        if err := _guard_editable(course): return err
+        if err := guard_editable(course): return err
         serializer = CourseSectionCreateUpdateSerializer(data=request.data)
         if not serializer.is_valid():
             return Response(
@@ -130,7 +115,7 @@ class CourseSectionDetailAPIView(APIView):
 
     def patch(self, request, section_id):
         section = self._get_owned_section(request, section_id)
-        if err := _guard_editable(section.course): return err
+        if err := guard_editable(section.course): return err
         serializer = CourseSectionCreateUpdateSerializer(section, data=request.data, partial=True)
         if not serializer.is_valid():
             return Response(
@@ -151,7 +136,7 @@ class CourseSectionDetailAPIView(APIView):
 
     def put(self, request, section_id):
         section = self._get_owned_section(request, section_id)
-        if err := _guard_editable(section.course): return err
+        if err := guard_editable(section.course): return err
         serializer = CourseSectionCreateUpdateSerializer(section, data=request.data)
         if not serializer.is_valid():
             return Response(
@@ -172,7 +157,7 @@ class CourseSectionDetailAPIView(APIView):
 
     def delete(self, request, section_id):
         section = self._get_owned_section(request, section_id)
-        if err := _guard_editable(section.course): return err
+        if err := guard_editable(section.course): return err
         section.delete()
         return Response({'success': True, 'message': 'Section deleted successfully.'}, status=status.HTTP_204_NO_CONTENT)
 
@@ -216,7 +201,7 @@ class LectureDetailAPIView(APIView):
 
     def patch(self, request, lecture_id):
         lecture = self._get_owned_lecture(request, lecture_id)
-        if err := _guard_editable(lecture.section.course): return err
+        if err := guard_editable(lecture.section.course): return err
         serializer = LectureCreateUpdateSerializer(
             lecture, data=request.data, partial=True, context={'section': lecture.section}
         )
@@ -236,7 +221,7 @@ class LectureDetailAPIView(APIView):
 
     def put(self, request, lecture_id):
         lecture = self._get_owned_lecture(request, lecture_id)
-        if err := _guard_editable(lecture.section.course): return err
+        if err := guard_editable(lecture.section.course): return err
         serializer = LectureCreateUpdateSerializer(
             lecture, data=request.data, context={'section': lecture.section}
         )
@@ -256,7 +241,7 @@ class LectureDetailAPIView(APIView):
 
     def delete(self, request, lecture_id):
         lecture = self._get_owned_lecture(request, lecture_id)
-        if err := _guard_editable(lecture.section.course): return err
+        if err := guard_editable(lecture.section.course): return err
         # GenericRelation on Lecture cascades SectionContent deletion automatically.
         lecture.delete()
         return Response({'success': True, 'message': 'Lecture deleted successfully.'}, status=status.HTTP_204_NO_CONTENT)
@@ -327,7 +312,7 @@ class SectionContentListCreateAPIView(APIView):
 
     def post(self, request, section_id):
         section = self._get_owned_section(request, section_id)
-        if err := _guard_editable(section.course): return err
+        if err := guard_editable(section.course): return err
         item_type = request.data.get('item_type', '')
 
         _VALID_ITEM_TYPES = {
@@ -501,7 +486,7 @@ class SectionContentReorderAPIView(APIView):
 
     def patch(self, request, content_id):
         sc = self._get_owned_content(request, content_id)
-        if err := _guard_editable(sc.section.course): return err
+        if err := guard_editable(sc.section.course): return err
 
         new_position = request.data.get('position')
         if new_position is None:
@@ -557,7 +542,7 @@ class QuizDetailAPIView(APIView):
 
     def patch(self, request, quiz_id):
         quiz = self._get_owned_quiz(request, quiz_id)
-        if err := _guard_editable(quiz.section.course): return err
+        if err := guard_editable(quiz.section.course): return err
         serializer = QuizCreateUpdateSerializer(quiz, data=request.data, partial=True)
         if not serializer.is_valid():
             return Response(
@@ -572,7 +557,7 @@ class QuizDetailAPIView(APIView):
 
     def delete(self, request, quiz_id):
         quiz = self._get_owned_quiz(request, quiz_id)
-        if err := _guard_editable(quiz.section.course): return err
+        if err := guard_editable(quiz.section.course): return err
         # GenericRelation on Quiz cascades SectionContent deletion automatically.
         with transaction.atomic():
             quiz.delete()
@@ -603,7 +588,7 @@ class QuizQuestionListCreateAPIView(APIView):
 
     def post(self, request, quiz_id):
         quiz = self._get_owned_quiz(request, quiz_id)
-        if err := _guard_editable(quiz.section.course): return err
+        if err := guard_editable(quiz.section.course): return err
         serializer = QuizQuestionSerializer(data=request.data, context={'quiz': quiz})
         if not serializer.is_valid():
             return Response(
@@ -643,7 +628,7 @@ class QuizQuestionDetailAPIView(APIView):
 
     def patch(self, request, question_id):
         question = self._get_owned_question(request, question_id)
-        if err := _guard_editable(question.quiz.section.course): return err
+        if err := guard_editable(question.quiz.section.course): return err
         serializer = QuizQuestionSerializer(question, data=request.data, partial=True)
         if not serializer.is_valid():
             return Response(
@@ -664,7 +649,7 @@ class QuizQuestionDetailAPIView(APIView):
 
     def delete(self, request, question_id):
         question = self._get_owned_question(request, question_id)
-        if err := _guard_editable(question.quiz.section.course): return err
+        if err := guard_editable(question.quiz.section.course): return err
         question.delete()
         return Response(
             {'success': True, 'message': 'Question deleted successfully.'}, status=status.HTTP_204_NO_CONTENT
@@ -695,7 +680,7 @@ class QuizAnswerListCreateAPIView(APIView):
 
     def post(self, request, question_id):
         question = self._get_owned_question(request, question_id)
-        if err := _guard_editable(question.quiz.section.course): return err
+        if err := guard_editable(question.quiz.section.course): return err
         serializer = QuizAnswerSerializer(data=request.data, context={'question': question})
         if not serializer.is_valid():
             return Response(
@@ -727,7 +712,7 @@ class QuizAnswerDetailAPIView(APIView):
 
     def patch(self, request, answer_id):
         answer = self._get_owned_answer(request, answer_id)
-        if err := _guard_editable(answer.question.quiz.section.course): return err
+        if err := guard_editable(answer.question.quiz.section.course): return err
         serializer = QuizAnswerSerializer(answer, data=request.data, partial=True)
         if not serializer.is_valid():
             return Response(
@@ -742,7 +727,7 @@ class QuizAnswerDetailAPIView(APIView):
 
     def delete(self, request, answer_id):
         answer = self._get_owned_answer(request, answer_id)
-        if err := _guard_editable(answer.question.quiz.section.course): return err
+        if err := guard_editable(answer.question.quiz.section.course): return err
         answer.delete()
         return Response(
             {'success': True, 'message': 'Answer deleted successfully.'}, status=status.HTTP_204_NO_CONTENT
@@ -774,7 +759,7 @@ class CourseItemListCreateBaseAPIView(APIView):
 
     def post(self, request, course_id):
         course = self._get_owned_course(request, course_id)
-        if err := _guard_editable(course): return err
+        if err := guard_editable(course): return err
         serializer = self.serializer_class(data=request.data)
         if not serializer.is_valid():
             return Response(
@@ -814,7 +799,7 @@ class CourseItemDetailBaseAPIView(APIView):
 
     def patch(self, request, item_id):
         item = self._get_owned_item(request, item_id)
-        if err := _guard_editable(item.course): return err
+        if err := guard_editable(item.course): return err
         serializer = self.serializer_class(item, data=request.data, partial=True)
         if not serializer.is_valid():
             return Response(
@@ -835,7 +820,7 @@ class CourseItemDetailBaseAPIView(APIView):
 
     def put(self, request, item_id):
         item = self._get_owned_item(request, item_id)
-        if err := _guard_editable(item.course): return err
+        if err := guard_editable(item.course): return err
         serializer = self.serializer_class(item, data=request.data)
         if not serializer.is_valid():
             return Response(
@@ -856,7 +841,7 @@ class CourseItemDetailBaseAPIView(APIView):
 
     def delete(self, request, item_id):
         item = self._get_owned_item(request, item_id)
-        if err := _guard_editable(item.course): return err
+        if err := guard_editable(item.course): return err
         item.delete()
         return Response(
             {'success': True, 'message': f'{self.item_label} deleted successfully.'},

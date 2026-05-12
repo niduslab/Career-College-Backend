@@ -13,22 +13,7 @@ from courses.serializers import (
     NidusCourseCreateUpdateSerializer,
     NidusCourseSerializer,
 )
-
-
-def _guard_editable(course):
-    """Return a 422 Response if the course is locked for editing, else None."""
-    if not course.is_editable():
-        return Response(
-            {
-                'success': False,
-                'message': (
-                    f'This course is "{course.status}" and cannot be edited. '
-                    'Only courses in draft or rejected status can be modified.'
-                ),
-            },
-            status=status.HTTP_422_UNPROCESSABLE_ENTITY,
-        )
-    return None
+from courses.utils import guard_editable
 
 
 class CourseListAPIView(APIView):
@@ -101,7 +86,7 @@ class CourseDetailView(APIView):
 
     def patch(self, request, pk):
         course = self._get_course(request, pk)
-        if err := _guard_editable(course):
+        if err := guard_editable(course):
             return err
         serializer = NidusCourseCreateUpdateSerializer(
             course,

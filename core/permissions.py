@@ -4,8 +4,8 @@ from authentication.models import InstructorProfile
 from rest_framework.permissions import BasePermission
 
 
-class IsAdminUser(BasePermission):
-    """Allow access only to admin/staff users."""
+class IsPlatformAdmin(BasePermission):
+    """Allow access only to platform admin/staff users."""
 
     message = 'Only administrators can perform this action.'
 

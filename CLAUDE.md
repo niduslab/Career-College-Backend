@@ -2,6 +2,8 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
+> **Keep this file current.** Whenever you rename a symbol, add a new pattern, change a convention, or introduce an architectural rule, update the relevant section of this file in the same change. Stale guidance is worse than no guidance.
+
 ## Project Overview
 
 A Django REST Framework backend for a course marketplace platform (Coursera-like). Users can be learners, instructors, partner institutions, or admins. Instructors create courses with mixed content (lectures, quizzes, coding exercises), upload videos that are async-transcoded to HLS, and must pass identity verification before publishing.
@@ -78,7 +80,7 @@ The `SectionContent` model (in `courses/`) is the **single source of truth for o
 
 Custom DRF permission classes used across views:
 
-- `IsAdminUser` — `is_staff` or `user_type == admin`; used by admin-only actions like course review
+- `IsPlatformAdmin` — `is_staff` or `user_type == admin`; used by admin-only actions like course review
 - `IsEmailVerified` — gates most authenticated endpoints
 - `IsInstructorUser` — `user_type == instructor`
 - `IsVerifiedInstructor` — instructor with approved `IdentityVerification`
@@ -121,6 +123,14 @@ Do not duplicate these in individual apps. If you find yourself writing a permis
 - Tokens returned as JSON body **and** optionally as HttpOnly cookies (see `authentication/utils/cookie_helpers.py`)
 - Token refresh: `POST /api/v1/auth/token/refresh/`
 - OAuth: authorization-code flow for Google and LinkedIn; callback URLs configured via env vars
+
+### View-Layer Helpers (courses/utils.py)
+
+Reusable view-layer helpers that are not business logic and not DRF permissions belong in `courses/utils.py`. Do **not** define the same helper function in multiple `all_views/` modules — if two views need the same guard, response builder, or inline utility, extract it once and import it everywhere.
+
+Example: `guard_editable(course)` in `courses/utils.py` is imported by `course_views.py`, `content_views.py`, `coding_views.py`, and `assignment_views.py`. A single definition means a single place to change the message or status code.
+
+Rule of thumb: if you copy-paste a function between view files, stop and move it to `courses/utils.py` instead.
 
 ### View File Convention
 
@@ -251,6 +261,26 @@ except NidusCourse.DoesNotExist:
     return Response(
         {'success': False, 'message': 'Course not found.'},
         status=status.HTTP_404_NOT_FOUND,
+    )
+```
+
+**Domain `ValidationError` from state machines** (e.g. `transition_to()`) raises two forms — handle them differently:
+
+- `message_dict` present → field-level constraint violation → **400** with `errors`
+- plain string → state-machine / business-rule violation → **422** (no `errors` key)
+
+Use `e.messages[0]` (always a safe string) instead of `str(e.message)` (can render as a list repr).
+
+```python
+except ValidationError as e:
+    if hasattr(e, 'message_dict'):
+        return Response(
+            {'success': False, 'message': 'Action failed.', 'errors': e.message_dict},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+    return Response(
+        {'success': False, 'message': e.messages[0]},
+        status=status.HTTP_422_UNPROCESSABLE_ENTITY,
     )
 ```
 

@@ -8,7 +8,7 @@ from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
-from core.permissions import IsAdminUser, IsEmailVerified, IsVerifiedInstructor
+from core.permissions import IsPlatformAdmin, IsEmailVerified, IsVerifiedInstructor
 from courses.models import NidusCourse
 from courses.serializers import NidusCourseSerializer
 
@@ -32,15 +32,14 @@ class CourseSubmitForReviewView(APIView):
         try:
             course.transition_to('under_review')
         except ValidationError as e:
-            # ValidationError.message_dict for field errors, .message for string errors
             if hasattr(e, 'message_dict'):
                 return Response(
                     {'success': False, 'message': 'Course is not ready for submission.', 'errors': e.message_dict},
                     status=status.HTTP_400_BAD_REQUEST,
                 )
             return Response(
-                {'success': False, 'message': str(e.message)},
-                status=status.HTTP_400_BAD_REQUEST,
+                {'success': False, 'message': e.messages[0]},
+                status=status.HTTP_422_UNPROCESSABLE_ENTITY,
             )
 
         return Response(
@@ -61,7 +60,7 @@ class CourseAdminReviewView(APIView):
     Body: {"action": "approve"} or {"action": "reject", "rejection_reason": "..."}
     """
 
-    permission_classes = [IsAuthenticated, IsEmailVerified, IsAdminUser]
+    permission_classes = [IsAuthenticated, IsEmailVerified, IsPlatformAdmin]
     parser_classes = [JSONParser, FormParser, MultiPartParser]
 
     def post(self, request, pk):
@@ -90,8 +89,8 @@ class CourseAdminReviewView(APIView):
                     status=status.HTTP_400_BAD_REQUEST,
                 )
             return Response(
-                {'success': False, 'message': str(e.message)},
-                status=status.HTTP_400_BAD_REQUEST,
+                {'success': False, 'message': e.messages[0]},
+                status=status.HTTP_422_UNPROCESSABLE_ENTITY,
             )
 
         message = (
@@ -131,8 +130,8 @@ class CourseReworkView(APIView):
                     status=status.HTTP_400_BAD_REQUEST,
                 )
             return Response(
-                {'success': False, 'message': str(e.message)},
-                status=status.HTTP_400_BAD_REQUEST,
+                {'success': False, 'message': e.messages[0]},
+                status=status.HTTP_422_UNPROCESSABLE_ENTITY,
             )
 
         return Response(
@@ -170,8 +169,8 @@ class CourseArchiveView(APIView):
                     status=status.HTTP_400_BAD_REQUEST,
                 )
             return Response(
-                {'success': False, 'message': str(e.message)},
-                status=status.HTTP_400_BAD_REQUEST,
+                {'success': False, 'message': e.messages[0]},
+                status=status.HTTP_422_UNPROCESSABLE_ENTITY,
             )
 
         return Response(
@@ -209,8 +208,8 @@ class CourseRestoreView(APIView):
                     status=status.HTTP_400_BAD_REQUEST,
                 )
             return Response(
-                {'success': False, 'message': str(e.message)},
-                status=status.HTTP_400_BAD_REQUEST,
+                {'success': False, 'message': e.messages[0]},
+                status=status.HTTP_422_UNPROCESSABLE_ENTITY,
             )
 
         return Response(

@@ -8,6 +8,7 @@ from rest_framework.response import Response
 from rest_framework.views import APIView
 
 from core.pagination import StandardResultsSetPagination
+from core.permissions import IsEmailVerified, IsPlatformAdmin
 from id_verification.models import IdentityVerification
 from id_verification.serializers import (
     AdminReviewSerializer,
@@ -26,27 +27,14 @@ ACTION_TO_STATUS = {
 }
 
 
-def _require_admin(request):
-    if not request.user.is_staff:
-        return Response(
-            {'success': False, 'message': 'Admin access required.'},
-            status=status.HTTP_403_FORBIDDEN,
-        )
-    return None
-
-
 class AdminVerificationListView(APIView):
     """
     GET → Admin lists all verification requests.
     Supports ?status= filter and pagination.
     """
-    permission_classes = [IsAuthenticated]
+    permission_classes = [IsAuthenticated, IsEmailVerified, IsPlatformAdmin]
 
     def get(self, request):
-        err = _require_admin(request)
-        if err:
-            return err
-
         queryset = IdentityVerification.objects.select_related('user').all()
         status_filter = request.query_params.get('status')
         if status_filter:
@@ -67,13 +55,9 @@ class AdminVerificationDetailView(APIView):
     """
     GET → Admin views full detail of a verification request.
     """
-    permission_classes = [IsAuthenticated]
+    permission_classes = [IsAuthenticated, IsEmailVerified, IsPlatformAdmin]
 
     def get(self, request, pk):
-        err = _require_admin(request)
-        if err:
-            return err
-
         verification = get_object_or_404(
             IdentityVerification.objects.select_related('user', 'reviewed_by'),
             pk=pk,
@@ -91,13 +75,9 @@ class AdminVerificationReviewView(APIView):
 
     Actions: pick_up, approve, reject, request_action, expire.
     """
-    permission_classes = [IsAuthenticated]
+    permission_classes = [IsAuthenticated, IsEmailVerified, IsPlatformAdmin]
 
     def post(self, request, pk):
-        err = _require_admin(request)
-        if err:
-            return err
-
         verification = get_object_or_404(IdentityVerification, pk=pk)
         serializer = AdminReviewSerializer(data=request.data)
         if not serializer.is_valid():
@@ -121,9 +101,14 @@ class AdminVerificationReviewView(APIView):
                 admin_notes=admin_notes,
             )
         except ValidationError as e:
+            if hasattr(e, 'message_dict'):
+                return Response(
+                    {'success': False, 'message': 'Action failed.', 'errors': e.message_dict},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
             return Response(
-                {'success': False, 'message': 'Action failed.', 'errors': e.message_dict if hasattr(e, 'message_dict') else {'detail': e.messages}},
-                status=status.HTTP_400_BAD_REQUEST,
+                {'success': False, 'message': e.messages[0]},
+                status=status.HTTP_422_UNPROCESSABLE_ENTITY,
             )
         except Exception:
             logger.exception('Unexpected error during verification transition pk=%s', pk)

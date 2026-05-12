@@ -59,7 +59,7 @@ python manage.py reindex_section_content_positions --dry-run
 
 ### Course Content Ordering: SectionContent
 
-The `SectionContent` model (in `courses/`) is the **single source of truth for ordering** within a section. It holds a `GenericForeignKey` that points to a `Lecture`, `Quiz`, or `CodingExercise`. When adding new content types, create the model and then create a `SectionContent` row linking it into the section — do not add ordering directly to content models. Each content model must have a `GenericRelation` to `SectionContent` so that deleting the object cascades and removes its curriculum slot automatically. Reordering logic lives in `courses/services.py` → `reorder_section_content()`.
+The `SectionContent` model (in `courses/`) is the **single source of truth for ordering** within a section. It holds a `GenericForeignKey` that points to a `Lecture`, `Quiz`, or `CodingExercise`. When adding new content types, create the model and then create a `SectionContent` row linking it into the section — do not add ordering directly to content models. Each content model must have a `GenericRelation` to `SectionContent` so that deleting the object cascades and removes its curriculum slot automatically. Reordering logic lives in `courses/services/section_service.py` → `reorder_section_content()`.
 
 ### Video Pipeline
 
@@ -140,7 +140,7 @@ Each app uses an `all_views/` subdirectory for the actual view implementations. 
 
 ### Serializers
 
-Business logic (cross-model validation, service calls) lives in `courses/services.py` and `authentication/services/`, not in serializers. Serializers handle shape and field-level validation only.
+Business logic (cross-model validation, service calls) lives in `courses/services/` (split into `section_service.py` and `assignment_service.py`, re-exported via `__init__.py`) and `authentication/services/`, not in serializers. Serializers handle shape and field-level validation only.
 
 ### Response Format
 

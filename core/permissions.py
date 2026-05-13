@@ -81,3 +81,13 @@ class IsCourseInstructor(BasePermission):
         if not user or not user.is_authenticated:
             return False
         return obj.instructors.filter(pk=user.pk).exists()
+
+
+class IsLearnerUser(BasePermission):
+    """Allow access only to learner accounts."""
+
+    message = 'Only learners can access this resource.'
+
+    def has_permission(self, request, view):
+        user = request.user
+        return bool(user and user.is_authenticated and user.user_type == 'learner')

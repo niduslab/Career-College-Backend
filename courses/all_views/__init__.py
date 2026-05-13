@@ -24,6 +24,14 @@ from courses.all_views.status_views import (
     CourseReworkView,
     CourseSubmitForReviewView,
 )
+from courses.all_views.enrollment_views import (
+    CatalogCourseDetailView,
+    CatalogCourseListView,
+    CourseEnrollView,
+    CourseUnenrollView,
+    MyCoursesDetailView,
+    MyCoursesListView,
+)
 from courses.all_views.content_views import (
     CourseAudienceDetailAPIView,
     CourseAudienceListCreateAPIView,
@@ -82,4 +90,10 @@ __all__ = [
     'CourseReworkView',
     'CourseArchiveView',
     'CourseRestoreView',
+    'CatalogCourseListView',
+    'CatalogCourseDetailView',
+    'CourseEnrollView',
+    'CourseUnenrollView',
+    'MyCoursesListView',
+    'MyCoursesDetailView',
 ]

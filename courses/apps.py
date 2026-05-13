@@ -5,3 +5,6 @@ class CoursesConfig(AppConfig):
     default_auto_field = 'django.db.models.BigAutoField'
     name = 'courses'
     verbose_name = 'Courses'
+
+    def ready(self):
+        import courses.signals  # noqa: F401

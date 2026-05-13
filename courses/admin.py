@@ -9,6 +9,7 @@ from courses.models import (
     CourseLearningObjective,
     CoursePreRequisite,
     CourseSection,
+    Enrollment,
     Lecture,
     NidusCourse,
     Quiz,
@@ -157,6 +158,27 @@ class WatchProgressAdmin(admin.ModelAdmin):
     list_filter = ('is_completed',)
     search_fields = ('user__email', 'user__full_name', 'lecture__title')
     ordering = ('-last_watched_at',)
+
+
+@admin.register(Enrollment)
+class EnrollmentAdmin(admin.ModelAdmin):
+    list_display = (
+        'id',
+        'user',
+        'course',
+        'enrollment_type',
+        'is_active',
+        'progress_percent',
+        'completed_at',
+        'last_accessed_at',
+        'created_at',
+    )
+    list_filter = ('is_active', 'enrollment_type', 'completed_at')
+    search_fields = ('user__email', 'user__full_name', 'course__title', 'course__slug')
+    raw_id_fields = ('user', 'course')
+    readonly_fields = ('created_at', 'updated_at')
+    ordering = ('-created_at',)
+
 
 @admin.register(Quiz)
 class QuizAdmin(admin.ModelAdmin):

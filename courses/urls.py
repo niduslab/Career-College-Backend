@@ -6,6 +6,8 @@ from courses.views import (
     AssignmentQuestionDetailAPIView,
     AssignmentQuestionListCreateAPIView,
     AssignmentQuestionReorderAPIView,
+    CatalogCourseDetailView,
+    CatalogCourseListView,
     CodingExerciseDetailAPIView,
     CodingExerciseLanguageConfigDetailAPIView,
     CodingExerciseLanguageConfigListCreateAPIView,
@@ -18,6 +20,7 @@ from courses.views import (
     CourseAudienceListCreateAPIView,
     CourseCreateAPIView,
     CourseDetailView,
+    CourseEnrollView,
     CourseLearningObjectiveDetailAPIView,
     CourseLearningObjectiveListCreateAPIView,
     CourseListAPIView,
@@ -28,8 +31,11 @@ from courses.views import (
     CourseSectionDetailAPIView,
     CourseSectionListAPIView,
     CourseSubmitForReviewView,
+    CourseUnenrollView,
     LectureDetailAPIView,
     LectureListAPIView,
+    MyCoursesDetailView,
+    MyCoursesListView,
     QuizAnswerDetailAPIView,
     QuizAnswerListCreateAPIView,
     QuizDetailAPIView,
@@ -43,7 +49,21 @@ app_name = 'courses'
 
 urlpatterns = [
     # -------------------------------------------------------------------------
-    # Courses
+    # Public catalog (no auth required)
+    # -------------------------------------------------------------------------
+    path('catalog/', CatalogCourseListView.as_view(), name='catalog-list'),
+    path('catalog/<slug:slug>/', CatalogCourseDetailView.as_view(), name='catalog-detail'),
+
+    # -------------------------------------------------------------------------
+    # Enrollment (authenticated learner)
+    # -------------------------------------------------------------------------
+    path('<slug:slug>/enroll/', CourseEnrollView.as_view(), name='course-enroll'),
+    path('<slug:slug>/unenroll/', CourseUnenrollView.as_view(), name='course-unenroll'),
+    path('my-courses/', MyCoursesListView.as_view(), name='my-courses-list'),
+    path('my-courses/<slug:slug>/', MyCoursesDetailView.as_view(), name='my-courses-detail'),
+
+    # -------------------------------------------------------------------------
+    # Instructor course management
     # -------------------------------------------------------------------------
     path('', CourseListAPIView.as_view(), name='course-list'),
     path('create/', CourseCreateAPIView.as_view(), name='course-create'),

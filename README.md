@@ -24,7 +24,7 @@ A Django REST Framework backend for a course marketplace platform. Instructors c
 | App | URL prefix | Responsibility |
 |-----|-----------|----------------|
 | `authentication` | `/api/v1/auth/` | Registration, OTP, JWT, OAuth (Google/LinkedIn), profiles |
-| `courses` | `/api/v1/courses/` | Course authoring, curriculum, lectures, video pipeline, quizzes, coding exercises, assignments |
+| `courses` | `/api/v1/courses/` | Public catalog, learner enrollment, my-courses dashboard, plus instructor course authoring/curriculum |
 | `id_verification` | `/api/v1/verification/` | Instructor identity verification state machine |
 | `core` | — | Shared permissions, pagination, middleware |
 
@@ -248,6 +248,14 @@ PATCH /api/v1/courses/contents/{content_id}/reorder/   body: {"position": N}
 
 Submit runs a completeness check: title + description present, at least one section, every section has content, all videos are `ready`, every quiz has questions with at least one correct answer each.
 
+### 6. Learner enrollment and access
+
+1. Public users browse `GET /api/v1/courses/catalog/` and `GET /api/v1/courses/catalog/{slug}/`.
+2. Authenticated learners enroll via `POST /api/v1/courses/{slug}/enroll/`.
+3. Enrollments are unique per learner+course; re-enrolling reactivates the existing record.
+4. Learners can view progress via `GET /api/v1/courses/my-courses/` and `GET /api/v1/courses/my-courses/{slug}/`.
+5. Learners can soft-unenroll via `POST /api/v1/courses/{slug}/unenroll/`; progress stays preserved.
+
 ---
 
 ## API Endpoints
@@ -315,6 +323,22 @@ All authenticated endpoints require: `Authorization: Bearer <access_token>`
 ---
 
 ### Courses — `/api/v1/courses/`
+
+#### Public Catalog
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| GET | `catalog/` | List published courses (public) |
+| GET | `catalog/{slug}/` | Published course detail (public) |
+
+#### Learner Enrollment and Dashboard
+
+| Method | Endpoint | Auth | Description |
+|--------|----------|------|-------------|
+| POST | `{slug}/enroll/` | Learner | Enroll in a published course (or reactivate prior enrollment) |
+| POST | `{slug}/unenroll/` | Learner | Soft-unenroll while preserving progress |
+| GET | `my-courses/` | Learner | List active enrollments with progress |
+| GET | `my-courses/{slug}/` | Learner | Enrollment detail for a single course |
 
 #### Course CRUD
 
@@ -505,24 +529,26 @@ career_college_backend/
 │   ├── serializers.py
 │   ├── signals.py                 Auto-create profile on user creation
 │   └── services/                  OAuth provisioning helpers
-├── courses/                       Course authoring app
+├── courses/                       Course and enrollment app
 │   ├── all_views/
 │   │   ├── course_views.py        Course list / create / detail
 │   │   ├── status_views.py        Submit / review / rework / archive
 │   │   ├── content_views.py       Sections, SectionContent, lectures, quizzes
 │   │   ├── assignment_views.py    Assignments and questions
-│   │   └── coding_views.py        Coding exercises, language configs, test cases
-│   ├── models.py                  All course domain models + status state machine
-│   ├── serializers.py
-│   ├── services.py                Curriculum ordering, video pipeline helpers
+│   │   ├── coding_views.py        Coding exercises, language configs, test cases
+│   │   └── enrollment_views.py    Public catalog, enroll/unenroll, my-courses dashboard
+│   ├── all_models/                Course and enrollment domain models
+│   ├── all_serializers/           Modular serializers by feature
+│   ├── services/                  Curriculum, video, and enrollment service helpers
 │   ├── selectors.py               Reusable query helpers
+│   ├── signals.py                 Domain event hooks (enrollment progress updates)
 │   ├── tasks.py                   Celery tasks (video transcoding)
 │   ├── transcoding.py             FFmpeg transcoding routines
 │   └── management/commands/
 │       └── seed_course_categories.py
 ├── id_verification/               Identity verification workflow
 ├── core/                          Shared: permissions, pagination, middleware
-├── docs/architecture/             11 architecture design documents
+├── docs/architecture/             13 architecture design documents
 ├── templates/                     Email templates
 ├── manage.py
 ├── requirements.txt
@@ -542,7 +568,8 @@ career_college_backend/
 - **Status transitions** — `NidusCourse.transition_to()` is the only entry point for status changes. Never set `status` directly on a course instance.
 - **Video pipeline** — raw upload → Celery → FFmpeg → 5 HLS renditions. `VideoAsset.status` tracks progress. Only one active asset per lecture at a time.
 - **Identity verification** — instructors must have `InstructorProfile.is_verified = True` before any course authoring endpoint is accessible (`IsVerifiedInstructor` permission).
-- **Permissions** — all custom permission classes live in `core/permissions.py`. Never define them inside app directories.
+- **Enrollment** — `Enrollment` enforces one record per learner/course, supports soft-unenroll (`is_active=False`), and stores denormalized `progress_percent` for dashboard performance.
+- **Permissions** — all custom permission classes live in `core/permissions.py`. Never define them inside app directories. `IsLearnerUser` gates learner-only enrollment/dashboard endpoints.
 - **`solution_code`** on `CodingExerciseLanguageConfig` and **`model_answer`** on `AssignmentQuestion` are instructor-only and must never appear in learner-facing serializers.
 - **Hidden test cases** (`CodingTestCase.is_hidden = True`) are for grading only and must never be returned to learners.
 
@@ -555,5 +582,5 @@ career_college_backend/
 | [POSTMAN_TESTING_GUIDE.md](POSTMAN_TESTING_GUIDE.md) | Auth and profile API testing |
 | [COURSES_API_TESTING_GUIDE.md](COURSES_API_TESTING_GUIDE.md) | Courses, quizzes, coding exercises, assignments API testing |
 | [FRONTEND_ERROR_RESPONSE_FORMAT.md](FRONTEND_ERROR_RESPONSE_FORMAT.md) | Error response shape spec |
-| [docs/architecture/](docs/architecture/) | 11 architecture design documents |
+| [docs/architecture/](docs/architecture/) | 13 architecture design documents |
 | [CLAUDE.md](CLAUDE.md) | AI assistant coding instructions |

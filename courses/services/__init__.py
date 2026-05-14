@@ -16,6 +16,14 @@ from courses.services.assignment_service import (
     update_assignment,
     update_question,
 )
+from courses.services.enrollment_service import (
+    enroll_learner,
+    get_catalog_courses,
+    get_learner_enrollments,
+    recalculate_progress,
+    unenroll_learner,
+    update_last_accessed,
+)
 
 __all__ = [
     'create_section_content_for_object',
@@ -32,4 +40,10 @@ __all__ = [
     'reorder_questions',
     'update_assignment',
     'update_question',
+    'enroll_learner',
+    'get_catalog_courses',
+    'get_learner_enrollments',
+    'recalculate_progress',
+    'unenroll_learner',
+    'update_last_accessed',
 ]

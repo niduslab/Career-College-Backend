@@ -2,7 +2,7 @@ import logging
 
 from django.core.exceptions import ValidationError
 from django.db import IntegrityError, transaction
-from django.db.models import QuerySet
+from django.db.models import F, QuerySet
 from django.utils import timezone
 
 from courses.models import Enrollment, NidusCourse, SectionContent, WatchProgress
@@ -16,13 +16,7 @@ def get_catalog_courses() -> QuerySet[NidusCourse]:
         NidusCourse.objects
         .filter(is_published=True)
         .select_related('created_by', 'category')
-        .prefetch_related(
-            'instructors',
-            'partner_institutions',
-            'learning_objectives',
-            'prerequisites',
-            'audiences',
-        )
+        .prefetch_related('instructors')
         .order_by('-published_at')
     )
 
@@ -34,7 +28,7 @@ def get_learner_enrollments(user) -> QuerySet[Enrollment]:
         .filter(user=user, is_active=True)
         .select_related('course__created_by', 'course__category')
         .prefetch_related('course__instructors')
-        .order_by('-last_accessed_at', '-created_at')
+        .order_by(F('last_accessed_at').desc(nulls_last=True), '-created_at')
     )
 
 
@@ -109,11 +103,14 @@ def recalculate_progress(enrollment: Enrollment) -> Enrollment:
     """
     Recompute ``progress_percent`` from the actual content completion data.
 
-    Formula: (completed content items / total content items) * 100
-    Currently counts completed lectures (via WatchProgress).
+    Formula: (completed lectures / total lectures) * 100
+    Only lecture slots are counted until quiz/assignment completion signals exist.
     """
     course = enrollment.course
-    total_items = SectionContent.objects.filter(section__course=course).count()
+    total_items = SectionContent.objects.filter(
+        section__course=course,
+        item_type=SectionContent.ItemType.LECTURE,
+    ).count()
 
     if total_items == 0:
         enrollment.progress_percent = 0
@@ -146,6 +143,7 @@ def update_last_accessed(enrollment: Enrollment):
     now = timezone.now()
     Enrollment.objects.filter(pk=enrollment.pk).update(
         last_accessed_at=now,
+        updated_at=now,
     )
     enrollment.last_accessed_at = now
     return now

@@ -128,6 +128,9 @@ class Lecture(TimestampedModel):
     stream_master_playlist = models.CharField(max_length=500, blank=True, default='')
     stream_renditions = models.JSONField(default=list, blank=True)
     transcoding_error = models.TextField(blank=True, default='')
+    # Marketing flag: when True, the lecture's video playlist is exposed in the
+    # public catalog detail so unenrolled visitors can preview it before buying.
+    is_preview = models.BooleanField(default=False, db_index=True)
     # Cascade-deletes SectionContent rows when this lecture is deleted.
     section_content = GenericRelation(
         SectionContent,

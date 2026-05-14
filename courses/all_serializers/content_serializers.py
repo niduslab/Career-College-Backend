@@ -92,7 +92,7 @@ class LectureSerializer(serializers.ModelSerializer):
         model = Lecture
         fields = [
             'id', 'section_id', 'title',
-            'content_type', 'article_content',
+            'content_type', 'article_content', 'is_preview',
             'stream_master_playlist', 'stream_renditions', 'transcoding_error',
             'active_video_asset', 'created_at', 'updated_at',
         ]
@@ -119,7 +119,7 @@ class LectureCreateUpdateSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = Lecture
-        fields = ['title', 'content_type', 'article_content', 'video_file']
+        fields = ['title', 'content_type', 'article_content', 'is_preview', 'video_file']
 
     def validate_title(self, value):
         title = value.strip()

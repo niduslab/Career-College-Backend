@@ -24,6 +24,10 @@ from courses.services.enrollment_service import (
     unenroll_learner,
     update_last_accessed,
 )
+from courses.services.curriculum_service import (
+    load_catalog_curriculum,
+    load_consumption_curriculum,
+)
 
 __all__ = [
     'create_section_content_for_object',
@@ -46,4 +50,6 @@ __all__ = [
     'recalculate_progress',
     'unenroll_learner',
     'update_last_accessed',
+    'load_catalog_curriculum',
+    'load_consumption_curriculum',
 ]

@@ -185,7 +185,7 @@ class EnrollmentAPITests(APITestCase):
         )
 
         self.assertEqual(response.status_code, status.HTTP_200_OK)
-        self.assertIsNotNone(response.data['data']['last_accessed_at'])
+        self.assertIsNotNone(response.data['data']['enrollment']['last_accessed_at'])
         enrollment = Enrollment.objects.get(user=self.learner, course=self.published_course)
         self.assertIsNotNone(enrollment.last_accessed_at)
 

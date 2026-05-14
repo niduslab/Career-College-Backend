@@ -43,7 +43,7 @@ A Django REST Framework backend for a course marketplace platform. Instructors c
 
 ```powershell
 git clone <repo-url>
-cd career_college_backend
+cd Career-College-Backend
 
 python -m venv .venv
 .\.venv\Scripts\Activate.ps1   # Windows PowerShell

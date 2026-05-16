@@ -343,7 +343,15 @@ class SectionContentListCreateAPIView(APIView):
         return self._create_coding_exercise(request, section, position)
 
     def _create_lecture(self, request, section, position):
-        serializer = LectureCreateUpdateSerializer(data=request.data, context={'section': section})
+        # item_type and position are wrapper fields for the /contents/ route,
+        # already consumed by post() above. Strip them so the lecture serializer's
+        # strict unknown-field check only flags fields actually meant for the lecture.
+        data = {
+            key: request.data.get(key)
+            for key in request.data.keys()
+            if key not in {'item_type', 'position'}
+        }
+        serializer = LectureCreateUpdateSerializer(data=data, context={'section': section})
         if not serializer.is_valid():
             return Response(
                 {'success': False, 'message': 'Validation failed.', 'errors': serializer.errors},
@@ -356,8 +364,13 @@ class SectionContentListCreateAPIView(APIView):
                     section, lecture, SectionContent.ItemType.LECTURE, position
                 )
         except IntegrityError:
+            if position is not None and SectionContent.objects.filter(section=section, position=position).exists():
+                return Response(
+                    {'success': False, 'message': 'A content item already exists at that position.'},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
             return Response(
-                {'success': False, 'message': 'A content item already exists at that position.'},
+                {'success': False, 'message': 'Could not create lecture due to a data constraint violation.'},
                 status=status.HTTP_400_BAD_REQUEST,
             )
         except ValueError as exc:

@@ -199,7 +199,7 @@ class EnrollmentAPITests(APITestCase):
         lecture = Lecture.objects.create(
             section=section,
             title='Progress Lecture',
-            content_type=Lecture.ContentType.ARTICLE,
+            lecture_type=Lecture.LectureType.ARTICLE,
             article_content='Complete me.',
         )
         SectionContent.objects.create(

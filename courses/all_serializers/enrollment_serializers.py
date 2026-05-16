@@ -70,11 +70,11 @@ class _CatalogCurriculumItemSerializer(serializers.Serializer):
             payload = {
                 'id': lecture.id,
                 'title': lecture.title,
-                'content_type': lecture.content_type,
+                'lecture_type': lecture.lecture_type,
                 'is_preview': lecture.is_preview,
                 'duration_seconds': lecture_durations.get(lecture.id),
             }
-            if lecture.is_preview and lecture.content_type == Lecture.ContentType.VIDEO:
+            if lecture.is_preview and lecture.lecture_type == Lecture.LectureType.VIDEO:
                 payload['preview_video_url'] = _normalize_media_relative_path(
                     lecture.stream_master_playlist
                 )
@@ -219,7 +219,7 @@ class _ConsumptionLectureSerializer(serializers.Serializer):
 
     id = serializers.IntegerField()
     title = serializers.CharField()
-    content_type = serializers.CharField()
+    lecture_type = serializers.CharField()
     is_preview = serializers.BooleanField()
     article_content = serializers.CharField()
     stream_master_playlist = serializers.SerializerMethodField()

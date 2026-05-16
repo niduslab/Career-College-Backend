@@ -361,7 +361,7 @@ All lectures, quizzes, coding exercises, and assignments must be created through
 {
   "item_type": "lecture",
   "title": "REST Fundamentals",
-  "content_type": "article",
+  "lecture_type": "article",
   "article_content": "HTTP methods, status codes, and API design basics.",
   "position": 1
 }
@@ -381,7 +381,7 @@ All lectures, quizzes, coding exercises, and assignments must be created through
     "content": {
       "id": 301,
       "title": "REST Fundamentals",
-      "content_type": "article"
+      "lecture_type": "article"
     }
   }
 }
@@ -394,7 +394,7 @@ All lectures, quizzes, coding exercises, and assignments must be created through
 - Body type: `form-data`
   - `item_type` = `lecture`
   - `title` = `Intro Video`
-  - `content_type` = `video`
+  - `lecture_type` = `video`
   - `video_file` = (select file)
   - `position` = `2` (optional)
 - Expected status: `201`

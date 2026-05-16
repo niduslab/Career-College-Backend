@@ -65,7 +65,7 @@ class CourseLifecycleTestBase(APITestCase):
         cls.lecture = Lecture.objects.create(
             section=cls.section,
             title='Article Lecture',
-            content_type=Lecture.ContentType.ARTICLE,
+            lecture_type=Lecture.LectureType.ARTICLE,
             article_content='Enough content to pass validation.',
         )
         SectionContent.objects.create(
@@ -148,7 +148,7 @@ class CourseSubmitTests(CourseLifecycleTestBase):
         lec = Lecture.objects.create(
             section=sec,
             title='L',
-            content_type=Lecture.ContentType.ARTICLE,
+            lecture_type=Lecture.LectureType.ARTICLE,
             article_content='content',
         )
         SectionContent.objects.create(
@@ -379,7 +379,7 @@ class CourseEditLockTests(CourseLifecycleTestBase):
             {
                 'item_type': 'lecture',
                 'title': 'New Lecture',
-                'content_type': 'article',
+                'lecture_type': 'article',
                 'article_content': 'Some content here.',
             },
             format='json',

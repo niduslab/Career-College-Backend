@@ -92,7 +92,7 @@ def load_catalog_curriculum(course) -> dict:
     if ids_by_type[SectionContent.ItemType.LECTURE]:
         # Only the fields the catalog serializer reads.
         for lec in Lecture.objects.filter(id__in=ids_by_type[SectionContent.ItemType.LECTURE]).only(
-            'id', 'title', 'content_type', 'is_preview',
+            'id', 'title', 'lecture_type', 'is_preview',
             'stream_master_playlist', 'stream_renditions',
         ):
             lectures[lec.id] = lec

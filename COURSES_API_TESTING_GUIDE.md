@@ -1,5 +1,24 @@
 # Courses and Quizzes API Testing Guide (Postman)
 
+## Table of Contents
+
+1. [Base URLs](#1-base-urls)
+2. [Prerequisites](#2-prerequisites)
+3. [Postman Environment Variables](#3-postman-environment-variables)
+4. [Required Headers](#4-required-headers)
+5. [Course API Flow (with demo data)](#5-course-api-flow-with-demo-data)
+6. [Course Metadata: Learning Objectives, Prerequisites, Audiences](#6-course-metadata-learning-objectives-prerequisites-audiences)
+7. [Section API Flow](#7-section-api-flow)
+8. [Section Content API (the only creation path for all content)](#8-section-content-api-the-only-creation-path-for-all-content)
+9. [Lecture Endpoints (read / update / delete)](#9-lecture-endpoints-read--update--delete)
+10. [Quiz API Flow](#10-quiz-api-flow)
+11. [Assignment API Flow](#11-assignment-api-flow)
+12. [Coding Exercise API Flow](#12-coding-exercise-api-flow)
+13. [Course Status Transitions](#13-course-status-transitions)
+14. [Common Error Responses You Should Test](#14-common-error-responses-you-should-test)
+15. [Quick Manual End-to-End Scenario](#15-quick-manual-end-to-end-scenario)
+16. [Notes](#16-notes)
+
 ## 1) Base URLs
 - Courses base: `http://127.0.0.1:8000/api/v1/courses`
 - Auth base: `http://127.0.0.1:8000/api/v1/auth`
@@ -42,6 +61,9 @@ config_id=
 tc_id=
 assignment_id=
 aq_id=
+objective_id=
+prerequisite_id=
+audience_id=
 ```
 
 ## 4) Required Headers
@@ -103,104 +125,204 @@ Content-Type: application/json
 }
 ```
 - Expected status: `200`
-- Note: `status` and `rejection_reason` are not writable via PATCH. Use the dedicated transition endpoints below.
+- Note: `status` and `rejection_reason` are not writable via PATCH. Use the dedicated transition endpoints in section 13.
 
-## 5.5 Course Status Transitions
+## 6) Course Metadata: Learning Objectives, Prerequisites, Audiences
 
-### 5.5.1 Submit Course for Review (Instructor)
+These three resources share an identical contract — same fields, same response shape, same ownership and editable-state rules. Only the URL segment changes:
+
+| Resource | List/Create URL | Detail URL |
+|---|---|---|
+| Learning objectives | `{{base_url}}/{{course_id}}/learning-objectives/` | `{{base_url}}/learning-objectives/{{objective_id}}/` |
+| Prerequisites | `{{base_url}}/{{course_id}}/prerequisites/` | `{{base_url}}/prerequisites/{{prerequisite_id}}/` |
+| Audiences | `{{base_url}}/{{course_id}}/audiences/` | `{{base_url}}/audiences/{{audience_id}}/` |
+
+**Common rules:**
+- All write actions require an authenticated JWT for an instructor who is in `course.instructors`. Non-owners get `404` (not `403`), so the existence of the course/item is not leaked.
+- Writes (`POST`, `PATCH`, `PUT`, `DELETE`) only succeed while the course is editable (`draft` or `rejected`). On `published` / `under_review` / `archived`, writes return the `guard_editable` error.
+- Each item has one unique constraint per course: `(course, text)`. Submitting duplicate text returns `400` with `"<Resource> already exists for this course."`
+- List results are ordered by `display_order, id`. Supports `?ordering=display_order` and `?ordering=-display_order`.
+
+The examples below use **learning objectives**; substitute the URL segment to test prerequisites and audiences.
+
+### 6.1 Create a Learning Objective
 - Method: `POST`
-- URL: `{{base_url}}/{{course_id}}/submit/`
-- Body: _(none required)_
-- Headers: verified instructor JWT
-- Expected status: `200`
-- Expected response:
-```json
-{
-  "success": true,
-  "message": "Course submitted for review.",
-  "data": { "id": 101, "status": "under_review" }
-}
-```
-- Will return `400` with an `errors` dict if completeness checks fail (missing title/description, empty section, pending videos, incomplete quizzes).
-
-### 5.5.2 Admin Approve Course
-- Method: `POST`
-- URL: `{{base_url}}/{{course_id}}/review/`
-- Headers: admin JWT (`is_staff` or `user_type: admin`)
-- Body:
-```json
-{ "action": "approve" }
-```
-- Expected status: `200`
-- Expected response:
-```json
-{
-  "success": true,
-  "message": "Course approved successfully.",
-  "data": { "id": 101, "status": "published" }
-}
-```
-
-### 5.5.3 Admin Reject Course
-- Method: `POST`
-- URL: `{{base_url}}/{{course_id}}/review/`
-- Headers: admin JWT
+- URL: `{{base_url}}/{{course_id}}/learning-objectives/`
 - Body:
 ```json
 {
-  "action": "reject",
-  "rejection_reason": "Missing captions on lecture 3. Please add subtitles."
+  "text": "Design RESTful endpoints using Django REST Framework.",
+  "display_order": 1
 }
 ```
-- Expected status: `200`
-- `rejection_reason` is **required** when action is `reject`. Omitting it returns `400`.
+- Expected status: `201`
+- Expected response:
+```json
+{
+  "success": true,
+  "message": "Learning objective created successfully.",
+  "data": {
+    "id": 12,
+    "text": "Design RESTful endpoints using Django REST Framework.",
+    "display_order": 1
+  }
+}
+```
+- Save `data.id` as `objective_id`.
+- `display_order` is optional and defaults to `0`. `text` is required and trimmed; whitespace-only values are rejected.
 
-### 5.5.4 Instructor Rework a Rejected Course
-- Method: `POST`
-- URL: `{{base_url}}/{{course_id}}/rework/`
-- Headers: verified instructor JWT (must be assigned to the course)
-- Body: _(none required)_
+### 6.2 List Learning Objectives for a Course
+- Method: `GET`
+- URL: `{{base_url}}/{{course_id}}/learning-objectives/`
+- Optional query: `?ordering=display_order` or `?ordering=-display_order`
 - Expected status: `200`
 - Expected response:
 ```json
 {
   "success": true,
-  "message": "Course moved back to draft for reworking.",
-  "data": { "id": 101, "status": "draft" }
+  "data": [
+    { "id": 12, "text": "Design RESTful endpoints…", "display_order": 1 },
+    { "id": 13, "text": "Write integration tests for Django views.", "display_order": 2 }
+  ]
 }
 ```
-- Only works when current status is `rejected`. Any other status returns `400`.
 
-### 5.5.5 Archive a Published Course
-- Method: `POST`
-- URL: `{{base_url}}/{{course_id}}/archive/`
-- Headers: instructor or admin JWT
-- Body: _(none required)_
+### 6.3 Get a Single Learning Objective
+- Method: `GET`
+- URL: `{{base_url}}/learning-objectives/{{objective_id}}/`
+- Expected status: `200`
+
+### 6.4 Patch (Partial Update)
+- Method: `PATCH`
+- URL: `{{base_url}}/learning-objectives/{{objective_id}}/`
+- Body (any subset of `text`, `display_order`):
+```json
+{ "display_order": 3 }
+```
+- Expected status: `200`
+- Message: `"Learning objective updated successfully."`
+
+### 6.5 Put (Replace)
+- Method: `PUT`
+- URL: `{{base_url}}/learning-objectives/{{objective_id}}/`
+- Body (all writable fields):
+```json
+{
+  "text": "Design RESTful endpoints (revised).",
+  "display_order": 1
+}
+```
+- Expected status: `200`
+- Message: `"Learning objective replaced successfully."`
+
+### 6.6 Delete
+- Method: `DELETE`
+- URL: `{{base_url}}/learning-objectives/{{objective_id}}/`
 - Expected status: `200`
 - Expected response:
 ```json
 {
   "success": true,
-  "message": "Course archived successfully.",
-  "data": { "id": 101, "status": "archived" }
+  "message": "Learning objective deleted successfully."
 }
 ```
-- Only works when current status is `published`.
 
-### 5.5.6 Invalid Transition (error case)
-- Attempt to call `/submit/` on a course that is already `under_review`.
+### 6.7 Same Flow for Prerequisites
+- Create: `POST {{base_url}}/{{course_id}}/prerequisites/`
+```json
+{ "text": "Basic Python syntax and functions.", "display_order": 1 }
+```
+- List: `GET {{base_url}}/{{course_id}}/prerequisites/`
+- Detail / patch / put / delete: `{{base_url}}/prerequisites/{{prerequisite_id}}/`
+- Messages: `"Prerequisite created/updated/replaced/deleted successfully."`
+
+### 6.8 Same Flow for Audiences
+- Create: `POST {{base_url}}/{{course_id}}/audiences/`
+```json
+{ "text": "Backend developers transitioning to Django.", "display_order": 1 }
+```
+- List: `GET {{base_url}}/{{course_id}}/audiences/`
+- Detail / patch / put / delete: `{{base_url}}/audiences/{{audience_id}}/`
+- Messages: `"Audience created/updated/replaced/deleted successfully."`
+
+### 6.9 Validation & Error Cases
+
+**Empty / whitespace-only `text`**
+- Body: `{ "text": "   " }`
 - Expected status: `400`
 - Example response:
 ```json
 {
   "success": false,
-  "message": "Cannot transition from \"under_review\" to \"under_review\". Allowed: published, rejected."
+  "message": "Validation failed.",
+  "errors": { "text": ["Text cannot be empty."] }
 }
 ```
 
-## 6) Section API Flow
+**Missing `text` on create**
+- Body: `{ "display_order": 1 }`
+- Expected status: `400`
+- Example response:
+```json
+{
+  "success": false,
+  "message": "Validation failed.",
+  "errors": { "text": ["This field is required."] }
+}
+```
 
-### 6.1 Create Section
+**Duplicate `text` for the same course (unique constraint)**
+- POST the same `text` value twice under the same `course_id`.
+- Expected status: `400`
+- Example response (resource label varies):
+```json
+{
+  "success": false,
+  "message": "Learning objective already exists for this course."
+}
+```
+
+**Edit while course is not editable**
+- The course is `under_review`, `published`, or `archived`.
+- Any write (`POST`, `PATCH`, `PUT`, `DELETE`) is rejected by `guard_editable`.
+- Expected status: `422`
+- Example response:
+```json
+{
+  "success": false,
+  "message": "Course is not editable in its current status."
+}
+```
+
+**Non-owner instructor**
+- Authenticated as a verified instructor who is **not** in `course.instructors`.
+- Any method on the list or detail endpoint returns `404` (existence is not leaked).
+
+**Unauthenticated**
+- Omit the `Authorization` header on any endpoint.
+- Expected status: `401`.
+
+### 6.10 Bulk-Set via Course Update
+- The course create/update endpoints accept `learning_objectives`, `prerequisites`, and `audiences` as nested arrays. Supplying any of these on `PATCH {{base_url}}/{{course_id}}/` **replaces the entire set** for that course (delete + re-insert). Use the dedicated endpoints above for incremental edits.
+- Example body for `PATCH {{base_url}}/{{course_id}}/`:
+```json
+{
+  "learning_objectives": [
+    { "text": "Build production REST APIs.", "display_order": 1 },
+    { "text": "Containerize with Docker.", "display_order": 2 }
+  ],
+  "prerequisites": [
+    { "text": "Comfortable with Python.", "display_order": 1 }
+  ],
+  "audiences": [
+    { "text": "Backend engineers.", "display_order": 1 }
+  ]
+}
+```
+
+## 7) Section API Flow
+
+### 7.1 Create Section
 - Method: `POST`
 - URL: `{{base_url}}/{{course_id}}/sections/create/`
 - Body:
@@ -214,24 +336,24 @@ Content-Type: application/json
 - Expected status: `201`
 - Save `data.id` as `section_id`.
 
-### 6.2 List Sections
+### 7.2 List Sections
 - Method: `GET`
 - URL: `{{base_url}}/{{course_id}}/sections/`
 - Optional query params:
   - `ordering=position`
   - `ordering=-position`
 
-### 6.3 Get / Update / Delete Section
+### 7.3 Get / Update / Delete Section
 - `GET {{base_url}}/sections/{{section_id}}/`
 - `PATCH {{base_url}}/sections/{{section_id}}/`
 - `PUT {{base_url}}/sections/{{section_id}}/`
 - `DELETE {{base_url}}/sections/{{section_id}}/`
 
-## 7) Section Content API (the only creation path for all content)
+## 8) Section Content API (the only creation path for all content)
 
-All lectures, quizzes, and coding exercises must be created through this endpoint. There are no separate creation endpoints for individual content types.
+All lectures, quizzes, coding exercises, and assignments must be created through this endpoint. There are no separate creation endpoints for individual content types.
 
-### 7.1 Create Article Lecture
+### 8.1 Create Article Lecture
 - Method: `POST`
 - URL: `{{base_url}}/sections/{{section_id}}/contents/`
 - Body:
@@ -239,7 +361,7 @@ All lectures, quizzes, and coding exercises must be created through this endpoin
 {
   "item_type": "lecture",
   "title": "REST Fundamentals",
-  "content_type": "article",
+  "lecture_type": "article",
   "article_content": "HTTP methods, status codes, and API design basics.",
   "position": 1
 }
@@ -259,26 +381,26 @@ All lectures, quizzes, and coding exercises must be created through this endpoin
     "content": {
       "id": 301,
       "title": "REST Fundamentals",
-      "content_type": "article"
+      "lecture_type": "article"
     }
   }
 }
 ```
 - Save `data.object_id` as `lecture_id`.
 
-### 7.1b Create Video Lecture (multipart/form-data)
+### 8.1b Create Video Lecture (multipart/form-data)
 - Method: `POST`
 - URL: `{{base_url}}/sections/{{section_id}}/contents/`
 - Body type: `form-data`
   - `item_type` = `lecture`
   - `title` = `Intro Video`
-  - `content_type` = `video`
+  - `lecture_type` = `video`
   - `video_file` = (select file)
   - `position` = `2` (optional)
 - Expected status: `201`
 - After creation the video is queued for transcoding. Poll `GET {{base_url}}/lectures/{{lecture_id}}/` until `active_video_asset.status` is `ready` or `failed`.
 
-### 7.2 Create Quiz via Section Content
+### 8.2 Create Quiz via Section Content
 - Method: `POST`
 - URL: `{{base_url}}/sections/{{section_id}}/contents/`
 - Body:
@@ -295,7 +417,7 @@ All lectures, quizzes, and coding exercises must be created through this endpoin
   - `data.id` as `content_id` (section content row id)
   - `data.object_id` as `quiz_id` (actual quiz id)
 
-### 7.2b Create Coding Exercise via Section Content
+### 8.2b Create Coding Exercise via Section Content
 - Method: `POST`
 - URL: `{{base_url}}/sections/{{section_id}}/contents/`
 - Body:
@@ -335,13 +457,13 @@ All lectures, quizzes, and coding exercises must be created through this endpoin
 ```
 - Save `data.object_id` as `exercise_id`.
 
-### 7.3 List Ordered Curriculum
+### 8.3 List Ordered Curriculum
 - Method: `GET`
 - URL: `{{base_url}}/sections/{{section_id}}/contents/`
 - Expected status: `200`
-- Returns all content items (lectures, quizzes, coding exercises) ordered by `position`.
+- Returns all content items (lectures, quizzes, coding exercises, assignments) ordered by `position`.
 
-### 7.4 Reorder Curriculum Item
+### 8.4 Reorder Curriculum Item
 - Method: `PATCH`
 - URL: `{{base_url}}/contents/{{content_id}}/reorder/`
 - Body:
@@ -356,14 +478,14 @@ All lectures, quizzes, and coding exercises must be created through this endpoin
   - Other items shift automatically.
   - No need for empty target slots.
 
-## 8) Lecture Endpoints (read / update / delete)
+## 9) Lecture Endpoints (read / update / delete)
 
-Create lectures via `sections/{id}/contents/` (section 7). These endpoints are for reading and modifying existing lectures.
+Create lectures via `sections/{id}/contents/` (section 8). These endpoints are for reading and modifying existing lectures.
 
-### 8.1 List Lectures in a Section
+### 9.1 List Lectures in a Section
 - `GET {{base_url}}/sections/{{section_id}}/lectures/`
 
-### 8.2 Get / Patch / Put / Delete Lecture
+### 9.2 Get / Patch / Put / Delete Lecture
 - `GET {{base_url}}/lectures/{{lecture_id}}/`
 - `PATCH {{base_url}}/lectures/{{lecture_id}}/`
   - Demo patch body:
@@ -375,11 +497,11 @@ Create lectures via `sections/{id}/contents/` (section 7). These endpoints are f
 - `PUT {{base_url}}/lectures/{{lecture_id}}/`
 - `DELETE {{base_url}}/lectures/{{lecture_id}}/`
 
-## 9) Quiz API Flow
+## 10) Quiz API Flow
 
-Create quizzes via `sections/{id}/contents/` (section 7.2). These endpoints are for reading and modifying existing quizzes and their questions/answers.
+Create quizzes via `sections/{id}/contents/` (section 8.2). These endpoints are for reading and modifying existing quizzes and their questions/answers.
 
-### 9.1 Get / Patch / Delete Quiz
+### 10.1 Get / Patch / Delete Quiz
 - `GET {{base_url}}/quizzes/{{quiz_id}}/`
 - `PATCH {{base_url}}/quizzes/{{quiz_id}}/`
   - Demo patch body:
@@ -390,7 +512,7 @@ Create quizzes via `sections/{id}/contents/` (section 7.2). These endpoints are 
 ```
 - `DELETE {{base_url}}/quizzes/{{quiz_id}}/`
 
-### 9.2 Create Quiz Question
+### 10.2 Create Quiz Question
 - Method: `POST`
 - URL: `{{base_url}}/quizzes/{{quiz_id}}/questions/`
 - Body:
@@ -403,15 +525,15 @@ Create quizzes via `sections/{id}/contents/` (section 7.2). These endpoints are 
 - Expected status: `201`
 - Save `data.id` as `question_id`.
 
-### 9.3 List Quiz Questions
+### 10.3 List Quiz Questions
 - Method: `GET`
 - URL: `{{base_url}}/quizzes/{{quiz_id}}/questions/`
 
-### 9.4 Update/Delete Question
+### 10.4 Update/Delete Question
 - `PATCH {{base_url}}/quiz-questions/{{question_id}}/`
 - `DELETE {{base_url}}/quiz-questions/{{question_id}}/`
 
-### 9.5 Create Quiz Answers
+### 10.5 Create Quiz Answers
 - Method: `POST`
 - URL: `{{base_url}}/quiz-questions/{{question_id}}/answers/`
 - Body (correct):
@@ -430,207 +552,10 @@ Create quizzes via `sections/{id}/contents/` (section 7.2). These endpoints are 
 ```
 - Save first created answer id as `answer_id`.
 
-### 9.6 List / Update / Delete Answers
+### 10.6 List / Update / Delete Answers
 - `GET {{base_url}}/quiz-questions/{{question_id}}/answers/`
 - `PATCH {{base_url}}/quiz-answers/{{answer_id}}/`
 - `DELETE {{base_url}}/quiz-answers/{{answer_id}}/`
-
-## 10) Coding Exercise API Flow
-
-Create coding exercises via `sections/{id}/contents/` (section 7.2b). All endpoints below require a verified instructor JWT. The exercise must belong to a section of a course you instruct — otherwise the API returns `404`.
-
-### 10.1 Get Coding Exercise Detail
-- Method: `GET`
-- URL: `{{base_url}}/coding-exercises/{{exercise_id}}/`
-- Expected status: `200`
-
-### 10.2 Patch Coding Exercise
-- Method: `PATCH`
-- URL: `{{base_url}}/coding-exercises/{{exercise_id}}/`
-- Body:
-```json
-{
-  "difficulty": "hard",
-  "time_limit_ms": 5000
-}
-```
-- Expected status: `200`
-
-### 10.3 Delete Coding Exercise
-- Method: `DELETE`
-- URL: `{{base_url}}/coding-exercises/{{exercise_id}}/`
-- Expected status: `204`
-- Expected behavior: deletes the exercise and its `SectionContent` slot automatically (cascade via `GenericRelation`).
-
----
-
-### 10.4 Add Language Config
-- Method: `POST`
-- URL: `{{base_url}}/coding-exercises/{{exercise_id}}/language-configs/`
-- Body:
-```json
-{
-  "language": "python",
-  "starter_code": "def two_sum(nums, target):\n    pass",
-  "solution_code": "def two_sum(nums, target):\n    seen = {}\n    for i, n in enumerate(nums):\n        if target - n in seen:\n            return [seen[target - n], i]\n        seen[n] = i"
-}
-```
-- Expected status: `201`
-- Save `data.id` as `config_id`.
-- Valid `language` values: `python`, `javascript`, `cpp`, `java`.
-
-### 10.5 Duplicate Language Config (error case)
-- Repeat the same POST above with `"language": "python"`.
-- Expected status: `400`
-- Example response:
-```json
-{
-  "success": false,
-  "message": "A config for this language already exists on this exercise."
-}
-```
-
-### 10.6 List Language Configs
-- Method: `GET`
-- URL: `{{base_url}}/coding-exercises/{{exercise_id}}/language-configs/`
-- Expected status: `200`
-
-### 10.7 Get / Patch / Delete Language Config
-- `GET  {{base_url}}/coding-exercises/{{exercise_id}}/language-configs/{{config_id}}/`
-- `PATCH {{base_url}}/coding-exercises/{{exercise_id}}/language-configs/{{config_id}}/`
-  - Demo patch body:
-```json
-{
-  "starter_code": "def two_sum(nums, target):\n    # your code here\n    pass"
-}
-```
-- `DELETE {{base_url}}/coding-exercises/{{exercise_id}}/language-configs/{{config_id}}/`
-
----
-
-### 10.8 Add Test Case
-- Method: `POST`
-- URL: `{{base_url}}/coding-exercises/{{exercise_id}}/testcases/`
-- Body (visible case):
-```json
-{
-  "input_data": "[2,7,11,15]\n9",
-  "expected_output": "[0,1]",
-  "is_hidden": false,
-  "explanation": "nums[0] + nums[1] == 9",
-  "position": 1
-}
-```
-- Expected status: `201`
-- Save `data.id` as `tc_id`.
-
-- Body (hidden/grading-only case):
-```json
-{
-  "input_data": "[3,2,4]\n6",
-  "expected_output": "[1,2]",
-  "is_hidden": true,
-  "explanation": "",
-  "position": 2
-}
-```
-
-### 10.9 Duplicate Test Case Position (error case)
-- Repeat POST with `"position": 1` for the same exercise.
-- Expected status: `400`
-- Example response:
-```json
-{
-  "success": false,
-  "message": "A test case already exists at that position for this exercise."
-}
-```
-
-### 10.10 List Test Cases
-- Method: `GET`
-- URL: `{{base_url}}/coding-exercises/{{exercise_id}}/testcases/`
-- Expected status: `200`
-- Results are ordered by `position`.
-
-### 10.11 Get / Patch / Delete Test Case
-- `GET  {{base_url}}/coding-exercises/{{exercise_id}}/testcases/{{tc_id}}/`
-- `PATCH {{base_url}}/coding-exercises/{{exercise_id}}/testcases/{{tc_id}}/`
-  - Demo patch body:
-```json
-{
-  "is_hidden": true
-}
-```
-- `DELETE {{base_url}}/coding-exercises/{{exercise_id}}/testcases/{{tc_id}}/`
-
----
-
-### 10.12 Coding Exercise Validation Error Cases
-
-**default_language not in supported_languages**
-- Body:
-```json
-{
-  "section": {{section_id}},
-  "title": "Bad Exercise",
-  "problem_statement": "...",
-  "default_language": "cpp",
-  "supported_languages": ["python", "javascript"]
-}
-```
-- Expected status: `400`
-- Example response:
-```json
-{
-  "success": false,
-  "message": "Validation failed.",
-  "errors": {
-    "default_language": ["default_language must be in supported_languages."]
-  }
-}
-```
-
-**Empty supported_languages list**
-- Body includes `"supported_languages": []`
-- Expected status: `400`
-- Example response:
-```json
-{
-  "success": false,
-  "message": "Validation failed.",
-  "errors": {
-    "supported_languages": ["supported_languages must be a non-empty list."]
-  }
-}
-```
-
-**Invalid language value**
-- Body includes `"supported_languages": ["python", "ruby"]`
-- Expected status: `400`
-- Example response:
-```json
-{
-  "success": false,
-  "message": "Validation failed.",
-  "errors": {
-    "supported_languages": ["Invalid languages: ['ruby']. Must be one of ['python', 'javascript', 'cpp', 'java']."]
-  }
-}
-```
-
-**Title too short**
-- Body includes `"title": "AB"`
-- Expected status: `400`
-- Example response:
-```json
-{
-  "success": false,
-  "message": "Validation failed.",
-  "errors": {
-    "title": ["Title must be at least 3 characters long."]
-  }
-}
-```
 
 ## 11) Assignment API Flow
 
@@ -982,9 +907,299 @@ All write endpoints require a verified-instructor JWT. `model_answer` on a quest
 - `POST {{base_url}}/sections/{{section_id}}/assignments/`
 - Expected status: `405 Method Not Allowed`. Use `sections/{id}/contents/` instead.
 
-## 12) Common Error Responses You Should Test
+## 12) Coding Exercise API Flow
 
-### 12.1 Invalid `item_type` in section contents
+Create coding exercises via `sections/{id}/contents/` (section 8.2b). All endpoints below require a verified instructor JWT. The exercise must belong to a section of a course you instruct — otherwise the API returns `404`.
+
+### 12.1 Get Coding Exercise Detail
+- Method: `GET`
+- URL: `{{base_url}}/coding-exercises/{{exercise_id}}/`
+- Expected status: `200`
+
+### 12.2 Patch Coding Exercise
+- Method: `PATCH`
+- URL: `{{base_url}}/coding-exercises/{{exercise_id}}/`
+- Body:
+```json
+{
+  "difficulty": "hard",
+  "time_limit_ms": 5000
+}
+```
+- Expected status: `200`
+
+### 12.3 Delete Coding Exercise
+- Method: `DELETE`
+- URL: `{{base_url}}/coding-exercises/{{exercise_id}}/`
+- Expected status: `204`
+- Expected behavior: deletes the exercise and its `SectionContent` slot automatically (cascade via `GenericRelation`).
+
+---
+
+### 12.4 Add Language Config
+- Method: `POST`
+- URL: `{{base_url}}/coding-exercises/{{exercise_id}}/language-configs/`
+- Body:
+```json
+{
+  "language": "python",
+  "starter_code": "def two_sum(nums, target):\n    pass",
+  "solution_code": "def two_sum(nums, target):\n    seen = {}\n    for i, n in enumerate(nums):\n        if target - n in seen:\n            return [seen[target - n], i]\n        seen[n] = i"
+}
+```
+- Expected status: `201`
+- Save `data.id` as `config_id`.
+- Valid `language` values: `python`, `javascript`, `cpp`, `java`.
+
+### 12.5 Duplicate Language Config (error case)
+- Repeat the same POST above with `"language": "python"`.
+- Expected status: `400`
+- Example response:
+```json
+{
+  "success": false,
+  "message": "A config for this language already exists on this exercise."
+}
+```
+
+### 12.6 List Language Configs
+- Method: `GET`
+- URL: `{{base_url}}/coding-exercises/{{exercise_id}}/language-configs/`
+- Expected status: `200`
+
+### 12.7 Get / Patch / Delete Language Config
+- `GET  {{base_url}}/coding-exercises/{{exercise_id}}/language-configs/{{config_id}}/`
+- `PATCH {{base_url}}/coding-exercises/{{exercise_id}}/language-configs/{{config_id}}/`
+  - Demo patch body:
+```json
+{
+  "starter_code": "def two_sum(nums, target):\n    # your code here\n    pass"
+}
+```
+- `DELETE {{base_url}}/coding-exercises/{{exercise_id}}/language-configs/{{config_id}}/`
+
+---
+
+### 12.8 Add Test Case
+- Method: `POST`
+- URL: `{{base_url}}/coding-exercises/{{exercise_id}}/testcases/`
+- Body (visible case):
+```json
+{
+  "input_data": "[2,7,11,15]\n9",
+  "expected_output": "[0,1]",
+  "is_hidden": false,
+  "explanation": "nums[0] + nums[1] == 9",
+  "position": 1
+}
+```
+- Expected status: `201`
+- Save `data.id` as `tc_id`.
+
+- Body (hidden/grading-only case):
+```json
+{
+  "input_data": "[3,2,4]\n6",
+  "expected_output": "[1,2]",
+  "is_hidden": true,
+  "explanation": "",
+  "position": 2
+}
+```
+
+### 12.9 Duplicate Test Case Position (error case)
+- Repeat POST with `"position": 1` for the same exercise.
+- Expected status: `400`
+- Example response:
+```json
+{
+  "success": false,
+  "message": "A test case already exists at that position for this exercise."
+}
+```
+
+### 12.10 List Test Cases
+- Method: `GET`
+- URL: `{{base_url}}/coding-exercises/{{exercise_id}}/testcases/`
+- Expected status: `200`
+- Results are ordered by `position`.
+
+### 12.11 Get / Patch / Delete Test Case
+- `GET  {{base_url}}/coding-exercises/{{exercise_id}}/testcases/{{tc_id}}/`
+- `PATCH {{base_url}}/coding-exercises/{{exercise_id}}/testcases/{{tc_id}}/`
+  - Demo patch body:
+```json
+{
+  "is_hidden": true
+}
+```
+- `DELETE {{base_url}}/coding-exercises/{{exercise_id}}/testcases/{{tc_id}}/`
+
+---
+
+### 12.12 Coding Exercise Validation Error Cases
+
+**default_language not in supported_languages**
+- Body:
+```json
+{
+  "section": {{section_id}},
+  "title": "Bad Exercise",
+  "problem_statement": "...",
+  "default_language": "cpp",
+  "supported_languages": ["python", "javascript"]
+}
+```
+- Expected status: `400`
+- Example response:
+```json
+{
+  "success": false,
+  "message": "Validation failed.",
+  "errors": {
+    "default_language": ["default_language must be in supported_languages."]
+  }
+}
+```
+
+**Empty supported_languages list**
+- Body includes `"supported_languages": []`
+- Expected status: `400`
+- Example response:
+```json
+{
+  "success": false,
+  "message": "Validation failed.",
+  "errors": {
+    "supported_languages": ["supported_languages must be a non-empty list."]
+  }
+}
+```
+
+**Invalid language value**
+- Body includes `"supported_languages": ["python", "ruby"]`
+- Expected status: `400`
+- Example response:
+```json
+{
+  "success": false,
+  "message": "Validation failed.",
+  "errors": {
+    "supported_languages": ["Invalid languages: ['ruby']. Must be one of ['python', 'javascript', 'cpp', 'java']."]
+  }
+}
+```
+
+**Title too short**
+- Body includes `"title": "AB"`
+- Expected status: `400`
+- Example response:
+```json
+{
+  "success": false,
+  "message": "Validation failed.",
+  "errors": {
+    "title": ["Title must be at least 3 characters long."]
+  }
+}
+```
+
+## 13) Course Status Transitions
+
+### 13.1 Submit Course for Review (Instructor)
+- Method: `POST`
+- URL: `{{base_url}}/{{course_id}}/submit/`
+- Body: _(none required)_
+- Headers: verified instructor JWT
+- Expected status: `200`
+- Expected response:
+```json
+{
+  "success": true,
+  "message": "Course submitted for review.",
+  "data": { "id": 101, "status": "under_review" }
+}
+```
+- Will return `400` with an `errors` dict if completeness checks fail (missing title/description, empty section, pending videos, incomplete quizzes).
+
+### 13.2 Admin Approve Course
+- Method: `POST`
+- URL: `{{base_url}}/{{course_id}}/review/`
+- Headers: admin JWT (`is_staff` or `user_type: admin`)
+- Body:
+```json
+{ "action": "approve" }
+```
+- Expected status: `200`
+- Expected response:
+```json
+{
+  "success": true,
+  "message": "Course approved successfully.",
+  "data": { "id": 101, "status": "published" }
+}
+```
+
+### 13.3 Admin Reject Course
+- Method: `POST`
+- URL: `{{base_url}}/{{course_id}}/review/`
+- Headers: admin JWT
+- Body:
+```json
+{
+  "action": "reject",
+  "rejection_reason": "Missing captions on lecture 3. Please add subtitles."
+}
+```
+- Expected status: `200`
+- `rejection_reason` is **required** when action is `reject`. Omitting it returns `400`.
+
+### 13.4 Instructor Rework a Rejected Course (back to Draft)
+- Method: `POST`
+- URL: `{{base_url}}/{{course_id}}/rework/`
+- Headers: verified instructor JWT (must be assigned to the course)
+- Body: _(none required)_
+- Expected status: `200`
+- Expected response:
+```json
+{
+  "success": true,
+  "message": "Course moved back to draft for reworking.",
+  "data": { "id": 101, "status": "draft" }
+}
+```
+- Only works when current status is `rejected`. Any other status returns `400`.
+
+### 13.5 Archive a Published Course
+- Method: `POST`
+- URL: `{{base_url}}/{{course_id}}/archive/`
+- Headers: instructor or admin JWT
+- Body: _(none required)_
+- Expected status: `200`
+- Expected response:
+```json
+{
+  "success": true,
+  "message": "Course archived successfully.",
+  "data": { "id": 101, "status": "archived" }
+}
+```
+- Only works when current status is `published`.
+
+### 13.6 Invalid Transition (error case)
+- Attempt to call `/submit/` on a course that is already `under_review`.
+- Expected status: `400`
+- Example response:
+```json
+{
+  "success": false,
+  "message": "Cannot transition from \"under_review\" to \"under_review\". Allowed: published, rejected."
+}
+```
+
+## 14) Common Error Responses You Should Test
+
+### 14.1 Invalid `item_type` in section contents
 - Request:
 ```json
 {
@@ -1001,7 +1216,7 @@ All write endpoints require a verified-instructor JWT. `model_answer` on a quest
 }
 ```
 
-### 12.2 Invalid reorder position
+### 14.2 Invalid reorder position
 - Request:
 ```json
 {
@@ -1017,7 +1232,7 @@ All write endpoints require a verified-instructor JWT. `model_answer` on a quest
 }
 ```
 
-### 12.3 Two correct answers for one question
+### 14.3 Two correct answers for one question
 - Try creating a second answer with `"is_correct": true` for the same question.
 - Expected status: `400`
 - Example response:
@@ -1033,28 +1248,29 @@ All write endpoints require a verified-instructor JWT. `model_answer` on a quest
 }
 ```
 
-## 13) Quick Manual End-to-End Scenario
+## 15) Quick Manual End-to-End Scenario
 1. Create course → save `course_id`.
-2. Create section → save `section_id`.
-3. Create one article lecture via `sections/{id}/contents/` (`item_type: "lecture"`).
-4. Create one quiz via `sections/{id}/contents/` (`item_type: "quiz"`) → save `quiz_id`.
-5. Create one coding exercise via `sections/{id}/contents/` (`item_type: "coding"`) → save `exercise_id`.
+2. Add 1-2 learning objectives, prerequisites, and audiences under that course (section 6 endpoints).
+3. Create section → save `section_id`.
+4. Create one article lecture via `sections/{id}/contents/` (`item_type: "lecture"`).
+5. Create one quiz via `sections/{id}/contents/` (`item_type: "quiz"`) → save `quiz_id`.
 6. Create one assignment via `sections/{id}/contents/` (`item_type: "assignment"`) → save `assignment_id`.
-7. List `sections/{id}/contents/` — verify all four items appear with correct `content` summaries.
-8. Reorder coding exercise to position `1`; verify list updates with shifted items.
-9. Add a Python language config to the exercise (`POST coding-exercises/{id}/language-configs/`).
-10. Add two test cases (one visible, one hidden) to the exercise.
-11. `GET coding-exercises/{id}/` — verify `language_configs` and `test_cases` arrays are populated.
-12. Add one question and two answers (one correct) to quiz.
-13. Add three questions to the assignment (`POST assignments/{id}/questions/`); reorder them via `assignments/{id}/questions/reorder/`; `GET assignments/{id}/` and verify `max_score` equals the sum of question points.
-14. Patch exercise difficulty to `"hard"` and verify update.
-15. Delete the exercise — re-fetch `sections/{id}/contents/` and confirm the coding slot is gone.
-16. Delete the assignment — re-fetch `sections/{id}/contents/` and confirm the assignment slot is gone (its questions cascade away too).
-17. Call `POST {{base_url}}/{{course_id}}/submit/` — expect `400` because the section now has no content (exercise was deleted). Re-add content, then re-submit — expect `200` with `status: under_review`.
-18. As an admin, call `POST {{base_url}}/{{course_id}}/review/` with `{"action": "approve"}` — expect `status: published`.
-19. Call `POST {{base_url}}/{{course_id}}/archive/` — expect `status: archived`.
+7. Create one coding exercise via `sections/{id}/contents/` (`item_type: "coding"`) → save `exercise_id`.
+8. List `sections/{id}/contents/` — verify all four items appear with correct `content` summaries.
+9. Reorder coding exercise to position `1`; verify list updates with shifted items.
+10. Add one question and two answers (one correct) to the quiz.
+11. Add three questions to the assignment (`POST assignments/{id}/questions/`); reorder them via `assignments/{id}/questions/reorder/`; `GET assignments/{id}/` and verify `max_score` equals the sum of question points.
+12. Add a Python language config to the exercise (`POST coding-exercises/{id}/language-configs/`).
+13. Add two test cases (one visible, one hidden) to the exercise.
+14. `GET coding-exercises/{id}/` — verify `language_configs` and `test_cases` arrays are populated.
+15. Patch exercise difficulty to `"hard"` and verify update.
+16. Delete the exercise — re-fetch `sections/{id}/contents/` and confirm the coding slot is gone.
+17. Delete the assignment — re-fetch `sections/{id}/contents/` and confirm the assignment slot is gone (its questions cascade away too).
+18. Call `POST {{base_url}}/{{course_id}}/submit/` — expect `400` because the section now has reduced content. Re-add content, then re-submit — expect `200` with `status: under_review`.
+19. As an admin, call `POST {{base_url}}/{{course_id}}/review/` with `{"action": "approve"}` — expect `status: published`.
+20. Call `POST {{base_url}}/{{course_id}}/archive/` — expect `status: archived`.
 
-## 14) Notes
+## 16) Notes
 - All ownership checks are instructor-scoped; if the course/section/exercise/assignment is not yours, API returns `404`.
 - Status transitions (submit, review, rework, archive) are dedicated POST endpoints. Do not set `status` directly via PATCH — the field is not writable that way.
 - `solution_code` on language configs is stored server-side and must never appear in learner-facing responses (Part 2 enforcement).

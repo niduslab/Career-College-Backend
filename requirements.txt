@@ -6,6 +6,7 @@ djangorestframework-simplejwt>=5.3,<6.0
 django-filter>=24.3,<25.0
 django-allauth>=65.0.0,<66.0.0
 google-auth>=2.38,<3.0
+requests>=2.32,<3.0
 
 # Cross-origin requests for frontend apps
 django-cors-headers>=4.4,<5.0

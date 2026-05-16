@@ -128,8 +128,8 @@ class SectionContentAdmin(admin.ModelAdmin):
 
 @admin.register(Lecture)
 class LectureAdmin(admin.ModelAdmin):
-    list_display = ('id', 'title', 'section', 'content_type', 'created_at')
-    list_filter = ('content_type', 'section')
+    list_display = ('id', 'title', 'section', 'lecture_type', 'created_at')
+    list_filter = ('lecture_type', 'section')
     search_fields = ('title', 'section__title', 'section__course__title')
     ordering = ('section', 'id')
 

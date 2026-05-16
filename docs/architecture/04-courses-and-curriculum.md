@@ -64,7 +64,7 @@ All three are normalized 1-to-many off `NidusCourse` and support independent aut
 ### `Lecture`
 
 - `section` (FK)
-- `title`, `content_type` (`video|article`), `article_content`
+- `title`, `lecture_type` (`video|article`), `article_content`
 - Streaming fields: `stream_master_playlist`, `stream_renditions`, `transcoding_error`
 - Has `GenericRelation` to `SectionContent` — ensures cascade delete removes the `SectionContent` slot automatically.
 - No `position` field; order is owned by `SectionContent`.

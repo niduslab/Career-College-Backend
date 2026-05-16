@@ -43,7 +43,7 @@ A Django REST Framework backend for a course marketplace platform. Instructors c
 
 ```powershell
 git clone <repo-url>
-cd career_college_backend
+cd Career-College-Backend
 
 python -m venv .venv
 .\.venv\Scripts\Activate.ps1   # Windows PowerShell
@@ -206,7 +206,7 @@ The `item_type` field determines what is created:
 
 | `item_type` | Creates | Key extra fields |
 |-------------|---------|-----------------|
-| `lecture` | `Lecture` + `SectionContent` | `content_type` (article/video), `article_content` or `video_file` |
+| `lecture` | `Lecture` + `SectionContent` | `lecture_type` (article/video), `article_content` or `video_file` |
 | `quiz` | `Quiz` + `SectionContent` | `title`, `description` |
 | `coding` | `CodingExercise` + `SectionContent` | `difficulty`, `default_language`, `supported_languages` |
 | `assignment` | `Assignment` + `SectionContent` | `instructions`, `passing_score` |
@@ -219,7 +219,7 @@ PATCH /api/v1/courses/contents/{content_id}/reorder/   body: {"position": N}
 
 ### 4. Video transcoding pipeline
 
-1. Create a video lecture via `sections/{id}/contents/` with `content_type: video` and `video_file`.
+1. Create a video lecture via `sections/{id}/contents/` with `lecture_type: video` and `video_file`.
 2. Backend creates a `VideoAsset` with `status: uploading` and enqueues a Celery task.
 3. Worker runs FFmpeg → produces 5 HLS renditions (240p, 360p, 480p, 720p, 1080p).
 4. `VideoAsset.status` transitions: `uploading → processing → ready` (or `failed`; auto-retries ×3).

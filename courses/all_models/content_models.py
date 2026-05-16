@@ -105,7 +105,7 @@ class SectionContent(TimestampedModel):
 class Lecture(TimestampedModel):
     """Content item inside a section. Supports video and article lectures."""
 
-    class ContentType(models.TextChoices):
+    class LectureType(models.TextChoices):
         VIDEO = 'video', 'Video'
         ARTICLE = 'article', 'Article'
 
@@ -116,10 +116,10 @@ class Lecture(TimestampedModel):
     )
     title = models.CharField(max_length=255)
     # position removed — ordering is owned by SectionContent
-    content_type = models.CharField(
+    lecture_type = models.CharField(
         max_length=20,
-        choices=ContentType.choices,
-        default=ContentType.VIDEO,
+        choices=LectureType.choices,
+        default=LectureType.VIDEO,
         db_index=True,
     )
 
@@ -128,6 +128,9 @@ class Lecture(TimestampedModel):
     stream_master_playlist = models.CharField(max_length=500, blank=True, default='')
     stream_renditions = models.JSONField(default=list, blank=True)
     transcoding_error = models.TextField(blank=True, default='')
+    # Marketing flag: when True, the lecture's video playlist is exposed in the
+    # public catalog detail so unenrolled visitors can preview it before buying.
+    is_preview = models.BooleanField(default=False, db_index=True)
     # Cascade-deletes SectionContent rows when this lecture is deleted.
     section_content = GenericRelation(
         SectionContent,
@@ -147,11 +150,11 @@ class Lecture(TimestampedModel):
             models.CheckConstraint(
                 check=(
                     (
-                        models.Q(content_type='video')
+                        models.Q(lecture_type='video')
                         & models.Q(article_content='')
                     )
                     | (
-                        models.Q(content_type='article')
+                        models.Q(lecture_type='article')
                         & models.Q(article_content__gt='')
                     )
                 ),
@@ -160,17 +163,17 @@ class Lecture(TimestampedModel):
         ]
         indexes = [
             # idx_lecture_section_position removed alongside the position field
-            models.Index(fields=['content_type', 'section'], name='idx_lecture_type_section'),
+            models.Index(fields=['lecture_type', 'section'], name='idx_lecture_type_section'),
         ]
 
     def clean(self):
         super().clean()
 
-        if self.content_type == self.ContentType.VIDEO:
+        if self.lecture_type == self.LectureType.VIDEO:
             if self.article_content:
                 raise ValidationError({'article_content': 'Article content must be empty for video lectures.'})
 
-        if self.content_type == self.ContentType.ARTICLE:
+        if self.lecture_type == self.LectureType.ARTICLE:
             if not self.article_content.strip():
                 raise ValidationError({'article_content': 'Article lectures must include content.'})
 
@@ -230,7 +233,7 @@ class VideoAsset(TimestampedModel):
             raise ValidationError({'file_size': 'File size cannot be negative.'})
         if self.duration_seconds is not None and self.duration_seconds <= 0:
             raise ValidationError({'duration_seconds': 'Duration must be greater than 0 when provided.'})
-        if self.lecture_id and self.lecture.content_type != Lecture.ContentType.VIDEO:
+        if self.lecture_id and self.lecture.lecture_type != Lecture.LectureType.VIDEO:
             raise ValidationError({'lecture': 'Video assets can only be attached to video lectures.'})
 
     def __str__(self):

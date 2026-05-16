@@ -131,7 +131,7 @@ def replace_lecture_video_and_enqueue_transcoding(lecture: Lecture, uploaded_fil
     """
     Deactivate previous active assets, create a new active asset, then enqueue transcoding.
     """
-    if lecture.content_type != Lecture.ContentType.VIDEO:
+    if lecture.lecture_type != Lecture.LectureType.VIDEO:
         raise ValueError('Video uploads are only allowed for video lectures.')
 
     VideoAsset.objects.filter(lecture=lecture, is_active=True).update(is_active=False)

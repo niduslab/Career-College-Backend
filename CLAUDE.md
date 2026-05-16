@@ -61,6 +61,36 @@ python manage.py reindex_section_content_positions --dry-run
 
 The `SectionContent` model (in `courses/`) is the **single source of truth for ordering** within a section. It holds a `GenericForeignKey` that points to a `Lecture`, `Quiz`, or `CodingExercise`. When adding new content types, create the model and then create a `SectionContent` row linking it into the section — do not add ordering directly to content models. Each content model must have a `GenericRelation` to `SectionContent` so that deleting the object cascades and removes its curriculum slot automatically. Reordering logic lives in `courses/services/section_service.py` → `reorder_section_content()`.
 
+### Course Detail Endpoints
+
+Three distinct course detail surfaces, one per audience. Do not collapse them into one conditional endpoint:
+
+| Endpoint | Audience | Purpose |
+|---|---|---|
+| `GET /catalog/<slug>/` (`CatalogCourseDetailView`, `AllowAny`) | Guests / unenrolled | Marketing page — course metadata + curriculum outline (titles, durations) + preview lecture HLS URLs only for `Lecture.is_preview=True` |
+| `GET /my-courses/<slug>/` (`MyCoursesDetailView`, `IsEmailVerified`) | Enrolled learner OR course's own instructor | Full consumption tree — playable lectures, quiz questions, coding exercises, assignments, plus per-lecture watch progress for learners |
+| `GET /<int:pk>/` (`CourseDetailView`, `IsVerifiedInstructor`) | Course's own instructor | Authoring/edit surface (GET + PATCH metadata). Curriculum edits flow through `/sections/`, `/lectures/`, `/contents/`. |
+
+Bulk-loading for the two consumption endpoints lives in `courses/services/curriculum_service.py`:
+- `load_catalog_curriculum(course)` — minimal field set, sufficient for the catalog outline + preview URLs.
+- `load_consumption_curriculum(course, user, is_instructor)` — full payload with quiz questions/answers, coding configs/test cases, assignment questions, and the learner's `WatchProgress` for the course's lectures.
+
+Both return a context dict that gets passed straight to the matching serializer (`CatalogCourseDetailSerializer` / `EnrolledCourseContentSerializer`). The serializers iterate prefetched maps — never call back into the ORM per row.
+
+### Learner-Safe Serialization
+
+`EnrolledCourseContentSerializer` and its nested `_Consumption*` serializers strip instructor-only fields when `context['is_instructor']` is `False`:
+
+| Field | Audience |
+|---|---|
+| `Lecture.stream_master_playlist` (full HLS URL) | Always exposed in `/my-courses/` for both learner and instructor; in `/catalog/` only when `Lecture.is_preview=True` |
+| `QuizAnswer.is_correct` | Instructor only |
+| `AssignmentQuestion.model_answer` | Instructor only |
+| `CodingExerciseLanguageConfig.solution_code` | Instructor only |
+| `CodingTestCase.is_hidden` + hidden test cases | Instructor only (hidden cases filtered out for learners) |
+
+Never reuse the instructor authoring serializers (e.g. `CodingExerciseSerializer`, `AssignmentSerializer`) on the consumption endpoint — they embed sensitive fields. Build dedicated `_Consumption*` serializers and gate via the `is_instructor` context flag.
+
 ### Video Pipeline
 
 1. Client uploads raw video → `VideoAsset` created with status `uploading`

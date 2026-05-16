@@ -92,7 +92,7 @@ class LectureSerializer(serializers.ModelSerializer):
         model = Lecture
         fields = [
             'id', 'section_id', 'title',
-            'content_type', 'article_content',
+            'lecture_type', 'article_content', 'is_preview',
             'stream_master_playlist', 'stream_renditions', 'transcoding_error',
             'active_video_asset', 'created_at', 'updated_at',
         ]
@@ -116,10 +116,19 @@ class LectureSerializer(serializers.ModelSerializer):
 
 class LectureCreateUpdateSerializer(serializers.ModelSerializer):
     video_file = serializers.FileField(write_only=True, required=False, allow_null=True)
+    lecture_type = serializers.ChoiceField(choices=Lecture.LectureType.choices, required=True)
 
     class Meta:
         model = Lecture
-        fields = ['title', 'content_type', 'article_content', 'video_file']
+        fields = ['title', 'lecture_type', 'article_content', 'is_preview', 'video_file']
+
+    def to_internal_value(self, data):
+        unknown_fields = set(data.keys()) - set(self.fields.keys())
+        if unknown_fields:
+            raise serializers.ValidationError(
+                {field: 'Unknown field.' for field in sorted(unknown_fields)}
+            )
+        return super().to_internal_value(data)
 
     def validate_title(self, value):
         title = value.strip()
@@ -128,22 +137,22 @@ class LectureCreateUpdateSerializer(serializers.ModelSerializer):
         return title
 
     def validate(self, attrs):
-        content_type = attrs.get('content_type')
+        lecture_type = attrs.get('lecture_type')
         article_content = attrs.get('article_content')
         video_file = attrs.get('video_file')
 
-        if self.instance is not None and content_type is None:
-            content_type = self.instance.content_type
+        if self.instance is not None and lecture_type is None:
+            lecture_type = self.instance.lecture_type
         if self.instance is not None and article_content is None:
             article_content = self.instance.article_content
 
-        if content_type == Lecture.ContentType.ARTICLE:
+        if lecture_type == Lecture.LectureType.ARTICLE:
             if video_file:
                 raise serializers.ValidationError({'video_file': 'Article lectures cannot include video files.'})
             if not (article_content or '').strip():
                 raise serializers.ValidationError({'article_content': 'Article lectures require content.'})
 
-        if content_type == Lecture.ContentType.VIDEO:
+        if lecture_type == Lecture.LectureType.VIDEO:
             if (article_content or '').strip():
                 raise serializers.ValidationError({'article_content': 'Video lectures cannot include article content.'})
             creating = self.instance is None
@@ -195,7 +204,7 @@ class SectionContentSerializer(serializers.ModelSerializer):
         if obj.item_type == SectionContent.ItemType.LECTURE:
             lecture = lectures.get(obj.object_id)
             if lecture:
-                return {'id': lecture.id, 'title': lecture.title, 'content_type': lecture.content_type}
+                return {'id': lecture.id, 'title': lecture.title, 'lecture_type': lecture.lecture_type}
 
         elif obj.item_type == SectionContent.ItemType.QUIZ:
             quiz = quizzes.get(obj.object_id)

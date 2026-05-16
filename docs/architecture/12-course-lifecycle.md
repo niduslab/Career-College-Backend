@@ -127,7 +127,7 @@ The `item_type` field routes creation:
 
 | `item_type` | Model created | Key fields |
 |-------------|--------------|------------|
-| `lecture` | `Lecture` + `SectionContent` | `content_type` (article/video), `article_content` or `video_file` |
+| `lecture` | `Lecture` + `SectionContent` | `lecture_type` (article/video), `article_content` or `video_file` |
 | `quiz` | `Quiz` + `SectionContent` | `title`, `description` |
 | `coding` | `CodingExercise` + `SectionContent` | `difficulty`, `default_language`, `supported_languages` |
 | `assignment` | `Assignment` + `SectionContent` | `instructions`, `passing_score` |
@@ -144,7 +144,7 @@ This is enforced at submission time (not at quiz creation time).
 
 ### 4. Upload and transcode videos
 
-For `content_type: video` lectures, the video must finish transcoding before submission:
+For `lecture_type: video` lectures, the video must finish transcoding before submission:
 
 1. Upload file → `VideoAsset` created with `status: uploading`
 2. Celery runs FFmpeg → 5 HLS renditions produced

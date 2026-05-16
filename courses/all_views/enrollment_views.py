@@ -8,18 +8,20 @@ from rest_framework.response import Response
 from rest_framework.views import APIView
 
 from core.pagination import StandardResultsSetPagination
-from core.permissions import IsEmailVerified, IsLearnerUser
+from core.permissions import IsEmailVerified, IsInstructorUser, IsLearnerUser
 from courses.models import Enrollment, NidusCourse
 from courses.serializers import (
     CatalogCourseDetailSerializer,
     CatalogCourseListSerializer,
-    EnrollmentDetailSerializer,
+    EnrolledCourseContentSerializer,
     EnrollmentSerializer,
 )
 from courses.services import (
     enroll_learner,
     get_catalog_courses,
     get_learner_enrollments,
+    load_catalog_curriculum,
+    load_consumption_curriculum,
     unenroll_learner,
     update_last_accessed,
 )
@@ -73,8 +75,10 @@ class CatalogCourseDetailView(APIView):
     """
     GET /api/v1/courses/catalog/{slug}/
 
-    Public detail view of a published course. Shows metadata, objectives,
-    prerequisites, audiences — but no actual curriculum content.
+    Public detail view of a published course. Returns metadata + a curriculum
+    outline (section titles, item titles, lecture durations, and is_preview
+    flag). Preview lecture playlist URLs are included only for lectures
+    explicitly marked as preview.
     """
 
     permission_classes = [AllowAny]
@@ -91,8 +95,9 @@ class CatalogCourseDetailView(APIView):
             slug=slug,
             is_published=True,
         )
+        context = load_catalog_curriculum(course)
         return Response(
-            {'success': True, 'data': CatalogCourseDetailSerializer(course).data},
+            {'success': True, 'data': CatalogCourseDetailSerializer(course, context=context).data},
             status=status.HTTP_200_OK,
         )
 
@@ -199,32 +204,48 @@ class MyCoursesDetailView(APIView):
     """
     GET /api/v1/courses/my-courses/{slug}/
 
-    Detailed enrollment view for a single course, including full course
-    metadata and the learner's progress.
+    Full course-consumption payload: course metadata + curriculum tree with
+    playable lecture URLs, quiz questions, coding exercises, and assignments.
+
+    Accessible to:
+    - learners with an active enrollment for this course
+    - the course's own instructors (so they can preview as a learner sees it)
+
+    Sensitive instructor-only fields (solution_code, hidden test cases,
+    model_answer, quiz answer correctness) are stripped for learner callers.
     """
 
-    permission_classes = [IsAuthenticated, IsEmailVerified, IsLearnerUser]
+    permission_classes = [IsAuthenticated, IsEmailVerified, IsLearnerUser | IsInstructorUser]
 
     def get(self, request, slug):
-        enrollment = get_object_or_404(
-            Enrollment.objects.select_related(
-                'course__created_by', 'course__category',
-            ).prefetch_related(
-                'course__instructors',
-                'course__partner_institutions',
-                'course__learning_objectives',
-                'course__prerequisites',
-                'course__audiences',
+        course = get_object_or_404(
+            NidusCourse.objects.select_related('created_by', 'category').prefetch_related(
+                'instructors',
+                'partner_institutions',
+                'learning_objectives',
+                'prerequisites',
+                'audiences',
             ),
-            user=request.user,
-            course__slug=slug,
-            is_active=True,
+            slug=slug,
         )
 
-        # Touch last_accessed_at
-        update_last_accessed(enrollment)
+        is_instructor = course.instructors.filter(pk=request.user.pk).exists()
+        enrollment = None
+        if not is_instructor:
+            enrollment = Enrollment.objects.filter(
+                user=request.user, course=course, is_active=True,
+            ).first()
+            if enrollment is None:
+                return Response(
+                    {'success': False, 'message': 'You do not have access to this course.'},
+                    status=status.HTTP_403_FORBIDDEN,
+                )
+            update_last_accessed(enrollment)
+
+        context = load_consumption_curriculum(course, request.user, is_instructor)
+        context['enrollment'] = enrollment
 
         return Response(
-            {'success': True, 'data': EnrollmentDetailSerializer(enrollment).data},
+            {'success': True, 'data': EnrolledCourseContentSerializer(course, context=context).data},
             status=status.HTTP_200_OK,
         )

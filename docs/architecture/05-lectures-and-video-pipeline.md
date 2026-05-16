@@ -16,7 +16,7 @@
 - Relation: `section` (FK)
 - Content:
   - `title`
-  - `content_type` (`video|article`)
+  - `lecture_type` (`video|article`)
   - `article_content`
   - streaming fields (`stream_master_playlist`, `stream_renditions`, `transcoding_error`)
 - Note: lecture has no `position`; order is owned by `SectionContent`.

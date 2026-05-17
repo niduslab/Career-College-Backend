@@ -32,6 +32,9 @@ from courses.views import (
     CourseSectionListAPIView,
     CourseSubmitForReviewView,
     CourseUnenrollView,
+    LearnerCurriculumView,
+    LearnerLectureDetailView,
+    LearnerLectureProgressView,
     LectureDetailAPIView,
     LectureListAPIView,
     MyCoursesDetailView,
@@ -61,6 +64,13 @@ urlpatterns = [
     path('<slug:slug>/unenroll/', CourseUnenrollView.as_view(), name='course-unenroll'),
     path('my-courses/', MyCoursesListView.as_view(), name='my-courses-list'),
     path('my-courses/<slug:slug>/', MyCoursesDetailView.as_view(), name='my-courses-detail'),
+
+    # -------------------------------------------------------------------------
+    # Learner consumption (Phase 1 — curriculum outline, lecture detail, progress)
+    # -------------------------------------------------------------------------
+    path('learn/<slug:slug>/curriculum/', LearnerCurriculumView.as_view(), name='learner-curriculum'),
+    path('learn/lectures/<int:lecture_id>/', LearnerLectureDetailView.as_view(), name='learner-lecture-detail'),
+    path('learn/lectures/<int:lecture_id>/progress/', LearnerLectureProgressView.as_view(), name='learner-lecture-progress'),
 
     # -------------------------------------------------------------------------
     # Instructor course management

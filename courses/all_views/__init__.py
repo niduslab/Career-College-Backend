@@ -32,6 +32,11 @@ from courses.all_views.enrollment_views import (
     MyCoursesDetailView,
     MyCoursesListView,
 )
+from courses.all_views.learner_views import (
+    LearnerCurriculumView,
+    LearnerLectureDetailView,
+    LearnerLectureProgressView,
+)
 from courses.all_views.content_views import (
     CourseAudienceDetailAPIView,
     CourseAudienceListCreateAPIView,
@@ -96,4 +101,7 @@ __all__ = [
     'CourseUnenrollView',
     'MyCoursesListView',
     'MyCoursesDetailView',
+    'LearnerCurriculumView',
+    'LearnerLectureDetailView',
+    'LearnerLectureProgressView',
 ]

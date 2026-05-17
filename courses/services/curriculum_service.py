@@ -1,20 +1,15 @@
 """
-Bulk-loaders for course curriculum trees.
+Bulk-loader for the public catalog curriculum tree.
 
-Two flavours:
-- `load_catalog_curriculum`: lightweight; only what the public catalog needs
-  (titles + lecture durations + preview playlist URLs).
-- `load_consumption_curriculum`: full payload (HLS URLs, quiz questions and
-  answers, coding configs and test cases, assignment questions); used by the
-  /my-courses/<slug>/ endpoint for enrolled learners and the course's own
-  instructors. Bulk-prefetches sub-relations so the serializer is O(1) per
-  content type rather than O(N) per item.
+`load_catalog_curriculum` returns just the fields the catalog detail page
+needs — section/item titles, lecture durations, and the master playlist
+URL for `is_preview=True` lectures. Curriculum loading for enrolled
+learners lives in `courses/services/learner_service.py`
+(`load_learner_curriculum`).
 """
 
 from collections import defaultdict
 from typing import Optional, Tuple
-
-from django.db.models import Prefetch
 
 from courses.models import (
     Assignment,
@@ -22,10 +17,8 @@ from courses.models import (
     CourseSection,
     Lecture,
     Quiz,
-    QuizQuestion,
     SectionContent,
     VideoAsset,
-    WatchProgress,
 )
 
 
@@ -123,73 +116,4 @@ def load_catalog_curriculum(course) -> dict:
         'coding_exercises': coding_exercises,
         'assignments': assignments,
         'lecture_durations': _lecture_durations(list(lectures.keys())),
-    }
-
-
-def load_consumption_curriculum(course, user, is_instructor: bool) -> dict:
-    """
-    Build the full-content context dict consumed by EnrolledCourseContentSerializer.
-
-    Loads each content type in a single query with the sub-relations the
-    serializer renders (quiz questions + answers, coding configs + test cases,
-    assignment questions). Learner watch-progress is loaded for non-instructor
-    callers so per-lecture progress can be projected without N+1.
-    """
-    sections, contents_by_section = _load_sections_and_contents(course)
-    ids_by_type = _split_object_ids(contents_by_section)
-
-    lectures: dict[int, Lecture] = {}
-    if ids_by_type[SectionContent.ItemType.LECTURE]:
-        for lec in Lecture.objects.filter(
-            id__in=ids_by_type[SectionContent.ItemType.LECTURE]
-        ):
-            lectures[lec.id] = lec
-
-    quizzes: dict[int, Quiz] = {}
-    if ids_by_type[SectionContent.ItemType.QUIZ]:
-        quiz_qs = (
-            Quiz.objects
-            .filter(id__in=ids_by_type[SectionContent.ItemType.QUIZ])
-            .prefetch_related(
-                Prefetch(
-                    'questions',
-                    queryset=QuizQuestion.objects.order_by('position', 'id').prefetch_related('answers'),
-                ),
-            )
-        )
-        quizzes = {q.id: q for q in quiz_qs}
-
-    coding_exercises: dict[int, CodingExercise] = {}
-    if ids_by_type[SectionContent.ItemType.CODING]:
-        ex_qs = (
-            CodingExercise.objects
-            .filter(id__in=ids_by_type[SectionContent.ItemType.CODING])
-            .prefetch_related('language_configs', 'test_cases')
-        )
-        coding_exercises = {ex.id: ex for ex in ex_qs}
-
-    assignments: dict[int, Assignment] = {}
-    if ids_by_type[SectionContent.ItemType.ASSIGNMENT]:
-        a_qs = (
-            Assignment.objects
-            .filter(id__in=ids_by_type[SectionContent.ItemType.ASSIGNMENT])
-            .prefetch_related('questions')
-        )
-        assignments = {a.id: a for a in a_qs}
-
-    watch_progress: dict[int, WatchProgress] = {}
-    if not is_instructor and lectures:
-        for wp in WatchProgress.objects.filter(user=user, lecture_id__in=lectures.keys()):
-            watch_progress[wp.lecture_id] = wp
-
-    return {
-        'sections': sections,
-        'contents_by_section': contents_by_section,
-        'lectures': lectures,
-        'quizzes': quizzes,
-        'coding_exercises': coding_exercises,
-        'assignments': assignments,
-        'lecture_durations': _lecture_durations(list(lectures.keys())),
-        'watch_progress': watch_progress,
-        'is_instructor': is_instructor,
     }

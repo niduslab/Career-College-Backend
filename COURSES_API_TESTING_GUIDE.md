@@ -14,6 +14,8 @@
 10. [Quiz API Flow](#10-quiz-api-flow)
 11. [Assignment API Flow](#11-assignment-api-flow)
 12. [Coding Exercise API Flow](#12-coding-exercise-api-flow)
+12B. [Learner Consumption Endpoints (`/learn/...`)](#12b-learner-consumption-endpoints-learn)
+12C. [My-Courses Endpoints (course header + dashboard)](#12c-my-courses-endpoints-course-header--dashboard)
 13. [Course Status Transitions](#13-course-status-transitions)
 14. [Common Error Responses You Should Test](#14-common-error-responses-you-should-test)
 15. [Quick Manual End-to-End Scenario](#15-quick-manual-end-to-end-scenario)
@@ -1103,6 +1105,330 @@ Create coding exercises via `sections/{id}/contents/` (section 8.2b). All endpoi
   }
 }
 ```
+
+## 12B) Learner Consumption Endpoints (`/learn/...`)
+
+Phase-1 of the split learner surface: a lightweight curriculum outline + a per-lecture detail endpoint + an idempotent watch-progress write. Quiz and assignment consumption are Phase-2 and not yet implemented.
+
+All `/learn/...` endpoints require a verified-email JWT. `GET` endpoints accept either an enrolled learner or the course's own instructor (preview). `POST /progress/` is learner-only.
+
+### 12B.1 Get Learner Curriculum Outline
+- Method: `GET`
+- URL: `{{base_url}}/learn/{{course_slug}}/curriculum/`
+- Headers: enrolled learner OR course's instructor JWT
+- Expected status: `200`
+- Expected response shape:
+```json
+{
+  "success": true,
+  "data": {
+    "course": {
+      "id": 101,
+      "slug": "python-backend-bootcamp",
+      "title": "Python Backend Bootcamp"
+    },
+    "sections": [
+      {
+        "id": 11,
+        "title": "Getting Started",
+        "position": 1,
+        "items": [
+          {
+            "content_id": 201,
+            "object_id": 301,
+            "item_type": "lecture",
+            "position": 1,
+            "title": "Welcome",
+            "lecture_type": "article",
+            "duration_seconds": null,
+            "is_completed": false
+          },
+          {
+            "content_id": 202,
+            "object_id": 302,
+            "item_type": "lecture",
+            "position": 2,
+            "title": "Intro Video",
+            "lecture_type": "video",
+            "duration_seconds": 600,
+            "is_completed": true
+          },
+          {
+            "content_id": 203,
+            "object_id": 50,
+            "item_type": "quiz",
+            "position": 3,
+            "title": "Intro Quiz"
+          },
+          {
+            "content_id": 204,
+            "object_id": 1,
+            "item_type": "coding",
+            "position": 4,
+            "title": "Reverse a String",
+            "difficulty": "easy"
+          }
+        ]
+      }
+    ]
+  }
+}
+```
+- Notes:
+  - `is_completed` appears only for learners; instructors previewing the curriculum get the same payload without that key.
+  - Heavy item payloads (HLS URLs, quiz questions, article text, coding configs) are not in this response — fetch them from per-item endpoints.
+
+### 12B.2 Learner Curriculum Error Cases
+**Unenrolled learner**
+- Authenticated learner with no `Enrollment` for the course.
+- Expected status: `403`
+- Example response:
+```json
+{
+  "success": false,
+  "message": "You do not have access to this course."
+}
+```
+
+**Course not found**
+- Slug does not match any course.
+- Expected status: `404`
+
+**Unauthenticated**
+- Omit the `Authorization` header.
+- Expected status: `401`
+
+### 12B.3 Get Learner Lecture Detail
+- Method: `GET`
+- URL: `{{base_url}}/learn/lectures/{{lecture_id}}/`
+- Headers: enrolled learner OR course's instructor JWT
+- Expected status: `200`
+- Expected response (video lecture, learner caller):
+```json
+{
+  "success": true,
+  "data": {
+    "id": 302,
+    "section_id": 11,
+    "title": "Intro Video",
+    "lecture_type": "video",
+    "article_content": "",
+    "stream_master_playlist": "courses/python-backend-bootcamp/lectures/302/hls/.../master.m3u8",
+    "stream_renditions": [
+      { "label": "720p", "playlist": "courses/.../720p/playlist.m3u8" }
+    ],
+    "duration_seconds": 600,
+    "progress": {
+      "watched_seconds": 120,
+      "is_completed": false,
+      "last_watched_at": "2026-05-17T09:14:22Z"
+    }
+  }
+}
+```
+- Expected response (article lecture):
+```json
+{
+  "success": true,
+  "data": {
+    "id": 301,
+    "section_id": 11,
+    "title": "Welcome",
+    "lecture_type": "article",
+    "article_content": "HTTP methods, status codes, and API design basics.",
+    "stream_master_playlist": "",
+    "stream_renditions": [],
+    "duration_seconds": null,
+    "progress": { "watched_seconds": 0, "is_completed": true, "last_watched_at": "..." }
+  }
+}
+```
+- Notes:
+  - `progress` is `null` for the instructor preview caller (no per-instructor watch history is tracked).
+  - `transcoding_error` is intentionally not exposed.
+
+### 12B.4 Learner Lecture Detail Error Cases
+**Unenrolled learner**
+- Expected status: `404` (existence is not leaked).
+- Example response:
+```json
+{ "success": false, "message": "Lecture not found." }
+```
+
+**Lecture not found**
+- Expected status: `404`.
+
+### 12B.5 Upsert Watch Progress
+- Method: `POST`
+- URL: `{{base_url}}/learn/lectures/{{lecture_id}}/progress/`
+- Headers: enrolled learner JWT (instructors get `403`)
+- Body:
+```json
+{
+  "watched_seconds": 120,
+  "is_completed": false
+}
+```
+- Expected status: `200`
+- Expected response:
+```json
+{
+  "success": true,
+  "message": "Progress saved.",
+  "data": {
+    "lecture_id": 302,
+    "watched_seconds": 120,
+    "is_completed": false,
+    "last_watched_at": "2026-05-17T09:14:22Z"
+  }
+}
+```
+- Notes:
+  - Idempotent — repeated POSTs with the same body never create duplicate `WatchProgress` rows.
+  - When `is_completed` flips, a signal recalculates the enrollment's `progress_percent`. Re-fetch `/my-courses/` to see the updated rollup.
+
+### 12B.6 Progress Endpoint Error Cases
+**Negative `watched_seconds`**
+- Body: `{ "watched_seconds": -5, "is_completed": false }`
+- Expected status: `400`
+- Example response:
+```json
+{
+  "success": false,
+  "message": "Validation failed.",
+  "errors": { "watched_seconds": ["Ensure this value is greater than or equal to 0."] }
+}
+```
+
+**Missing `is_completed`**
+- Body: `{ "watched_seconds": 30 }`
+- Expected status: `400`
+- Example response:
+```json
+{
+  "success": false,
+  "message": "Validation failed.",
+  "errors": { "is_completed": ["This field is required."] }
+}
+```
+
+**Unenrolled learner**
+- Authenticated learner with no enrollment for the lecture's course.
+- Expected status: `404` (existence not leaked).
+
+**Instructor calling the progress endpoint**
+- Authenticated as the course's instructor.
+- Expected status: `403` (`Only learners can access this resource.`). Instructor preview is read-only.
+
+## 12C) My-Courses Endpoints (course header + dashboard)
+
+The `/my-courses/` family is for the learner's dashboard and the course-player page header. The course-player UI composes its full page from three calls: `/my-courses/<slug>/` (header card with metadata + overall progress), `/learn/<slug>/curriculum/` (sidebar), and `/learn/<thing>/<id>/` (the item the learner clicked).
+
+### 12C.1 List My Enrollments (Dashboard)
+- Method: `GET`
+- URL: `{{base_url}}/my-courses/`
+- Headers: enrolled learner JWT
+- Expected status: `200`
+- Expected response (paginated):
+```json
+{
+  "success": true,
+  "data": {
+    "count": 2,
+    "next": null,
+    "previous": null,
+    "results": [
+      {
+        "id": 11,
+        "course": {
+          "id": 101, "title": "Python Backend Bootcamp", "slug": "python-backend-bootcamp",
+          "description": "...", "thumbnail": null, "price": "79.99",
+          "language": "English", "level": "intermediate", "duration_minutes": 240,
+          "instructors": [...], "category": {...}, "published_at": "..."
+        },
+        "enrollment_type": "free",
+        "is_active": true,
+        "progress_percent": 35,
+        "completed_at": null,
+        "last_accessed_at": "2026-05-17T09:14:22Z",
+        "created_at": "2026-05-01T08:00:00Z"
+      }
+    ]
+  }
+}
+```
+- Ordered by `last_accessed_at` (most recent first), then `created_at`. Only the caller's own active enrollments are returned.
+
+### 12C.2 Get My-Course Detail (Player Header)
+- Method: `GET`
+- URL: `{{base_url}}/my-courses/{{course_slug}}/`
+- Headers: enrolled learner OR course's instructor JWT
+- Expected status: `200`
+- Expected response:
+```json
+{
+  "success": true,
+  "data": {
+    "is_instructor": false,
+    "enrollment": {
+      "id": 11,
+      "enrollment_type": "free",
+      "is_active": true,
+      "progress_percent": 35,
+      "completed_at": null,
+      "last_accessed_at": "2026-05-17T09:14:22Z",
+      "created_at": "2026-05-01T08:00:00Z"
+    },
+    "course": {
+      "id": 101,
+      "title": "Python Backend Bootcamp",
+      "slug": "python-backend-bootcamp",
+      "description": "Build production APIs with Django and DRF.",
+      "thumbnail": null,
+      "price": "79.99",
+      "language": "English",
+      "level": "intermediate",
+      "duration_minutes": 240,
+      "status": "published",
+      "is_published": true,
+      "published_at": "2026-04-22T11:00:00Z",
+      "instructors": [...],
+      "partner_institutions": [],
+      "category": {...},
+      "learning_objectives": [...],
+      "prerequisites": [...],
+      "audiences": [...],
+      "total_sections": 12,
+      "total_content_items": 47
+    }
+  }
+}
+```
+- Notes:
+  - This response does **not** include the curriculum tree. Fetch `/learn/{{course_slug}}/curriculum/` for the sidebar.
+  - `is_instructor: true` is returned when the caller is one of the course's instructors (preview mode). In that case `enrollment` is `null`.
+  - Each GET call updates the learner's `last_accessed_at` timestamp on the enrollment row.
+
+### 12C.3 My-Courses Detail Error Cases
+
+**Unenrolled learner**
+- Authenticated learner with no enrollment for the course.
+- Expected status: `403`
+- Example response:
+```json
+{
+  "success": false,
+  "message": "You do not have access to this course."
+}
+```
+
+**Course not found**
+- Slug does not match any course.
+- Expected status: `404`
+
+**Unauthenticated**
+- Omit the `Authorization` header.
+- Expected status: `401`
 
 ## 13) Course Status Transitions
 

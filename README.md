@@ -253,8 +253,9 @@ Submit runs a completeness check: title + description present, at least one sect
 1. Public users browse `GET /api/v1/courses/catalog/` and `GET /api/v1/courses/catalog/{slug}/`.
 2. Authenticated learners enroll via `POST /api/v1/courses/{slug}/enroll/`.
 3. Enrollments are unique per learner+course; re-enrolling reactivates the existing record.
-4. Learners can view progress via `GET /api/v1/courses/my-courses/` and `GET /api/v1/courses/my-courses/{slug}/`.
-5. Learners can soft-unenroll via `POST /api/v1/courses/{slug}/unenroll/`; progress stays preserved.
+4. The course-player page is composed from three endpoints: `GET /api/v1/courses/my-courses/{slug}/` returns the slim metadata header (course info + overall progress); `GET /api/v1/courses/learn/{slug}/curriculum/` returns the sidebar curriculum outline; `GET /api/v1/courses/learn/lectures/{id}/` returns a single playable lecture. Watch progress is upserted via `POST /api/v1/courses/learn/lectures/{id}/progress/`.
+5. The dashboard "My Courses" list is at `GET /api/v1/courses/my-courses/`.
+6. Learners can soft-unenroll via `POST /api/v1/courses/{slug}/unenroll/`; progress stays preserved.
 
 ---
 
@@ -338,7 +339,17 @@ All authenticated endpoints require: `Authorization: Bearer <access_token>`
 | POST | `{slug}/enroll/` | Learner | Enroll in a published course (or reactivate prior enrollment) |
 | POST | `{slug}/unenroll/` | Learner | Soft-unenroll while preserving progress |
 | GET | `my-courses/` | Learner | List active enrollments with progress |
-| GET | `my-courses/{slug}/` | Learner | Enrollment detail for a single course |
+| GET | `my-courses/{slug}/` | Learner or course instructor | Slim course-header metadata + caller's enrollment status (no curriculum tree — see `learn/{slug}/curriculum/`) |
+
+#### Learner Consumption (Phase 1)
+
+| Method | Endpoint | Auth | Description |
+|--------|----------|------|-------------|
+| GET | `learn/{slug}/curriculum/` | Enrolled learner or course instructor | Lightweight ordered curriculum: sections + items with title, type, duration, and per-lecture completion marker |
+| GET | `learn/lectures/{lecture_id}/` | Enrolled learner or course instructor | Single lecture: HLS playlist + renditions for video, article text for article. Includes the caller's progress to support resume |
+| POST | `learn/lectures/{lecture_id}/progress/` | Enrolled learner | Idempotent upsert of `WatchProgress` (`watched_seconds`, `is_completed`). The `WatchProgress` post_save signal recalculates the enrollment's `progress_percent` |
+
+Phase 2 (quiz / assignment / coding consumption + submissions) is not yet built.
 
 #### Course CRUD
 

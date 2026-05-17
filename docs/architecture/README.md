@@ -16,6 +16,7 @@ This folder is a quick-start map for new backend developers.
 10. `10-coding-exercises.md`
 11. `11-assignments-crud.md`
 12. `12-course-lifecycle.md`
+13. `13-enrollment.md` (also covers Phase-1 learner consumption endpoints)
 
 ## Scope
 

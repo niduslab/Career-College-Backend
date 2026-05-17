@@ -1,4 +1,16 @@
-**Current State**
+> **Implementation Status (2026-05-17):** Phase 1 is **complete and merged**. The three Phase-1 endpoints below have been built:
+>
+> - `GET /api/v1/courses/learn/<slug>/curriculum/` → `LearnerCurriculumView`
+> - `GET /api/v1/courses/learn/lectures/<lecture_id>/` → `LearnerLectureDetailView`
+> - `POST /api/v1/courses/learn/lectures/<lecture_id>/progress/` → `LearnerLectureProgressView`
+>
+> Supporting infrastructure shipped at the same time: `courses/services/learner_service.py` (with `resolve_course_access`, `load_learner_curriculum`, `get_consumption_lecture`, `upsert_watch_progress`), `courses/all_serializers/learner_serializers.py`, `courses/all_views/learner_views.py`, and `courses/all_tests/test_learner_consumption.py`. The Phase-1 endpoints landed in the same change as the slim-down of `/my-courses/<slug>/` (which now returns metadata + enrollment status only, not the full course tree). See `CLAUDE.md` → "Learner Consumption Endpoints" and `MY_COURSES_PERFORMANCE_AUDIT.md` for the post-refactor state.
+>
+> Phases 2–4 below (quiz / assignment / coding consumption + submissions) remain not yet built. The "Current State" and "Recommended Endpoint Set" sections that follow describe the **pre-refactor** assessment and the **target shape** — kept for reference and as input to the Phase-2 design.
+
+---
+
+**Current State (pre-Phase-1 — historical, kept for reference)**
 1. Enrollment exists and is clearly intended as the access gate (`active enrollment` required): [enrollment_models.py](/c:/Users/rdnid/OneDrive/Desktop/career_college_backend/courses/all_models/enrollment_models.py:13)
 2. Learner endpoints currently stop at `my-courses` metadata/dashboard: [enrollment_views.py](/c:/Users/rdnid/OneDrive/Desktop/career_college_backend/courses/all_views/enrollment_views.py:198)
 3. Lecture/quiz/assignment APIs are instructor-owned (`course__instructors=request.user`) and not learner consumption APIs: [content_views.py](/c:/Users/rdnid/OneDrive/Desktop/career_college_backend/courses/all_views/content_views.py:109)

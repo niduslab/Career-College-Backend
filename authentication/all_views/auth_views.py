@@ -13,6 +13,7 @@ from authentication.serializers import (
     UserRegistrationSerializer,
 )
 from authentication.utils import send_otp_email
+from authentication.utils.cookie_helpers import delete_jwt_cookies, set_jwt_cookies
 
 logger = logging.getLogger(__name__)
 
@@ -116,7 +117,7 @@ class UserLoginView(APIView):
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR,
             )
 
-        return Response(
+        response = Response(
             {
                 'success': True,
                 'message': 'Login successful.',
@@ -127,10 +128,11 @@ class UserLoginView(APIView):
                     'user_type': user.user_type,
                     'is_email_verified': user.is_email_verified,
                 },
-                'tokens': tokens,
             },
             status=status.HTTP_200_OK,
         )
+        set_jwt_cookies(response, tokens)
+        return response
 
 
 class LogoutView(APIView):
@@ -160,13 +162,15 @@ class LogoutView(APIView):
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
-        return Response(
+        response = Response(
             {
                 'success': True,
                 'message': 'Logged out successfully.',
             },
             status=status.HTTP_200_OK,
         )
+        delete_jwt_cookies(response)
+        return response
 
 
 class TokenRefreshView(APIView):

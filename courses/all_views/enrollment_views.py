@@ -13,15 +13,14 @@ from courses.models import Enrollment, NidusCourse
 from courses.serializers import (
     CatalogCourseDetailSerializer,
     CatalogCourseListSerializer,
-    EnrolledCourseContentSerializer,
     EnrollmentSerializer,
+    MyCourseDetailSerializer,
 )
 from courses.services import (
     enroll_learner,
     get_catalog_courses,
     get_learner_enrollments,
     load_catalog_curriculum,
-    load_consumption_curriculum,
     unenroll_learner,
     update_last_accessed,
 )
@@ -204,15 +203,16 @@ class MyCoursesDetailView(APIView):
     """
     GET /api/v1/courses/my-courses/{slug}/
 
-    Full course-consumption payload: course metadata + curriculum tree with
-    playable lecture URLs, quiz questions, coding exercises, and assignments.
+    Slim course-header payload for the learner's course page: metadata
+    (title, description, instructors, objectives, totals) + enrollment
+    status (overall progress, completed_at, last_accessed_at). The
+    frontend pairs this with `/learn/<slug>/curriculum/` for the sidebar
+    tree and per-item `/learn/<thing>/<id>/` endpoints for playable
+    content.
 
     Accessible to:
     - learners with an active enrollment for this course
-    - the course's own instructors (so they can preview as a learner sees it)
-
-    Sensitive instructor-only fields (solution_code, hidden test cases,
-    model_answer, quiz answer correctness) are stripped for learner callers.
+    - the course's own instructors (preview, no enrollment row needed)
     """
 
     permission_classes = [IsAuthenticated, IsEmailVerified, IsLearnerUser | IsInstructorUser]
@@ -229,7 +229,9 @@ class MyCoursesDetailView(APIView):
             slug=slug,
         )
 
-        is_instructor = course.instructors.filter(pk=request.user.pk).exists()
+        # Use the prefetched `instructors` cache (loaded above) — `.filter().exists()`
+        # would bypass the prefetch and issue a redundant SQL query.
+        is_instructor = any(u.pk == request.user.pk for u in course.instructors.all())
         enrollment = None
         if not is_instructor:
             enrollment = Enrollment.objects.filter(
@@ -242,10 +244,11 @@ class MyCoursesDetailView(APIView):
                 )
             update_last_accessed(enrollment)
 
-        context = load_consumption_curriculum(course, request.user, is_instructor)
-        context['enrollment'] = enrollment
-
+        serializer = MyCourseDetailSerializer(
+            course,
+            context={'is_instructor': is_instructor, 'enrollment': enrollment},
+        )
         return Response(
-            {'success': True, 'data': EnrolledCourseContentSerializer(course, context=context).data},
+            {'success': True, 'data': serializer.data},
             status=status.HTTP_200_OK,
         )

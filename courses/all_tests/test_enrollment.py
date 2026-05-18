@@ -189,6 +189,53 @@ class EnrollmentAPITests(APITestCase):
         enrollment = Enrollment.objects.get(user=self.learner, course=self.published_course)
         self.assertIsNotNone(enrollment.last_accessed_at)
 
+    def test_update_last_accessed_is_debounced_within_5_minutes(self):
+        from datetime import timedelta
+        from django.utils import timezone
+
+        from courses.services.enrollment_service import (
+            LAST_ACCESSED_DEBOUNCE,
+            update_last_accessed,
+        )
+
+        # Fresh row (last_accessed_at=None) → first call writes.
+        enrollment = Enrollment.objects.create(user=self.learner, course=self.published_course)
+        first = update_last_accessed(enrollment)
+        self.assertIsNotNone(first)
+
+        # Immediate second call should be debounced — no write, returns the
+        # original timestamp.
+        second = update_last_accessed(enrollment)
+        self.assertEqual(second, first)
+
+        # Simulate a touch older than the debounce window → next call writes.
+        stale = timezone.now() - LAST_ACCESSED_DEBOUNCE - timedelta(seconds=1)
+        Enrollment.objects.filter(pk=enrollment.pk).update(last_accessed_at=stale)
+        enrollment.refresh_from_db()
+        third = update_last_accessed(enrollment)
+        self.assertGreater(third, stale)
+
+    def test_my_course_detail_returns_slim_metadata_only(self):
+        # The detail endpoint must not return the curriculum tree; the
+        # frontend pairs it with /learn/<slug>/curriculum/ for the sidebar.
+        Enrollment.objects.create(user=self.learner, course=self.published_course)
+        self.auth()
+
+        response = self.client.get(
+            reverse('courses:my-courses-detail', kwargs={'slug': self.published_course.slug})
+        )
+
+        data = response.data['data']
+        self.assertNotIn('sections', data)
+        self.assertEqual(set(data.keys()), {'is_instructor', 'enrollment', 'course'})
+        # Course meta block contains the header fields the frontend needs.
+        course = data['course']
+        self.assertIn('total_sections', course)
+        self.assertIn('total_content_items', course)
+        self.assertIn('instructors', course)
+        self.assertIn('learning_objectives', course)
+        self.assertFalse(data['is_instructor'])
+
     def test_watch_progress_recalculates_active_enrollment_progress(self):
         enrollment = Enrollment.objects.create(user=self.learner, course=self.published_course)
         section = CourseSection.objects.create(

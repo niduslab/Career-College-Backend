@@ -26,7 +26,12 @@ from courses.services.enrollment_service import (
 )
 from courses.services.curriculum_service import (
     load_catalog_curriculum,
-    load_consumption_curriculum,
+)
+from courses.services.learner_service import (
+    get_consumption_lecture,
+    load_learner_curriculum,
+    resolve_course_access,
+    upsert_watch_progress,
 )
 
 __all__ = [
@@ -51,5 +56,8 @@ __all__ = [
     'unenroll_learner',
     'update_last_accessed',
     'load_catalog_curriculum',
-    'load_consumption_curriculum',
+    'get_consumption_lecture',
+    'load_learner_curriculum',
+    'resolve_course_access',
+    'upsert_watch_progress',
 ]

@@ -63,33 +63,54 @@ The `SectionContent` model (in `courses/`) is the **single source of truth for o
 
 ### Course Detail Endpoints
 
-Three distinct course detail surfaces, one per audience. Do not collapse them into one conditional endpoint:
+Four distinct course detail surfaces, split by audience and concern. Do not collapse them into one conditional endpoint:
 
 | Endpoint | Audience | Purpose |
 |---|---|---|
-| `GET /catalog/<slug>/` (`CatalogCourseDetailView`, `AllowAny`) | Guests / unenrolled | Marketing page — course metadata + curriculum outline (titles, durations) + preview lecture HLS URLs only for `Lecture.is_preview=True` |
-| `GET /my-courses/<slug>/` (`MyCoursesDetailView`, `IsEmailVerified`) | Enrolled learner OR course's own instructor | Full consumption tree — playable lectures, quiz questions, coding exercises, assignments, plus per-lecture watch progress for learners |
+| `GET /catalog/<slug>/` (`CatalogCourseDetailView`, `AllowAny`) | Guests / unenrolled | Marketing page — course metadata + full curriculum outline (titles, durations) + preview lecture HLS URLs only for `Lecture.is_preview=True`. Stays as a one-shot tree because catalog browsing is a guest workflow and SEO benefits from a single page render. |
+| `GET /my-courses/<slug>/` (`MyCoursesDetailView`, `IsEmailVerified`) | Enrolled learner OR course's own instructor | **Slim metadata only**: title, description, instructors, learning objectives/prerequisites/audiences, totals, plus the caller's enrollment block (progress %, completed_at, last_accessed_at) and `is_instructor` flag. Curriculum tree and per-item content **do not** live here — fetch them from `/learn/<slug>/curriculum/` and `/learn/<thing>/<id>/`. |
+| `GET /learn/<slug>/curriculum/` (`LearnerCurriculumView`) | Same as above | Sidebar curriculum outline (sections + items, lightweight). See *Learner Consumption Endpoints* below. |
 | `GET /<int:pk>/` (`CourseDetailView`, `IsVerifiedInstructor`) | Course's own instructor | Authoring/edit surface (GET + PATCH metadata). Curriculum edits flow through `/sections/`, `/lectures/`, `/contents/`. |
 
-Bulk-loading for the two consumption endpoints lives in `courses/services/curriculum_service.py`:
-- `load_catalog_curriculum(course)` — minimal field set, sufficient for the catalog outline + preview URLs.
-- `load_consumption_curriculum(course, user, is_instructor)` — full payload with quiz questions/answers, coding configs/test cases, assignment questions, and the learner's `WatchProgress` for the course's lectures.
+The Udemy-style course-player page is composed on the frontend from `/my-courses/<slug>/` (header card) + `/learn/<slug>/curriculum/` (sidebar) + `/learn/<thing>/<id>/` (per-item content). Do not bring back the one-shot consumption tree on `/my-courses/<slug>/` — it scales poorly for large courses and duplicates the curriculum endpoint's job.
 
-Both return a context dict that gets passed straight to the matching serializer (`CatalogCourseDetailSerializer` / `EnrolledCourseContentSerializer`). The serializers iterate prefetched maps — never call back into the ORM per row.
+Catalog bulk-loading lives in `courses/services/curriculum_service.py` → `load_catalog_curriculum(course)`. Consumed by `CatalogCourseDetailSerializer`. Returns a context dict; the serializer iterates prefetched maps — never call back into the ORM per row. Learner-side bulk-loading lives in `courses/services/learner_service.py` (see below).
+
+### Learner Consumption Endpoints (`/learn/...`)
+
+Phase-1 of the split learner surface. Endpoints, services, and serializers all live in dedicated `learner_*` modules so sensitive instructor-only fields cannot leak by accident:
+
+| Endpoint | View | Purpose |
+|---|---|---|
+| `GET /learn/<slug>/curriculum/` | `LearnerCurriculumView` | Light curriculum outline: ordered sections + item rows with `title`, `item_type`, `position`. Lectures also carry `lecture_type`, `duration_seconds`, and (for learners) `is_completed`. No HLS URLs, no quiz questions, no article text. |
+| `GET /learn/lectures/<int:lecture_id>/` | `LearnerLectureDetailView` | Learner-safe lecture detail. Video → HLS playlist + renditions. Article → `article_content`. Always returns the caller's `progress` (so the player can resume). |
+| `POST /learn/lectures/<int:lecture_id>/progress/` | `LearnerLectureProgressView` | Idempotent upsert of `WatchProgress` via `update_or_create`. Body: `{watched_seconds, is_completed}`. Both required. The `WatchProgress` post_save signal recalculates the enrollment's `progress_percent`. |
+
+Permission model:
+- `GET` endpoints accept *enrolled learner OR the course's own instructor* (matching `MyCoursesDetailView`). Unenrolled non-instructors get `403` on the curriculum endpoint and `404` on lecture detail (existence not leaked).
+- `POST /progress/` is `IsLearnerUser`-gated; instructors get `403` (preview must not write progress). Unenrolled learners get `404`.
+
+Data loaders live in `courses/services/learner_service.py`:
+- `resolve_course_access(user, course)` → `(is_instructor, enrollment_or_none)`. Use this in any new learner endpoint that needs the same access policy.
+- `load_learner_curriculum(course, user, is_instructor)` — bulk-loads `.only(...)` lightweight fields and a single `WatchProgress` query for completion markers.
+- `get_consumption_lecture(user, lecture_id)` — fetches lecture + verifies access in one call. Raises `Lecture.DoesNotExist` on missing-or-no-access.
+- `upsert_watch_progress(user, lecture, watched_seconds, is_completed)` — never touches the enrollment row directly; the signal handles recalc.
+
+Serializers live in `courses/all_serializers/learner_serializers.py`. Phase-2 (quiz/assignment/coding consumption + submission) will add new `Learner*Serializer` classes there — do not reuse instructor authoring serializers, they embed sensitive fields (`solution_code`, hidden test cases, `model_answer`, `is_correct`).
 
 ### Learner-Safe Serialization
 
-`EnrolledCourseContentSerializer` and its nested `_Consumption*` serializers strip instructor-only fields when `context['is_instructor']` is `False`:
+When implementing Phase-2 consumption serializers (`/learn/quizzes/<id>/`, `/learn/assignments/<id>/`, `/learn/coding-exercises/<id>/`), the following fields **must remain instructor-only**:
 
 | Field | Audience |
 |---|---|
-| `Lecture.stream_master_playlist` (full HLS URL) | Always exposed in `/my-courses/` for both learner and instructor; in `/catalog/` only when `Lecture.is_preview=True` |
-| `QuizAnswer.is_correct` | Instructor only |
+| `Lecture.stream_master_playlist` (full HLS URL) | Exposed on `/learn/lectures/<id>/` for any caller with access; on `/catalog/` only when `Lecture.is_preview=True` |
+| `QuizAnswer.is_correct` | Instructor only (omit from learner payload, score server-side after submit) |
 | `AssignmentQuestion.model_answer` | Instructor only |
 | `CodingExerciseLanguageConfig.solution_code` | Instructor only |
-| `CodingTestCase.is_hidden` + hidden test cases | Instructor only (hidden cases filtered out for learners) |
+| `CodingTestCase.is_hidden` + hidden test cases | Instructor only (filter hidden cases out of learner payload) |
 
-Never reuse the instructor authoring serializers (e.g. `CodingExerciseSerializer`, `AssignmentSerializer`) on the consumption endpoint — they embed sensitive fields. Build dedicated `_Consumption*` serializers and gate via the `is_instructor` context flag.
+Pattern: define dedicated `Learner*Serializer` classes that simply don't declare the sensitive fields. Don't rely on conditional `to_representation` stripping — a future refactor could miss a branch and leak. Absence is a stronger guarantee than conditional removal.
 
 ### Video Pipeline
 
@@ -117,6 +138,26 @@ Custom DRF permission classes used across views:
 - `IsCourseInstructor` — object-level: user is in `course.instructors.all()`
 
 **All permission classes must live in `core/permissions.py`.** Do not define permissions inside individual app directories. If a permission is specific to one app today but could plausibly guard another resource tomorrow, it still belongs in `core/`.
+
+### 403 vs. 404 Access-Denied Policy
+
+The HTTP status returned when an authenticated user lacks access to a resource is determined by the **URL identifier type**, not by personal preference. This is a cross-cutting rule — apply it uniformly when adding new endpoints.
+
+| URL identifier | Response when caller has no access | Why |
+|---|---|---|
+| **Slug** (e.g. `/<slug>/`, `/my-courses/<slug>/`, `/learn/<slug>/curriculum/`) | **403** | Course slugs are public — every published course's slug appears in `/catalog/`. "You can't access this" leaks nothing new. |
+| **Numeric ID** (e.g. `/lectures/<int:lecture_id>/`, `/quizzes/<int:quiz_id>/`, `/assignments/<int:assignment_id>/`, `/<int:pk>/`) | **404** | IDs are not enumerable from public surfaces. Returning 403 would confirm the resource exists, letting an attacker probe sequential IDs to map out lectures/quizzes/assignments across the platform. |
+
+The rule applies to **both** learner consumption endpoints and instructor authoring endpoints. Examples already in the codebase:
+
+- `LearnerCurriculumView` (slug) → 403 for unenrolled; `LearnerLectureDetailView` (lecture_id) → 404 for unenrolled.
+- `MyCoursesDetailView` (slug) → 403 for unenrolled; `CourseDetailView` (int pk) → 404 for non-owning instructor.
+- `AssignmentDetailAPIView`, `QuizDetailAPIView`, `CodingExerciseDetailAPIView` (all int IDs) → 404 for non-owning instructor.
+
+Two corollaries:
+
+1. **Don't normalize for "consistency".** Two endpoints in the same module returning different status codes is fine *if* one is slug-based and one is ID-based. The rule is consistent even when the codes differ.
+2. **Don't leak existence in the error body either.** A 404 response for "no access" should use the same message ("Lecture not found.") as a true missing-row 404 — never something like "You don't have access to this lecture." That defeats the point of the 404.
 
 ### Course Status State Machine
 

@@ -1,4 +1,5 @@
 import logging
+from datetime import timedelta
 
 from django.core.exceptions import ValidationError
 from django.db import IntegrityError, transaction
@@ -8,6 +9,11 @@ from django.utils import timezone
 from courses.models import Enrollment, NidusCourse, SectionContent, WatchProgress
 
 logger = logging.getLogger(__name__)
+
+# `update_last_accessed` is called on every learner consumption GET; debounce
+# so we don't write a row on every page refresh. 5 minutes of staleness is
+# acceptable for "last opened the course" — nobody needs second-level precision.
+LAST_ACCESSED_DEBOUNCE = timedelta(minutes=5)
 
 
 def get_catalog_courses() -> QuerySet[NidusCourse]:
@@ -139,8 +145,17 @@ def recalculate_progress(enrollment: Enrollment) -> Enrollment:
 
 
 def update_last_accessed(enrollment: Enrollment):
-    """Touch the last_accessed_at timestamp."""
+    """Touch the last_accessed_at timestamp, debounced to LAST_ACCESSED_DEBOUNCE.
+
+    Skips the write when the previous touch is younger than the debounce
+    window. Avoids a row-level UPDATE on every page refresh / progress ping.
+    """
     now = timezone.now()
+    if enrollment.last_accessed_at is not None and (
+        now - enrollment.last_accessed_at < LAST_ACCESSED_DEBOUNCE
+    ):
+        return enrollment.last_accessed_at
+
     Enrollment.objects.filter(pk=enrollment.pk).update(
         last_accessed_at=now,
         updated_at=now,

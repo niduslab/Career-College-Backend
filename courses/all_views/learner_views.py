@@ -19,7 +19,7 @@ from rest_framework.response import Response
 from rest_framework.views import APIView
 
 from core.permissions import IsEmailVerified, IsInstructorUser, IsLearnerUser
-from courses.models import Lecture, NidusCourse
+from courses.models import Enrollment, Lecture, NidusCourse
 from courses.serializers import (
     LearnerLectureDetailSerializer,
     WatchProgressUpsertSerializer,
@@ -120,7 +120,6 @@ class LearnerLectureProgressView(APIView):
         lecture = (
             Lecture.objects
             .select_related('section__course')
-            .prefetch_related('section__course__instructors')
             .filter(pk=lecture_id)
             .first()
         )
@@ -132,7 +131,11 @@ class LearnerLectureProgressView(APIView):
 
         # Existence is not leaked: a learner who has no enrollment for the
         # course gets the same 404 a non-existent lecture would produce.
-        _is_instructor, enrollment = resolve_course_access(request.user, lecture.section.course)
+        enrollment = Enrollment.objects.filter(
+            user=request.user,
+            course=lecture.section.course,
+            is_active=True,
+        ).first()
         if enrollment is None:
             return Response(
                 {'success': False, 'message': 'Lecture not found.'},

@@ -54,8 +54,14 @@ def resolve_course_access(user, course: NidusCourse) -> Tuple[bool, Optional[Enr
 
 
 def _load_sections_and_contents(course) -> Tuple[list, dict]:
+    # `.only(...)` keeps the curriculum outline lightweight: `description`
+    # (TextField, often paragraphs) and `created_at`/`updated_at` are not
+    # read by the serializer, so we don't pay to fetch them.
     sections = list(
-        CourseSection.objects.filter(course=course).order_by('position', 'id')
+        CourseSection.objects
+        .filter(course=course)
+        .only('id', 'title', 'position')
+        .order_by('position', 'id')
     )
     section_ids = [s.id for s in sections]
     if not section_ids:
@@ -64,6 +70,7 @@ def _load_sections_and_contents(course) -> Tuple[list, dict]:
     contents = list(
         SectionContent.objects
         .filter(section_id__in=section_ids)
+        .only('id', 'section_id', 'item_type', 'object_id', 'position')
         .order_by('section_id', 'position', 'id')
     )
     contents_by_section: dict[int, list] = defaultdict(list)

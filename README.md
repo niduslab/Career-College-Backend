@@ -341,15 +341,17 @@ All authenticated endpoints require: `Authorization: Bearer <access_token>`
 | GET | `my-courses/` | Learner | List active enrollments with progress |
 | GET | `my-courses/{slug}/` | Learner or course instructor | Slim course-header metadata + caller's enrollment status (no curriculum tree — see `learn/{slug}/curriculum/`) |
 
-#### Learner Consumption (Phase 1)
+#### Learner Consumption (Phase 1 + Phase 2 quiz)
 
 | Method | Endpoint | Auth | Description |
 |--------|----------|------|-------------|
 | GET | `learn/{slug}/curriculum/` | Enrolled learner or course instructor | Lightweight ordered curriculum: sections + items with title, type, duration, and per-lecture completion marker |
 | GET | `learn/lectures/{lecture_id}/` | Enrolled learner or course instructor | Single lecture: HLS playlist + renditions for video, article text for article. Includes the caller's progress to support resume |
 | POST | `learn/lectures/{lecture_id}/progress/` | Enrolled learner | Idempotent upsert of `WatchProgress` (`watched_seconds`, `is_completed`). The `WatchProgress` post_save signal recalculates the enrollment's `progress_percent` |
+| GET | `learn/quizzes/{quiz_id}/` | Enrolled learner or course instructor | Quiz + questions + answer options (no `is_correct`) for the attempt UI. Includes the caller's `latest_attempt` summary |
+| POST | `learn/quizzes/{quiz_id}/submit/` | Enrolled learner | Submit selected answers; returns score + per-question verdict (with the correct answer revealed only for wrong ones). Creates a new `QuizAttempt` each call |
 
-Phase 2 (quiz / assignment / coding consumption + submissions) is not yet built.
+Phase 2 remainder (assignment + coding consumption + submissions) is not yet built. Quiz submissions don't yet count toward `enrollment.progress_percent` — that hook is open in `recalculate_progress`.
 
 #### Course CRUD
 

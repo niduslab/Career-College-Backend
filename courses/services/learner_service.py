@@ -17,6 +17,9 @@ Quiz / assignment / coding consumption services land in later phases.
 from collections import defaultdict
 from typing import Optional, Tuple
 
+from django.db import transaction
+from django.db.models import Prefetch
+
 from courses.models import (
     Assignment,
     CodingExercise,
@@ -25,10 +28,15 @@ from courses.models import (
     Lecture,
     NidusCourse,
     Quiz,
+    QuizAnswer,
+    QuizAttempt,
+    QuizAttemptAnswer,
+    QuizQuestion,
     SectionContent,
     VideoAsset,
     WatchProgress,
 )
+from courses.services.enrollment_service import recalculate_progress
 
 
 def resolve_course_access(user, course: NidusCourse) -> Tuple[bool, Optional[Enrollment]]:
@@ -251,10 +259,32 @@ def upsert_watch_progress(
     """
     Idempotent upsert of a learner's watch progress for a lecture.
 
+    `watched_seconds` is clamped to the active video's duration so a buggy
+    or malicious client can't park the cursor past the end of the file.
+    HLS players legitimately overshoot `duration` by a fraction of a second
+    when `ended` fires, so we cap rather than reject. If the cursor lands
+    exactly at `duration`, `is_completed` is forced to `True` — the video
+    has functionally ended, regardless of what the client declared.
+    Article lectures have no duration; their `watched_seconds` is forced
+    to 0 because the field has no meaning there.
+
     The post_save signal on WatchProgress recalculates the enrollment's
     progress_percent when `is_completed` transitions, so this function
     intentionally does not touch the enrollment row itself.
     """
+    duration = (
+        VideoAsset.objects
+        .filter(lecture=lecture, is_active=True)
+        .values_list('duration_seconds', flat=True)
+        .first()
+    )
+    if duration is None:
+        watched_seconds = 0
+    else:
+        watched_seconds = min(max(watched_seconds, 0), duration)
+        if duration > 0 and watched_seconds >= duration:
+            is_completed = True
+
     wp, _ = WatchProgress.objects.update_or_create(
         user=user,
         lecture=lecture,
@@ -264,3 +294,136 @@ def upsert_watch_progress(
         },
     )
     return wp
+
+
+# ---------------------------------------------------------------------------
+# Quiz consumption + submission (Phase 2)
+# ---------------------------------------------------------------------------
+
+def get_quiz_for_consumption(user, quiz_id: int):
+    """
+    Fetch a quiz and verify the user can consume it.
+
+    Returns (quiz, course, is_instructor, latest_attempt_or_none).
+    Raises Quiz.DoesNotExist when missing OR the user has no consumption
+    access to its course (numeric-ID URL → 404, not 403, to avoid leaking
+    existence).
+
+    Questions + answers are prefetched ordered by position/id so the
+    serializer never needs to re-query.
+    """
+    quiz = (
+        Quiz.objects
+        .select_related('section__course')
+        .prefetch_related(
+            'section__course__instructors',
+            Prefetch(
+                'questions',
+                queryset=QuizQuestion.objects
+                    .order_by('position', 'id')
+                    .prefetch_related(
+                        Prefetch('answers', queryset=QuizAnswer.objects.order_by('id')),
+                    ),
+            ),
+        )
+        .filter(pk=quiz_id)
+        .first()
+    )
+    if quiz is None:
+        raise Quiz.DoesNotExist
+    course = quiz.section.course
+
+    is_instructor, enrollment = resolve_course_access(user, course)
+    if not is_instructor and enrollment is None:
+        raise Quiz.DoesNotExist
+
+    latest_attempt = None
+    if not is_instructor:
+        latest_attempt = (
+            QuizAttempt.objects
+            .filter(user=user, quiz=quiz)
+            .order_by('-submitted_at')
+            .first()
+        )
+
+    return quiz, course, is_instructor, latest_attempt
+
+
+@transaction.atomic
+def submit_quiz_attempt(user, quiz: Quiz, answers_payload: list[dict]) -> QuizAttempt:
+    """
+    Create a new QuizAttempt + per-question QuizAttemptAnswer rows in one
+    transaction. The submitted payload is a list of
+    `{question_id, selected_answer_id}` dicts (validation done in the
+    serializer); this function assumes the IDs are well-formed and only
+    enforces that they belong to this quiz.
+
+    Score is computed from the live answer key (the `is_correct` flag on
+    each `QuizAnswer`) and then cached onto `QuizAttemptAnswer.is_correct`
+    so that future instructor edits to the answer key don't retroactively
+    rewrite historical attempts.
+
+    Every question on the quiz gets an attempt row, including unanswered
+    ones (`selected_answer=None`, scored as incorrect).
+    """
+    questions = list(quiz.questions.order_by('position', 'id').prefetch_related('answers'))
+    answer_by_question_id: dict[int, Optional[int]] = {
+        item['question_id']: item.get('selected_answer_id')
+        for item in answers_payload
+    }
+
+    correct_answer_by_question_id: dict[int, Optional[int]] = {}
+    valid_answer_ids_by_question_id: dict[int, set[int]] = {}
+    for question in questions:
+        valid_answer_ids_by_question_id[question.id] = {a.id for a in question.answers.all()}
+        for a in question.answers.all():
+            if a.is_correct:
+                correct_answer_by_question_id[question.id] = a.id
+                break
+
+    max_score = len(questions)
+    score = 0
+    attempt_rows = []
+
+    for question in questions:
+        selected_id = answer_by_question_id.get(question.id)
+        # Reject answers that don't belong to the question — even if validated
+        # at the serializer layer, defend in depth here.
+        if selected_id is not None and selected_id not in valid_answer_ids_by_question_id[question.id]:
+            selected_id = None
+
+        is_correct = (
+            selected_id is not None
+            and selected_id == correct_answer_by_question_id.get(question.id)
+        )
+        if is_correct:
+            score += 1
+        attempt_rows.append({
+            'question': question,
+            'selected_answer_id': selected_id,
+            'is_correct': is_correct,
+        })
+
+    attempt = QuizAttempt.objects.create(
+        user=user, quiz=quiz, score=score, max_score=max_score,
+    )
+    QuizAttemptAnswer.objects.bulk_create([
+        QuizAttemptAnswer(
+            attempt=attempt,
+            question=row['question'],
+            selected_answer_id=row['selected_answer_id'],
+            is_correct=row['is_correct'],
+        )
+        for row in attempt_rows
+    ])
+
+    enrollment = (
+        Enrollment.objects
+        .select_related('course', 'user')
+        .filter(user=user, course=quiz.section.course, is_active=True)
+        .first()
+    )
+    if enrollment:
+        recalculate_progress(enrollment)
+
+    return attempt

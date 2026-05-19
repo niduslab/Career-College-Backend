@@ -298,3 +298,61 @@ class LearnerConsumptionAPITests(APITestCase):
 
         self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
         self.assertIn('is_completed', response.data['errors'])
+
+    def test_progress_clamps_watched_seconds_to_video_duration(self):
+        self.auth()
+        url = reverse('courses:learner-lecture-progress', kwargs={'lecture_id': self.video_lecture.id})
+
+        response = self.client.post(
+            url, {'watched_seconds': 99999, 'is_completed': True}, format='json',
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data['data']['watched_seconds'], 600)
+        wp = WatchProgress.objects.get(user=self.learner, lecture=self.video_lecture)
+        self.assertEqual(wp.watched_seconds, 600)
+        self.assertTrue(wp.is_completed)
+
+    def test_progress_forces_completion_when_cursor_reaches_duration(self):
+        # Client lies / hasn't fired `ended` yet: cursor at duration but
+        # is_completed=false. Server overrides — at duration means done.
+        self.auth()
+        url = reverse('courses:learner-lecture-progress', kwargs={'lecture_id': self.video_lecture.id})
+
+        response = self.client.post(
+            url, {'watched_seconds': 600, 'is_completed': False}, format='json',
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertTrue(response.data['data']['is_completed'])
+        wp = WatchProgress.objects.get(user=self.learner, lecture=self.video_lecture)
+        self.assertTrue(wp.is_completed)
+        self.assertEqual(wp.watched_seconds, 600)
+
+    def test_progress_does_not_force_completion_below_duration(self):
+        # Mid-video heartbeat must not flip is_completed on its own.
+        self.auth()
+        url = reverse('courses:learner-lecture-progress', kwargs={'lecture_id': self.video_lecture.id})
+
+        response = self.client.post(
+            url, {'watched_seconds': 599, 'is_completed': False}, format='json',
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertFalse(response.data['data']['is_completed'])
+        wp = WatchProgress.objects.get(user=self.learner, lecture=self.video_lecture)
+        self.assertFalse(wp.is_completed)
+        self.assertEqual(wp.watched_seconds, 599)
+
+    def test_progress_forces_watched_seconds_to_zero_for_article(self):
+        self.auth()
+        url = reverse('courses:learner-lecture-progress', kwargs={'lecture_id': self.article_lecture.id})
+
+        response = self.client.post(
+            url, {'watched_seconds': 42, 'is_completed': True}, format='json',
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data['data']['watched_seconds'], 0)
+        wp = WatchProgress.objects.get(user=self.learner, lecture=self.article_lecture)
+        self.assertEqual(wp.watched_seconds, 0)

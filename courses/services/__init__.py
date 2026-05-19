@@ -29,8 +29,10 @@ from courses.services.curriculum_service import (
 )
 from courses.services.learner_service import (
     get_consumption_lecture,
+    get_quiz_for_consumption,
     load_learner_curriculum,
     resolve_course_access,
+    submit_quiz_attempt,
     upsert_watch_progress,
 )
 
@@ -57,7 +59,9 @@ __all__ = [
     'update_last_accessed',
     'load_catalog_curriculum',
     'get_consumption_lecture',
+    'get_quiz_for_consumption',
     'load_learner_curriculum',
     'resolve_course_access',
+    'submit_quiz_attempt',
     'upsert_watch_progress',
 ]

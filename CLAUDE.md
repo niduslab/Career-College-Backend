@@ -78,39 +78,48 @@ Catalog bulk-loading lives in `courses/services/curriculum_service.py` → `load
 
 ### Learner Consumption Endpoints (`/learn/...`)
 
-Phase-1 of the split learner surface. Endpoints, services, and serializers all live in dedicated `learner_*` modules so sensitive instructor-only fields cannot leak by accident:
+Split learner surface. Endpoints, services, and serializers all live in dedicated `learner_*` modules so sensitive instructor-only fields cannot leak by accident:
 
 | Endpoint | View | Purpose |
 |---|---|---|
 | `GET /learn/<slug>/curriculum/` | `LearnerCurriculumView` | Light curriculum outline: ordered sections + item rows with `title`, `item_type`, `position`. Lectures also carry `lecture_type`, `duration_seconds`, and (for learners) `is_completed`. No HLS URLs, no quiz questions, no article text. |
 | `GET /learn/lectures/<int:lecture_id>/` | `LearnerLectureDetailView` | Learner-safe lecture detail. Video → HLS playlist + renditions. Article → `article_content`. Always returns the caller's `progress` (so the player can resume). |
 | `POST /learn/lectures/<int:lecture_id>/progress/` | `LearnerLectureProgressView` | Idempotent upsert of `WatchProgress` via `update_or_create`. Body: `{watched_seconds, is_completed}`. Both required. The `WatchProgress` post_save signal recalculates the enrollment's `progress_percent`. |
+| `GET /learn/quizzes/<int:quiz_id>/` | `LearnerQuizDetailView` | Quiz + questions + answer options (no `is_correct`) for the attempt UI. Includes the caller's `latest_attempt` summary if they've submitted before. |
+| `POST /learn/quizzes/<int:quiz_id>/submit/` | `LearnerQuizSubmitView` | Creates a new `QuizAttempt` with one `QuizAttemptAnswer` per question. Returns per-question verdict — `correct_answer_id`/`correct_answer_text` appear **only when the learner got it wrong**. Each submit = new attempt row (no cap; instructor edits to the answer key don't retroactively rewrite past attempts because `is_correct` is denormalized onto the attempt). |
 
 Permission model:
-- `GET` endpoints accept *enrolled learner OR the course's own instructor* (matching `MyCoursesDetailView`). Unenrolled non-instructors get `403` on the curriculum endpoint and `404` on lecture detail (existence not leaked).
-- `POST /progress/` is `IsLearnerUser`-gated; instructors get `403` (preview must not write progress). Unenrolled learners get `404`.
+- `GET` endpoints accept *enrolled learner OR the course's own instructor* (preview matching `MyCoursesDetailView`). Slug-based curriculum → 403 for unenrolled; numeric-ID endpoints → 404 (existence not leaked).
+- `POST /progress/` and `POST /submit/` are `IsLearnerUser`-gated; instructors get `403` (preview must not pollute progress or attempt history). Unenrolled learners get `404`.
 
 Data loaders live in `courses/services/learner_service.py`:
 - `resolve_course_access(user, course)` → `(is_instructor, enrollment_or_none)`. Use this in any new learner endpoint that needs the same access policy.
 - `load_learner_curriculum(course, user, is_instructor)` — bulk-loads `.only(...)` lightweight fields and a single `WatchProgress` query for completion markers.
-- `get_consumption_lecture(user, lecture_id)` — fetches lecture + verifies access in one call. Raises `Lecture.DoesNotExist` on missing-or-no-access.
-- `upsert_watch_progress(user, lecture, watched_seconds, is_completed)` — never touches the enrollment row directly; the signal handles recalc.
+- `get_consumption_lecture(user, lecture_id)` / `get_quiz_for_consumption(user, quiz_id)` — fetch + verify access in one call. Raise `Lecture.DoesNotExist` / `Quiz.DoesNotExist` on missing-or-no-access.
+- `upsert_watch_progress(user, lecture, ...)` — never touches the enrollment row directly; the signal handles recalc.
+- `submit_quiz_attempt(user, quiz, answers_payload)` — atomic: creates the `QuizAttempt` + per-question `QuizAttemptAnswer` rows, computes score from the live answer key, and **caches `is_correct` onto each attempt row** so historical attempts stay frozen against later instructor edits.
 
-Serializers live in `courses/all_serializers/learner_serializers.py`. Phase-2 (quiz/assignment/coding consumption + submission) will add new `Learner*Serializer` classes there — do not reuse instructor authoring serializers, they embed sensitive fields (`solution_code`, hidden test cases, `model_answer`, `is_correct`).
+Serializers live in `courses/all_serializers/learner_serializers.py`. `build_quiz_attempt_result(attempt)` is a function (not a serializer class) because the "show correct answer only when wrong" rule is awkward to express with DRF field declarations and trivial in plain Python; centralising it there means every caller (current and future) gets identical behaviour.
+
+Phase-2 still to build: assignment consumption + submissions, coding-exercise learner runtime. When adding those, define new `Learner*Serializer` classes — do **not** reuse instructor authoring serializers, they embed sensitive fields (`solution_code`, hidden test cases, `model_answer`, `is_correct`).
+
+`recalculate_progress()` in `enrollment_service.py` counts both lecture completion (`WatchProgress.is_completed=True`) and quiz attempts (≥1 `QuizAttempt` per quiz). Lectures recalc via the `WatchProgress` post_save signal; `submit_quiz_attempt` calls `recalculate_progress(enrollment)` directly at the end of its transaction. Assignment and coding-exercise completion are still stubs (`completed_assignments = completed_coding = 0`) — those land with their respective submission models.
+
+`upsert_watch_progress` enforces two server-side invariants the client cannot override: `watched_seconds` is clamped to the active `VideoAsset.duration_seconds` (HLS players legitimately overshoot by a fraction, so we cap rather than reject), and if the clamped cursor lands at duration, `is_completed` is forced to `True` (the video has functionally ended regardless of what the client declared). Article lectures have no duration; `watched_seconds` is forced to `0`.
 
 ### Learner-Safe Serialization
 
-When implementing Phase-2 consumption serializers (`/learn/quizzes/<id>/`, `/learn/assignments/<id>/`, `/learn/coding-exercises/<id>/`), the following fields **must remain instructor-only**:
+The following fields **must remain instructor-only** in any learner-facing response:
 
-| Field | Audience |
-|---|---|
-| `Lecture.stream_master_playlist` (full HLS URL) | Exposed on `/learn/lectures/<id>/` for any caller with access; on `/catalog/` only when `Lecture.is_preview=True` |
-| `QuizAnswer.is_correct` | Instructor only (omit from learner payload, score server-side after submit) |
-| `AssignmentQuestion.model_answer` | Instructor only |
-| `CodingExerciseLanguageConfig.solution_code` | Instructor only |
-| `CodingTestCase.is_hidden` + hidden test cases | Instructor only (filter hidden cases out of learner payload) |
+| Field | Audience | Status |
+|---|---|---|
+| `Lecture.stream_master_playlist` (full HLS URL) | Exposed on `/learn/lectures/<id>/` for any caller with access; on `/catalog/` only when `Lecture.is_preview=True` | Done |
+| `QuizAnswer.is_correct` | Instructor only (omit from learner payload pre-submit; score server-side; reveal the correct answer in the post-submit response only for wrong questions) | Done — `_LearnerQuizAnswerOptionSerializer` simply doesn't declare it; `build_quiz_attempt_result` controls reveal-on-wrong |
+| `AssignmentQuestion.model_answer` | Instructor only | Still to build (Phase-2 assignments) |
+| `CodingExerciseLanguageConfig.solution_code` | Instructor only | Still to build (Phase-2 coding) |
+| `CodingTestCase.is_hidden` + hidden test cases | Instructor only (filter hidden cases out of learner payload) | Still to build (Phase-2 coding) |
 
-Pattern: define dedicated `Learner*Serializer` classes that simply don't declare the sensitive fields. Don't rely on conditional `to_representation` stripping — a future refactor could miss a branch and leak. Absence is a stronger guarantee than conditional removal.
+Pattern: define dedicated `Learner*Serializer` classes that simply don't declare the sensitive fields. Don't rely on conditional `to_representation` stripping — a future refactor could miss a branch and leak. Absence is a stronger guarantee than conditional removal. The quiz-submission response (`build_quiz_attempt_result`) is an exception: it returns `correct_answer_*` only when `is_correct=False`, and that conditional-presence rule lives in one well-named function so the contract is easy to audit.
 
 ### Video Pipeline
 

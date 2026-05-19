@@ -33,6 +33,8 @@ from courses.all_views import (
     LearnerCurriculumView,
     LearnerLectureDetailView,
     LearnerLectureProgressView,
+    LearnerQuizDetailView,
+    LearnerQuizSubmitView,
     LectureDetailAPIView,
     LectureListAPIView,
     MyCoursesDetailView,
@@ -92,4 +94,6 @@ __all__ = [
     'LearnerCurriculumView',
     'LearnerLectureDetailView',
     'LearnerLectureProgressView',
+    'LearnerQuizDetailView',
+    'LearnerQuizSubmitView',
 ]

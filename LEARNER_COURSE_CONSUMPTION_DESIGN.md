@@ -1,12 +1,25 @@
-> **Implementation Status (2026-05-17):** Phase 1 is **complete and merged**. The three Phase-1 endpoints below have been built:
+> **Implementation Status (2026-05-17):** Phase 1 **and the quiz portion of Phase 2** are complete and tested.
 >
+> **Phase 1 (lecture consumption):**
 > - `GET /api/v1/courses/learn/<slug>/curriculum/` → `LearnerCurriculumView`
 > - `GET /api/v1/courses/learn/lectures/<lecture_id>/` → `LearnerLectureDetailView`
 > - `POST /api/v1/courses/learn/lectures/<lecture_id>/progress/` → `LearnerLectureProgressView`
 >
-> Supporting infrastructure shipped at the same time: `courses/services/learner_service.py` (with `resolve_course_access`, `load_learner_curriculum`, `get_consumption_lecture`, `upsert_watch_progress`), `courses/all_serializers/learner_serializers.py`, `courses/all_views/learner_views.py`, and `courses/all_tests/test_learner_consumption.py`. The Phase-1 endpoints landed in the same change as the slim-down of `/my-courses/<slug>/` (which now returns metadata + enrollment status only, not the full course tree). See `CLAUDE.md` → "Learner Consumption Endpoints" and `MY_COURSES_PERFORMANCE_AUDIT.md` for the post-refactor state.
+> **Phase 2 — quiz portion (newly landed):**
+> - `GET /api/v1/courses/learn/quizzes/<quiz_id>/` → `LearnerQuizDetailView`
+> - `POST /api/v1/courses/learn/quizzes/<quiz_id>/submit/` → `LearnerQuizSubmitView`
 >
-> Phases 2–4 below (quiz / assignment / coding consumption + submissions) remain not yet built. The "Current State" and "Recommended Endpoint Set" sections that follow describe the **pre-refactor** assessment and the **target shape** — kept for reference and as input to the Phase-2 design.
+> Supporting infrastructure: new models `QuizAttempt` + `QuizAttemptAnswer` (`courses/all_models/assessment_models.py`); new service functions `get_quiz_for_consumption` and `submit_quiz_attempt` (`courses/services/learner_service.py`); new serializers `LearnerQuizDetailSerializer`, `QuizSubmissionSerializer`, plus the helper function `build_quiz_attempt_result` (`courses/all_serializers/learner_serializers.py`); tests in `courses/all_tests/test_learner_quiz_consumption.py` (15 cases).
+>
+> Behaviour decisions made during implementation:
+>
+> - **Retake policy:** unlimited attempts. Each `POST /submit/` creates a new `QuizAttempt` row. No `attempt_number` cap. Frontend can read `latest_attempt` from `GET /learn/quizzes/<id>/` for the "you scored X/Y last time" prompt.
+> - **Scoring:** simple correct/total. There is no `passing_score` field on `Quiz`; per the product rule the score is informational, not gate-keeping.
+> - **Per-question feedback:** `correct_answer_id` + `correct_answer_text` are returned **only when `is_correct=false`** — matches the requirement "if not then it will show the correct answer alongside of the verdict." Unanswered questions (`selected_answer_id: null`) score as wrong and reveal the correct answer.
+> - **Frozen-attempt invariant:** `QuizAttemptAnswer.is_correct` is denormalized at submit time. An instructor flipping the correct-answer key after a learner has attempted the quiz does NOT retroactively rewrite the historical attempt.
+> - **Progress integration:** quiz completion now counts toward `enrollment.progress_percent`. `recalculate_progress()` treats a quiz as complete once the learner has ≥1 `QuizAttempt` for it, and `submit_quiz_attempt` calls the recalc at the end of its transaction. Assignment + coding-exercise completion remain stubs pending their submission models.
+>
+> Still to build (Phase 2 remainder + Phase 3+): assignment consume + submit, coding-exercise consume + runtime/submit. The "Recommended Endpoint Set" section below describes the planned shape for those.
 
 ---
 

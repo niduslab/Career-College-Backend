@@ -35,6 +35,8 @@ from courses.views import (
     LearnerCurriculumView,
     LearnerLectureDetailView,
     LearnerLectureProgressView,
+    LearnerQuizDetailView,
+    LearnerQuizSubmitView,
     LectureDetailAPIView,
     LectureListAPIView,
     MyCoursesDetailView,
@@ -71,6 +73,8 @@ urlpatterns = [
     path('learn/<slug:slug>/curriculum/', LearnerCurriculumView.as_view(), name='learner-curriculum'),
     path('learn/lectures/<int:lecture_id>/', LearnerLectureDetailView.as_view(), name='learner-lecture-detail'),
     path('learn/lectures/<int:lecture_id>/progress/', LearnerLectureProgressView.as_view(), name='learner-lecture-progress'),
+    path('learn/quizzes/<int:quiz_id>/', LearnerQuizDetailView.as_view(), name='learner-quiz-detail'),
+    path('learn/quizzes/<int:quiz_id>/submit/', LearnerQuizSubmitView.as_view(), name='learner-quiz-submit'),
 
     # -------------------------------------------------------------------------
     # Instructor course management

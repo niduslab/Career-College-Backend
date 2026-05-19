@@ -1,18 +1,25 @@
 """
-Learner-facing serializers for the Phase-1 consumption surface.
+Learner-facing serializers for the Phase-1 + Phase-2 consumption surface.
 
 Kept separate from the instructor-side serializers so sensitive fields
 (model_answer, solution_code, hidden test cases, quiz correctness flags)
 cannot accidentally bleed into a learner response — these serializers
 simply do not declare those fields.
+
+`build_quiz_attempt_result` is a function rather than a `Serializer` class
+because it shapes a per-question verdict whose presence-of-fields rule
+("show correct answer only when wrong") is awkward to express with DRF
+field declarations and trivial in plain Python.
 """
 
+from django.db.models import Prefetch
 from rest_framework import serializers
 
 from courses.all_serializers.content_serializers import (
     _normalize_media_relative_path,
     _normalize_renditions_playlists,
 )
+from courses.models import QuizAnswer
 
 
 class LearnerWatchProgressSerializer(serializers.Serializer):
@@ -69,3 +76,183 @@ class WatchProgressUpsertSerializer(serializers.Serializer):
 
     watched_seconds = serializers.IntegerField(min_value=0)
     is_completed = serializers.BooleanField()
+
+
+# ---------------------------------------------------------------------------
+# Quiz consumption + submission (Phase 2)
+# ---------------------------------------------------------------------------
+
+class _LearnerQuizAnswerOptionSerializer(serializers.Serializer):
+    """One answer option for the attempt UI. `is_correct` is deliberately
+    not declared — absence is a stronger guarantee than conditional removal."""
+
+    id = serializers.IntegerField()
+    answer_text = serializers.CharField()
+
+
+class _LearnerQuizQuestionSerializer(serializers.Serializer):
+    """Question + its answer options, no correctness exposed."""
+
+    id = serializers.IntegerField()
+    question_text = serializers.CharField()
+    position = serializers.IntegerField()
+    answers = serializers.SerializerMethodField()
+
+    def get_answers(self, question):
+        # Use the prefetched cache so we don't N+1 across questions.
+        prefetched = getattr(question, '_prefetched_objects_cache', {})
+        answer_objs = prefetched['answers'] if 'answers' in prefetched else list(question.answers.all())
+        return _LearnerQuizAnswerOptionSerializer(answer_objs, many=True).data
+
+
+class LearnerQuizDetailSerializer(serializers.Serializer):
+    """Learner-safe quiz payload for the attempt UI."""
+
+    id = serializers.IntegerField()
+    section_id = serializers.IntegerField()
+    title = serializers.CharField()
+    description = serializers.CharField()
+    question_count = serializers.SerializerMethodField()
+    questions = serializers.SerializerMethodField()
+    latest_attempt = serializers.SerializerMethodField()
+
+    def get_question_count(self, quiz):
+        prefetched = getattr(quiz, '_prefetched_objects_cache', {})
+        if 'questions' in prefetched:
+            return len(prefetched['questions'])
+        return quiz.questions.count()
+
+    def get_questions(self, quiz):
+        prefetched = getattr(quiz, '_prefetched_objects_cache', {})
+        question_objs = prefetched['questions'] if 'questions' in prefetched else list(quiz.questions.order_by('position', 'id'))
+        return _LearnerQuizQuestionSerializer(question_objs, many=True).data
+
+    def get_latest_attempt(self, _quiz):
+        attempt = self.context.get('latest_attempt')
+        if attempt is None:
+            return None
+        return {
+            'attempt_id': attempt.id,
+            'score': attempt.score,
+            'max_score': attempt.max_score,
+            'submitted_at': attempt.submitted_at,
+        }
+
+
+class _QuizAnswerSubmissionSerializer(serializers.Serializer):
+    """One element of the submission payload's `answers` list."""
+
+    question_id = serializers.IntegerField()
+    # `null` means the learner left the question unanswered.
+    selected_answer_id = serializers.IntegerField(allow_null=True, required=False)
+
+
+class QuizSubmissionSerializer(serializers.Serializer):
+    """Validate the POST body for `/learn/quizzes/<id>/submit/`."""
+
+    answers = _QuizAnswerSubmissionSerializer(many=True)
+
+    def validate_answers(self, value):
+        # Reject duplicate question_ids in the payload — at most one
+        # selected answer per question, matching the unique constraint
+        # on QuizAttemptAnswer.
+        seen = set()
+        for item in value:
+            qid = item['question_id']
+            if qid in seen:
+                raise serializers.ValidationError(
+                    f'question_id {qid} appears more than once in the payload.'
+                )
+            seen.add(qid)
+        return value
+
+    def validate(self, attrs):
+        quiz = self.context.get('quiz')
+        if quiz is None:
+            return attrs
+
+        # Cross-reference each submitted question_id and selected_answer_id
+        # against the actual quiz structure. Rejecting bad IDs here is
+        # cleaner than letting them silently drop in the service layer.
+        valid_answer_ids_by_question: dict[int, set[int]] = {}
+        for question in quiz.questions.all():
+            prefetched = getattr(question, '_prefetched_objects_cache', {})
+            answers_iter = prefetched['answers'] if 'answers' in prefetched else question.answers.all()
+            valid_answer_ids_by_question[question.id] = {a.id for a in answers_iter}
+
+        errors = []
+        for item in attrs['answers']:
+            qid = item['question_id']
+            if qid not in valid_answer_ids_by_question:
+                errors.append(f'question_id {qid} does not belong to this quiz.')
+                continue
+            selected = item.get('selected_answer_id')
+            if selected is not None and selected not in valid_answer_ids_by_question[qid]:
+                errors.append(
+                    f'selected_answer_id {selected} does not belong to question {qid}.'
+                )
+
+        if errors:
+            raise serializers.ValidationError({'answers': errors})
+        return attrs
+
+
+def build_quiz_attempt_result(attempt) -> dict:
+    """
+    Build the response payload for a freshly-submitted (or re-fetched) quiz
+    attempt. The shape is:
+
+        {
+            'attempt_id', 'score', 'max_score', 'submitted_at',
+            'questions': [
+                {
+                    'question_id', 'question_text',
+                    'selected_answer_id', 'selected_answer_text',
+                    'is_correct',
+                    # only present when is_correct=False:
+                    'correct_answer_id', 'correct_answer_text',
+                },
+                ...
+            ],
+        }
+
+    The "show correct answer only when wrong" rule is implemented here so
+    every caller (current and future) gets identical behaviour without
+    needing a conditional in the view.
+    """
+    # Pull the attempt's answers with the related question + selected_answer
+    # eagerly so we don't N+1. The correct-answer lookup needs the full
+    # QuizAnswer set per question, so prefetch that too.
+    answer_rows = list(
+        attempt.answers
+        .select_related('question', 'selected_answer')
+        .prefetch_related(Prefetch('question__answers', queryset=QuizAnswer.objects.order_by('id')))
+        .order_by('question__position', 'question_id')
+    )
+
+    questions_payload = []
+    for row in answer_rows:
+        item = {
+            'question_id': row.question_id,
+            'question_text': row.question.question_text,
+            'selected_answer_id': row.selected_answer_id,
+            'selected_answer_text': row.selected_answer.answer_text if row.selected_answer else None,
+            'is_correct': row.is_correct,
+        }
+        if not row.is_correct:
+            correct = next(
+                (a for a in row.question.answers.all() if a.is_correct),
+                None,
+            )
+            if correct is not None:
+                item['correct_answer_id'] = correct.id
+                item['correct_answer_text'] = correct.answer_text
+        questions_payload.append(item)
+
+    return {
+        'attempt_id': attempt.id,
+        'score': attempt.score,
+        'max_score': attempt.max_score,
+        'submitted_at': attempt.submitted_at,
+        'questions': questions_payload,
+    }

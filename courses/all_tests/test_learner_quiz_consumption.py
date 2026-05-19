@@ -386,3 +386,37 @@ class LearnerQuizConsumptionAPITests(APITestCase):
         )
 
         self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+
+    # -------------------------------------------------------------------------
+    # Progress recalc after submission (transaction.on_commit hook)
+    # -------------------------------------------------------------------------
+
+    def test_submit_schedules_progress_recalc_on_commit(self):
+        # `submit_quiz_attempt` defers `recalculate_progress` via
+        # `transaction.on_commit` so a recalc failure can't roll back a
+        # valid attempt. `captureOnCommitCallbacks` records and runs those
+        # callbacks under the test's outer transaction.
+        self.auth()
+        url = reverse('courses:learner-quiz-submit', kwargs={'quiz_id': self.quiz.id})
+
+        with self.captureOnCommitCallbacks(execute=True) as callbacks:
+            response = self.client.post(
+                url,
+                {
+                    'answers': [
+                        {'question_id': self.q1.id, 'selected_answer_id': self.q1_correct.id},
+                        {'question_id': self.q2.id, 'selected_answer_id': self.q2_correct.id},
+                        {'question_id': self.q3.id, 'selected_answer_id': self.q3_correct.id},
+                    ],
+                },
+                format='json',
+            )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(len(callbacks), 1)
+
+        # With one quiz and zero lectures on the course, completing the quiz
+        # should bring progress_percent to 100.
+        self.enrollment.refresh_from_db()
+        self.assertEqual(self.enrollment.progress_percent, 100)
+        self.assertIsNotNone(self.enrollment.completed_at)

@@ -350,7 +350,12 @@ def get_quiz_for_consumption(user, quiz_id: int):
 
 
 @transaction.atomic
-def submit_quiz_attempt(user, quiz: Quiz, answers_payload: list[dict]) -> QuizAttempt:
+def submit_quiz_attempt(
+    user,
+    quiz: Quiz,
+    answers_payload: list[dict],
+    enrollment: Optional[Enrollment] = None,
+) -> QuizAttempt:
     """
     Create a new QuizAttempt + per-question QuizAttemptAnswer rows in one
     transaction. The submitted payload is a list of
@@ -365,6 +370,12 @@ def submit_quiz_attempt(user, quiz: Quiz, answers_payload: list[dict]) -> QuizAt
 
     Every question on the quiz gets an attempt row, including unanswered
     ones (`selected_answer=None`, scored as incorrect).
+
+    When `enrollment` is supplied, `recalculate_progress` runs via
+    `transaction.on_commit` so the recalc fires only after the attempt is
+    durably persisted — a recalc failure can't roll back a valid
+    submission. Pass `None` for callers that intentionally want to skip
+    the progress rollup (admin tools, batch grading, etc.).
     """
     questions = list(quiz.questions.order_by('position', 'id').prefetch_related('answers'))
     answer_by_question_id: dict[int, Optional[int]] = {
@@ -417,13 +428,7 @@ def submit_quiz_attempt(user, quiz: Quiz, answers_payload: list[dict]) -> QuizAt
         for row in attempt_rows
     ])
 
-    enrollment = (
-        Enrollment.objects
-        .select_related('course', 'user')
-        .filter(user=user, course=quiz.section.course, is_active=True)
-        .first()
-    )
-    if enrollment:
-        recalculate_progress(enrollment)
+    if enrollment is not None:
+        transaction.on_commit(lambda: recalculate_progress(enrollment))
 
     return attempt

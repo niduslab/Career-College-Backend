@@ -276,6 +276,7 @@ class LearnerQuizSubmitView(APIView):
                 user=request.user,
                 quiz=quiz,
                 answers_payload=serializer.validated_data['answers'],
+                enrollment=enrollment,
             )
         except Exception as e:
             logger.error(

@@ -1285,6 +1285,9 @@ All `/learn/...` endpoints require a verified-email JWT. `GET` endpoints accept 
 ```
 - Notes:
   - Idempotent — repeated POSTs with the same body never create duplicate `WatchProgress` rows.
+  - `watched_seconds` is server-clamped to the active video's `duration_seconds`. Sending `99999` for a 600-second video stores `600`, not `99999`.
+  - If the clamped cursor lands at duration, the server forces `is_completed: true` regardless of what the client sent — reaching the end of the file *is* completion. The response body reflects the corrected values.
+  - Article lectures have no duration; `watched_seconds` is forced to `0` on save.
   - When `is_completed` flips, a signal recalculates the enrollment's `progress_percent`. Re-fetch `/my-courses/` to see the updated rollup.
 
 ### 12B.6 Progress Endpoint Error Cases
@@ -1319,6 +1322,149 @@ All `/learn/...` endpoints require a verified-email JWT. `GET` endpoints accept 
 **Instructor calling the progress endpoint**
 - Authenticated as the course's instructor.
 - Expected status: `403` (`Only learners can access this resource.`). Instructor preview is read-only.
+
+### 12B.7 Get Learner Quiz Detail (Attempt UI)
+- Method: `GET`
+- URL: `{{base_url}}/learn/quizzes/{{quiz_id}}/`
+- Headers: enrolled learner OR course's instructor JWT
+- Expected status: `200`
+- Expected response:
+```json
+{
+  "success": true,
+  "data": {
+    "id": 50,
+    "section_id": 11,
+    "title": "REST Basics Quiz",
+    "description": "Checks understanding of HTTP and endpoints.",
+    "question_count": 3,
+    "questions": [
+      {
+        "id": 1,
+        "question_text": "Which HTTP method is idempotent?",
+        "position": 1,
+        "answers": [
+          { "id": 5, "answer_text": "POST" },
+          { "id": 6, "answer_text": "PUT" },
+          { "id": 7, "answer_text": "PATCH" }
+        ]
+      }
+    ],
+    "latest_attempt": {
+      "attempt_id": 12,
+      "score": 2,
+      "max_score": 3,
+      "submitted_at": "2026-05-17T09:14:22Z"
+    }
+  }
+}
+```
+- Notes:
+  - Each answer option carries only `id` + `answer_text` — `is_correct` is **never** in this payload.
+  - `latest_attempt` is `null` if the caller has never submitted (or is an instructor previewing).
+  - Instructor preview is allowed and gets the same shape (no `is_correct` leak even to them — the safer default).
+
+### 12B.8 Submit a Quiz Attempt
+- Method: `POST`
+- URL: `{{base_url}}/learn/quizzes/{{quiz_id}}/submit/`
+- Headers: enrolled learner JWT (instructors get `403`)
+- Body — list every question with its selected answer (or `null` to leave it unanswered):
+```json
+{
+  "answers": [
+    { "question_id": 1, "selected_answer_id": 6 },
+    { "question_id": 2, "selected_answer_id": 9 },
+    { "question_id": 3, "selected_answer_id": null }
+  ]
+}
+```
+- Expected status: `200`
+- Expected response — score + per-question verdict. `correct_answer_id` / `correct_answer_text` appear **only when `is_correct=false`**:
+```json
+{
+  "success": true,
+  "message": "Quiz submitted.",
+  "data": {
+    "attempt_id": 13,
+    "score": 1,
+    "max_score": 3,
+    "submitted_at": "2026-05-17T09:32:08Z",
+    "questions": [
+      {
+        "question_id": 1,
+        "question_text": "Which HTTP method is idempotent?",
+        "selected_answer_id": 6,
+        "selected_answer_text": "PUT",
+        "is_correct": true
+      },
+      {
+        "question_id": 2,
+        "question_text": "Which status code means \"Created\"?",
+        "selected_answer_id": 9,
+        "selected_answer_text": "204",
+        "is_correct": false,
+        "correct_answer_id": 11,
+        "correct_answer_text": "201"
+      },
+      {
+        "question_id": 3,
+        "question_text": "Which header carries the bearer token?",
+        "selected_answer_id": null,
+        "selected_answer_text": null,
+        "is_correct": false,
+        "correct_answer_id": 14,
+        "correct_answer_text": "Authorization"
+      }
+    ]
+  }
+}
+```
+- Notes:
+  - Each POST creates a **new** `QuizAttempt` row — repeated submits don't overwrite past attempts.
+  - Unanswered questions (`selected_answer_id: null`) score as wrong and reveal the correct answer.
+  - Each successful submit recalculates `enrollment.progress_percent` (a quiz counts as complete once the learner has ≥1 `QuizAttempt` row for it). Re-fetch `/my-courses/{{course_slug}}/` to see the updated rollup.
+
+### 12B.9 Quiz Submission Error Cases
+
+**Question ID not in this quiz**
+- Body references a `question_id` from a different quiz.
+- Expected status: `400`
+- Example response:
+```json
+{
+  "success": false,
+  "message": "Validation failed.",
+  "errors": {
+    "answers": ["question_id 99 does not belong to this quiz."]
+  }
+}
+```
+
+**Answer ID not under the cited question**
+- `selected_answer_id` belongs to a different question.
+- Expected status: `400`
+- Example response:
+```json
+{
+  "success": false,
+  "message": "Validation failed.",
+  "errors": {
+    "answers": ["selected_answer_id 22 does not belong to question 1."]
+  }
+}
+```
+
+**Duplicate question_id in payload**
+- Same `question_id` appears more than once.
+- Expected status: `400`
+
+**Unenrolled learner**
+- Authenticated learner with no enrollment for the quiz's course.
+- Expected status: `404` (existence not leaked).
+
+**Instructor calling submit**
+- Authenticated as the course's instructor.
+- Expected status: `403`. Instructor preview is read-only — attempt history stays clean.
 
 ## 12C) My-Courses Endpoints (course header + dashboard)
 

@@ -52,15 +52,17 @@ The enrollment system connects learners to published courses. It serves as the a
 | GET | `/api/v1/courses/my-courses/` | Paginated active enrollments with progress. |
 | GET | `/api/v1/courses/my-courses/{slug}/` | Slim course-header payload: course metadata (title, description, instructors, objectives, totals) + the caller's enrollment status (`progress_percent`, `last_accessed_at`, `completed_at`) + `is_instructor` flag for preview. **No curriculum tree** — fetch that from `/learn/{slug}/curriculum/`. Allowed for the course's own instructor too (preview mode; `enrollment` is `null`). |
 
-### Learner Consumption (Phase 1)
+### Learner Consumption (Phase 1 + Phase 2 quiz)
 
 | Method | Path | Description |
 |--------|------|-------------|
 | GET | `/api/v1/courses/learn/{slug}/curriculum/` | Sidebar outline: ordered sections + items with title, type, position. Lectures carry `lecture_type`, `duration_seconds`, and (for learners) an `is_completed` marker. No heavy payloads. |
 | GET | `/api/v1/courses/learn/lectures/{lecture_id}/` | Learner-safe single lecture. Video → HLS playlist + renditions; article → article text. Returns the caller's `progress` to support player resume. |
-| POST | `/api/v1/courses/learn/lectures/{lecture_id}/progress/` | Idempotent upsert of `WatchProgress` (`watched_seconds`, `is_completed`). Debounced enrollment-touch via `update_last_accessed`. Triggers `progress_percent` recalc via the `WatchProgress` `post_save` signal. |
+| POST | `/api/v1/courses/learn/lectures/{lecture_id}/progress/` | Idempotent upsert of `WatchProgress` (`watched_seconds`, `is_completed`). `watched_seconds` is server-clamped to the active video's `duration_seconds`; if the clamped cursor lands at duration, `is_completed` is forced to `True`. Articles force `watched_seconds=0`. Debounced enrollment-touch via `update_last_accessed`. Triggers `progress_percent` recalc via the `WatchProgress` `post_save` signal. |
+| GET | `/api/v1/courses/learn/quizzes/{quiz_id}/` | Quiz + questions + answer options (no `is_correct`) for the attempt UI. Returns the caller's `latest_attempt` summary if one exists. |
+| POST | `/api/v1/courses/learn/quizzes/{quiz_id}/submit/` | Submit selected answers; creates a new `QuizAttempt` + `QuizAttemptAnswer` rows. Returns per-question verdict; `correct_answer_*` fields appear only when the answer was wrong. Calls `recalculate_progress` at the end of the transaction so quiz attempts roll into `progress_percent`. |
 
-Phase 2 (quiz / assignment / coding consumption + submissions) is designed but not yet built — see `LEARNER_COURSE_CONSUMPTION_DESIGN.md` at the project root for the planned shape.
+Phase 2 still to build (assignment + coding-exercise consumption / submission) — see `LEARNER_COURSE_CONSUMPTION_DESIGN.md` at the project root for the planned shape.
 
 ## Enrollment Flow
 
@@ -81,9 +83,9 @@ If a learner unenrolls and later re-enrolls, the existing `Enrollment` record is
 progress_percent = (completed_content_items / total_content_items) * 100
 ```
 
-Currently counts completed lectures via `WatchProgress.is_completed`. As quiz-taking and assignment-submission features are built, their completion will be added to the numerator.
+Counts completed lectures (`WatchProgress.is_completed=True`) and completed quizzes (≥1 `QuizAttempt` per quiz). Assignment + coding-exercise completion are stubs (`completed_assignments = completed_coding = 0`) and will join the numerator when their submission models exist.
 
-The `recalculate_progress()` service function is the single entry point for this calculation. It should be called after any content-completion event (e.g., marking a lecture as watched).
+The `recalculate_progress()` service function is the single entry point for this calculation. Lectures trigger it via the `WatchProgress` `post_save` signal; `submit_quiz_attempt` calls it directly at the end of its transaction.
 
 ## Permissions
 
@@ -127,7 +129,7 @@ The "learner curriculum view", "learner lecture view", and "watch progress endpo
 
 ### Not yet built
 
-- **Phase 2 consumption** — learner-safe `/learn/quizzes/{id}/`, `/learn/assignments/{id}/`, `/learn/coding-exercises/{id}/` + corresponding submission endpoints. Needs new `QuizAttempt`, `AssignmentSubmission`, and (eventually) `CodingSubmission` models — see `LEARNER_COURSE_CONSUMPTION_DESIGN.md`.
+- **Phase 2 consumption — assignment + coding remainder** — learner-safe `/learn/assignments/{id}/` and `/learn/coding-exercises/{id}/` + corresponding submission endpoints. Needs new `AssignmentSubmission` and (eventually) `CodingSubmission` models — see `LEARNER_COURSE_CONSUMPTION_DESIGN.md`. (The quiz half of Phase 2 — `QuizAttempt` + `QuizAttemptAnswer` models, plus the `GET /learn/quizzes/<id>/` and `POST /learn/quizzes/<id>/submit/` endpoints — landed alongside Phase 1.)
 - **Caching on the consumption surface** — Redis or HTTP cache for the slim `/my-courses/{slug}/` and `/learn/{slug}/curriculum/` responses. Lower priority now that the response is small; revisit if traffic warrants.
 - **Payment integration** — A `payments` app that creates `enrollment_type='paid'` enrollments on checkout.
 - **Certificates** — PDF generation triggered when `completed_at` is set.

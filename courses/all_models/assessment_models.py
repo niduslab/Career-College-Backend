@@ -1,3 +1,4 @@
+from django.conf import settings
 from django.contrib.contenttypes.fields import GenericRelation
 from django.core.exceptions import ValidationError
 from django.db import models
@@ -242,6 +243,90 @@ class QuizAnswer(models.Model):
     def __str__(self):
         marker = ' [correct]' if self.is_correct else ''
         return f'{self.answer_text}{marker}'
+
+
+# =============================================================================
+# Quiz attempts — learner submission records for the Phase-2 consumption surface.
+# Each call to POST /api/v1/courses/learn/quizzes/{id}/submit/ creates a new
+# QuizAttempt with one QuizAttemptAnswer per question in the quiz. The
+# `is_correct` flag on QuizAttemptAnswer is denormalized at submit time so
+# that re-rendering an old attempt's verdict doesn't depend on the answer
+# key still matching — instructor edits to QuizAnswer.is_correct after a
+# learner has attempted the quiz won't retroactively rewrite the attempt.
+# =============================================================================
+
+class QuizAttempt(TimestampedModel):
+    """A single learner's submission of a quiz."""
+
+    user = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name='quiz_attempts',
+    )
+    quiz = models.ForeignKey(
+        Quiz,
+        on_delete=models.CASCADE,
+        related_name='attempts',
+    )
+    score = models.PositiveIntegerField(default=0)
+    max_score = models.PositiveIntegerField(default=0)
+    submitted_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        db_table = 'quiz_attempts'
+        verbose_name = 'Quiz Attempt'
+        verbose_name_plural = 'Quiz Attempts'
+        ordering = ['-submitted_at']
+        indexes = [
+            models.Index(fields=['user', 'quiz', '-submitted_at'], name='idx_qattempt_user_quiz_date'),
+            models.Index(fields=['quiz', '-submitted_at'], name='idx_qattempt_quiz_date'),
+        ]
+
+    def __str__(self):
+        return f'Attempt {self.pk}: {self.user} on quiz {self.quiz_id} ({self.score}/{self.max_score})'
+
+
+class QuizAttemptAnswer(models.Model):
+    """One per-question record within a QuizAttempt."""
+
+    attempt = models.ForeignKey(
+        QuizAttempt,
+        on_delete=models.CASCADE,
+        related_name='answers',
+    )
+    question = models.ForeignKey(
+        QuizQuestion,
+        on_delete=models.CASCADE,
+        related_name='attempt_answers',
+    )
+    # Nullable so an attempt can record a skipped/unanswered question.
+    selected_answer = models.ForeignKey(
+        QuizAnswer,
+        on_delete=models.SET_NULL,
+        related_name='attempt_answers',
+        null=True,
+        blank=True,
+    )
+    is_correct = models.BooleanField(default=False, db_index=True)
+
+    class Meta:
+        db_table = 'quiz_attempt_answers'
+        verbose_name = 'Quiz Attempt Answer'
+        verbose_name_plural = 'Quiz Attempt Answers'
+        ordering = ['attempt_id', 'question_id']
+        constraints = [
+            models.UniqueConstraint(
+                fields=['attempt', 'question'],
+                name='uniq_attempt_answer_per_question',
+            ),
+        ]
+        indexes = [
+            models.Index(fields=['attempt', 'question'], name='idx_qaanswer_attempt_question'),
+        ]
+
+    def __str__(self):
+        verdict = 'correct' if self.is_correct else 'wrong'
+        return f'Attempt {self.attempt_id} Q{self.question_id} [{verdict}]'
 
 
 # =============================================================================

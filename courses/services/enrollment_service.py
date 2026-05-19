@@ -6,7 +6,7 @@ from django.db import IntegrityError, transaction
 from django.db.models import F, QuerySet
 from django.utils import timezone
 
-from courses.models import Enrollment, NidusCourse, SectionContent, WatchProgress
+from courses.models import Enrollment, NidusCourse, QuizAttempt, SectionContent, WatchProgress
 
 logger = logging.getLogger(__name__)
 
@@ -109,38 +109,88 @@ def recalculate_progress(enrollment: Enrollment) -> Enrollment:
     """
     Recompute ``progress_percent`` from the actual content completion data.
 
-    Formula: (completed lectures / total lectures) * 100
-    Only lecture slots are counted until quiz/assignment completion signals exist.
+    Formula: (completed content items / total content items) * 100
+    Completion rules:
+    - lecture: WatchProgress.is_completed=True
+    - quiz: at least one QuizAttempt exists for the learner
+    - assignment: reserved for AssignmentSubmission(status='passed')
+    - coding: reserved for CodingSubmission(status='accepted')
+
+    Notes:
+    - Uses grouped queries + set intersections to avoid N+1 behavior.
+    - Assignment/coding completion remains zero until learner submission models exist.
     """
     course = enrollment.course
-    total_items = SectionContent.objects.filter(
-        section__course=course,
-        item_type=SectionContent.ItemType.LECTURE,
-    ).count()
+
+    content_rows = list(
+        SectionContent.objects
+        .filter(section__course=course)
+        .values_list('item_type', 'object_id')
+    )
+    total_items = len(content_rows)
 
     if total_items == 0:
         enrollment.progress_percent = 0
         enrollment.save(update_fields=['progress_percent', 'updated_at'])
         return enrollment
 
-    # Count completed lectures
-    completed_lectures = WatchProgress.objects.filter(
-        user=enrollment.user,
-        lecture__section__course=course,
-        is_completed=True,
-    ).count()
+    lecture_ids = {
+        object_id
+        for item_type, object_id in content_rows
+        if item_type == SectionContent.ItemType.LECTURE
+    }
+    if lecture_ids:
+        completed_lecture_ids = set(
+            WatchProgress.objects.filter(
+                user=enrollment.user,
+                lecture_id__in=lecture_ids,
+                is_completed=True,
+            ).values_list('lecture_id', flat=True)
+        )
+        completed_lectures = len(completed_lecture_ids)
+    else:
+        completed_lectures = 0
 
-    # TODO: Add quiz submission completion counts when quiz-taking is built
-    # TODO: Add assignment submission completion counts when submissions are built
+    quiz_ids = {
+        object_id
+        for item_type, object_id in content_rows
+        if item_type == SectionContent.ItemType.QUIZ
+    }
+    if quiz_ids:
+        completed_quiz_ids = set(
+            QuizAttempt.objects.filter(
+                user=enrollment.user,
+                quiz_id__in=quiz_ids,
+            ).values_list('quiz_id', flat=True)
+        )
+        completed_quizzes = len(completed_quiz_ids)
+    else:
+        completed_quizzes = 0
 
-    completed_items = completed_lectures
+    # Hooks for future learner submission models:
+    # - assignment completion when AssignmentSubmission.status == "passed"
+    # - coding completion when CodingSubmission.status == "accepted"
+    completed_assignments = 0
+    completed_coding = 0
+
+    completed_items = (
+        completed_lectures
+        + completed_quizzes
+        + completed_assignments
+        + completed_coding
+    )
     progress = min(int((completed_items / total_items) * 100), 100)
 
+    update_fields = ['progress_percent', 'updated_at']
     enrollment.progress_percent = progress
     if progress >= 100 and enrollment.completed_at is None:
         enrollment.completed_at = timezone.now()
-    enrollment.save(update_fields=['progress_percent', 'completed_at', 'updated_at'])
+        update_fields.append('completed_at')
+    elif progress < 100 and enrollment.completed_at is not None:
+        enrollment.completed_at = None
+        update_fields.append('completed_at')
 
+    enrollment.save(update_fields=update_fields)
     return enrollment
 
 

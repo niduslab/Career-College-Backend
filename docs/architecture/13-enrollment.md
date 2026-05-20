@@ -52,7 +52,7 @@ The enrollment system connects learners to published courses. It serves as the a
 | GET | `/api/v1/courses/my-courses/` | Paginated active enrollments with progress. |
 | GET | `/api/v1/courses/my-courses/{slug}/` | Slim course-header payload: course metadata (title, description, instructors, objectives, totals) + the caller's enrollment status (`progress_percent`, `last_accessed_at`, `completed_at`) + `is_instructor` flag for preview. **No curriculum tree** — fetch that from `/learn/{slug}/curriculum/`. Allowed for the course's own instructor too (preview mode; `enrollment` is `null`). |
 
-### Learner Consumption (Phase 1 + Phase 2 quiz)
+### Learner Consumption (Phase 1 + Phase 2 quiz + assignment)
 
 | Method | Path | Description |
 |--------|------|-------------|
@@ -61,8 +61,12 @@ The enrollment system connects learners to published courses. It serves as the a
 | POST | `/api/v1/courses/learn/lectures/{lecture_id}/progress/` | Idempotent upsert of `WatchProgress` (`watched_seconds`, `is_completed`). `watched_seconds` is server-clamped to the active video's `duration_seconds`; if the clamped cursor lands at duration, `is_completed` is forced to `True`. Articles force `watched_seconds=0`. Debounced enrollment-touch via `update_last_accessed`. Triggers `progress_percent` recalc via the `WatchProgress` `post_save` signal. |
 | GET | `/api/v1/courses/learn/quizzes/{quiz_id}/` | Quiz + questions + answer options (no `is_correct`) for the attempt UI. Returns the caller's `latest_attempt` summary if one exists. |
 | POST | `/api/v1/courses/learn/quizzes/{quiz_id}/submit/` | Submit selected answers; creates a new `QuizAttempt` + `QuizAttemptAnswer` rows. Returns per-question verdict; `correct_answer_*` fields appear only when the answer was wrong. Calls `recalculate_progress` at the end of the transaction so quiz attempts roll into `progress_percent`. |
+| GET | `/api/v1/courses/learn/assignments/{assignment_id}/` | Assignment + questions for the attempt UI. `model_answer` and `rubric` are never declared on the learner serializer. Returns the caller's `latest_submission` summary if one exists. |
+| POST | `/api/v1/courses/learn/assignments/{assignment_id}/submit/` | Creates an `AssignmentSubmission(status='submitted')` + one `AssignmentSubmissionAnswer` per question (`rubric_snapshot` + `max_score` frozen at submit time). Returns `202 Accepted`; the Celery task `grade_assignment_submission_task` runs the `RubricGrader` and transitions the row to `passed` / `failed` / `grading_failed`. `422` if an in-flight submission already exists. |
+| GET | `/api/v1/courses/learn/assignments/submissions/{submission_id}/` | Per-question score + `criterion_results` + `feedback`; `model_answer` revealed only when `status in (passed, failed)`. The polling target for the frontend. |
+| POST | `/api/v1/courses/learn/assignments/submissions/{submission_id}/retry/` | Re-enqueue grading for a `grading_failed` submission. Reuses the same row so `submitted_at` and historical correlation stay correct. `422` for any non-`grading_failed` status; `404` for another learner's submission. |
 
-Phase 2 still to build (assignment + coding-exercise consumption / submission) — see `LEARNER_COURSE_CONSUMPTION_DESIGN.md` at the project root for the planned shape.
+Phase 2 still to build (coding-exercise consumption + runtime) — see `LEARNER_COURSE_CONSUMPTION_DESIGN.md` at the project root for the planned shape. Assignment manual-override / instructor moderation surface is parked for Phase 3.
 
 ## Enrollment Flow
 
@@ -83,9 +87,9 @@ If a learner unenrolls and later re-enrolls, the existing `Enrollment` record is
 progress_percent = (completed_content_items / total_content_items) * 100
 ```
 
-Counts completed lectures (`WatchProgress.is_completed=True`) and completed quizzes (≥1 `QuizAttempt` per quiz). Assignment + coding-exercise completion are stubs (`completed_assignments = completed_coding = 0`) and will join the numerator when their submission models exist.
+Counts completed lectures (`WatchProgress.is_completed=True`), completed quizzes (≥1 `QuizAttempt` per quiz), and passed assignment submissions (`AssignmentSubmission.status='passed'`). Coding-exercise completion is still a stub (`completed_coding = 0`) and will join the numerator when `CodingSubmission` lands.
 
-The `recalculate_progress()` service function is the single entry point for this calculation. Lectures trigger it via the `WatchProgress` `post_save` signal; `submit_quiz_attempt` calls it directly at the end of its transaction.
+The `recalculate_progress()` service function is the single entry point for this calculation. Lectures trigger it via the `WatchProgress` `post_save` signal; `submit_quiz_attempt` calls it directly at the end of its transaction; `grade_assignment_submission_task` schedules it via `transaction.on_commit` only when the assignment grader's final verdict is `passed` (a recalc failure can't roll back a valid grade).
 
 ## Permissions
 
@@ -129,7 +133,8 @@ The "learner curriculum view", "learner lecture view", and "watch progress endpo
 
 ### Not yet built
 
-- **Phase 2 consumption — assignment + coding remainder** — learner-safe `/learn/assignments/{id}/` and `/learn/coding-exercises/{id}/` + corresponding submission endpoints. Needs new `AssignmentSubmission` and (eventually) `CodingSubmission` models — see `LEARNER_COURSE_CONSUMPTION_DESIGN.md`. (The quiz half of Phase 2 — `QuizAttempt` + `QuizAttemptAnswer` models, plus the `GET /learn/quizzes/<id>/` and `POST /learn/quizzes/<id>/submit/` endpoints — landed alongside Phase 1.)
+- **Phase 2 consumption — coding remainder** — learner-safe `/learn/coding-exercises/{id}/` + corresponding submission endpoints. Needs a new `CodingSubmission` model — see `LEARNER_COURSE_CONSUMPTION_DESIGN.md`. (The quiz half of Phase 2 landed alongside Phase 1; the assignment half — `AssignmentSubmission` + `AssignmentSubmissionAnswer` models, `AssignmentQuestion.rubric` field, `RubricGrader`, Celery-based grading, and the four `/learn/assignments/...` endpoints — landed in the assignment auto-grading change. Full rationale in `LEARNER_ASSIGNMENT_CONSUMPTION_DESIGN.md`.)
+- **Assignment manual override / moderation surface** — instructor-side endpoints to view, override, or comment on submissions. Phase-3 addition; not required for the auto-grading-only v1.
 - **Caching on the consumption surface** — Redis or HTTP cache for the slim `/my-courses/{slug}/` and `/learn/{slug}/curriculum/` responses. Lower priority now that the response is small; revisit if traffic warrants.
 - **Payment integration** — A `payments` app that creates `enrollment_type='paid'` enrollments on checkout.
 - **Certificates** — PDF generation triggered when `completed_at` is set.

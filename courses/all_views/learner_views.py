@@ -1,12 +1,16 @@
 """
-Learner consumption endpoints (Phase 1 + Phase 2 quiz).
+Learner consumption endpoints (Phase 1 + Phase 2).
 
 Routes (all under `/api/v1/courses/`):
-    GET  learn/<slug>/curriculum/                  -> LearnerCurriculumView
-    GET  learn/lectures/<int:lecture_id>/          -> LearnerLectureDetailView
-    POST learn/lectures/<int:lecture_id>/progress/ -> LearnerLectureProgressView
-    GET  learn/quizzes/<int:quiz_id>/              -> LearnerQuizDetailView
-    POST learn/quizzes/<int:quiz_id>/submit/       -> LearnerQuizSubmitView
+    GET  learn/<slug>/curriculum/                                 -> LearnerCurriculumView
+    GET  learn/lectures/<int:lecture_id>/                         -> LearnerLectureDetailView
+    POST learn/lectures/<int:lecture_id>/progress/                -> LearnerLectureProgressView
+    GET  learn/quizzes/<int:quiz_id>/                             -> LearnerQuizDetailView
+    POST learn/quizzes/<int:quiz_id>/submit/                      -> LearnerQuizSubmitView
+    GET  learn/assignments/<int:assignment_id>/                   -> LearnerAssignmentDetailView
+    POST learn/assignments/<int:assignment_id>/submit/            -> LearnerAssignmentSubmitView
+    GET  learn/assignments/submissions/<int:submission_id>/       -> LearnerAssignmentSubmissionDetailView
+    POST learn/assignments/submissions/<int:submission_id>/retry/ -> LearnerAssignmentSubmissionRetryView
 
 These views deliberately use dedicated learner serializers and a learner
 service module so that sensitive instructor-only fields cannot leak.
@@ -21,19 +25,36 @@ from rest_framework.response import Response
 from rest_framework.views import APIView
 
 from core.permissions import IsEmailVerified, IsInstructorUser, IsLearnerUser
-from courses.all_serializers.learner_serializers import build_quiz_attempt_result
-from courses.models import Enrollment, Lecture, NidusCourse, Quiz
+from courses.all_serializers.learner_serializers import (
+    build_assignment_submission_result,
+    build_quiz_attempt_result,
+)
+from courses.models import (
+    Assignment,
+    AssignmentSubmission,
+    Enrollment,
+    Lecture,
+    NidusCourse,
+    Quiz,
+)
 from courses.serializers import (
+    AssignmentSubmissionInputSerializer,
+    LearnerAssignmentDetailSerializer,
     LearnerLectureDetailSerializer,
     LearnerQuizDetailSerializer,
     QuizSubmissionSerializer,
     WatchProgressUpsertSerializer,
 )
 from courses.services import (
+    AssignmentSubmissionError,
+    get_assignment_for_consumption,
     get_consumption_lecture,
+    get_learner_assignment_submission,
     get_quiz_for_consumption,
     load_learner_curriculum,
     resolve_course_access,
+    retry_assignment_grading,
+    submit_assignment,
     submit_quiz_attempt,
     update_last_accessed,
     upsert_watch_progress,
@@ -296,4 +317,208 @@ class LearnerQuizSubmitView(APIView):
                 'data': build_quiz_attempt_result(attempt),
             },
             status=status.HTTP_200_OK,
+        )
+
+
+# =============================================================================
+# Phase-2 assignment consumption + submission
+# =============================================================================
+
+class LearnerAssignmentDetailView(APIView):
+    """
+    GET /api/v1/courses/learn/assignments/{assignment_id}/
+
+    Learner-safe assignment payload for the attempt UI: assignment metadata +
+    ordered questions (no `model_answer`, no `rubric`) + a `latest_submission`
+    summary so the frontend can show the prior attempt's status before the
+    learner starts a new attempt.
+    """
+
+    permission_classes = [IsAuthenticated, IsEmailVerified, IsLearnerUser | IsInstructorUser]
+
+    def get(self, request, assignment_id):
+        try:
+            assignment, _course, _is_instructor, latest_submission = get_assignment_for_consumption(
+                request.user, assignment_id,
+            )
+        except Assignment.DoesNotExist:
+            return Response(
+                {'success': False, 'message': 'Assignment not found.'},
+                status=status.HTTP_404_NOT_FOUND,
+            )
+
+        serializer = LearnerAssignmentDetailSerializer(
+            assignment, context={'latest_submission': latest_submission},
+        )
+        return Response({'success': True, 'data': serializer.data}, status=status.HTTP_200_OK)
+
+
+class LearnerAssignmentSubmitView(APIView):
+    """
+    POST /api/v1/courses/learn/assignments/{assignment_id}/submit/
+
+    Creates a new AssignmentSubmission + per-question answer rows and
+    enqueues the grading task. Returns 202 with the submission id and the
+    initial status ('submitted'); the learner polls the detail endpoint
+    until the status transitions to a terminal value.
+
+    Restricted to learners with an active enrollment for the assignment's
+    course; instructors get 403 (preview must not pollute submission history).
+    """
+
+    permission_classes = [IsAuthenticated, IsEmailVerified, IsLearnerUser]
+
+    def post(self, request, assignment_id):
+        assignment = (
+            Assignment.objects
+            .select_related('section__course')
+            .prefetch_related('questions')
+            .filter(pk=assignment_id)
+            .first()
+        )
+        if assignment is None:
+            return Response(
+                {'success': False, 'message': 'Assignment not found.'},
+                status=status.HTTP_404_NOT_FOUND,
+            )
+
+        # Existence is not leaked: a learner with no active enrollment for
+        # the course gets the same 404 a non-existent assignment would produce.
+        enrollment = Enrollment.objects.filter(
+            user=request.user,
+            course=assignment.section.course,
+            is_active=True,
+        ).first()
+        if enrollment is None:
+            return Response(
+                {'success': False, 'message': 'Assignment not found.'},
+                status=status.HTTP_404_NOT_FOUND,
+            )
+
+        serializer = AssignmentSubmissionInputSerializer(
+            data=request.data, context={'assignment': assignment},
+        )
+        if not serializer.is_valid():
+            return Response(
+                {'success': False, 'message': 'Validation failed.', 'errors': serializer.errors},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        try:
+            submission = submit_assignment(
+                user=request.user,
+                assignment=assignment,
+                answers_payload=serializer.validated_data['answers'],
+                enrollment=enrollment,
+            )
+        except AssignmentSubmissionError as e:
+            return Response(
+                {'success': False, 'message': e.message},
+                status=e.http_status,
+            )
+        except Exception as e:
+            logger.error(
+                'Assignment submission failed for user=%s assignment=%s: %s',
+                request.user.id, assignment.id, e,
+            )
+            return Response(
+                {'success': False, 'message': 'An unexpected error occurred. Please try again.'},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            )
+
+        update_last_accessed(enrollment)
+        return Response(
+            {
+                'success': True,
+                'message': 'Assignment submitted. Grading is in progress.',
+                'data': {
+                    'submission_id': submission.id,
+                    'assignment_id': assignment.id,
+                    'status': submission.status,
+                    'submitted_at': submission.submitted_at,
+                    'max_score': submission.max_score,
+                },
+            },
+            status=status.HTTP_202_ACCEPTED,
+        )
+
+
+class LearnerAssignmentSubmissionDetailView(APIView):
+    """
+    GET /api/v1/courses/learn/assignments/submissions/{submission_id}/
+
+    Returns the learner's own submission with per-question scores,
+    criterion-level results, and feedback. The instructor's `model_answer`
+    is included on each question only once the submission has reached a
+    terminal graded state (`passed` or `failed`).
+
+    Other learners' submissions return 404 — never 403 — so submission
+    existence isn't leaked.
+    """
+
+    permission_classes = [IsAuthenticated, IsEmailVerified, IsLearnerUser]
+
+    def get(self, request, submission_id):
+        try:
+            submission = get_learner_assignment_submission(request.user, submission_id)
+        except AssignmentSubmission.DoesNotExist:
+            return Response(
+                {'success': False, 'message': 'Submission not found.'},
+                status=status.HTTP_404_NOT_FOUND,
+            )
+
+        return Response(
+            {'success': True, 'data': build_assignment_submission_result(submission)},
+            status=status.HTTP_200_OK,
+        )
+
+
+class LearnerAssignmentSubmissionRetryView(APIView):
+    """
+    POST /api/v1/courses/learn/assignments/submissions/{submission_id}/retry/
+
+    Re-enqueue grading for a submission stuck in `grading_failed`. The
+    same submission row is reused (resets status to `grading` and clears
+    `grading_error`) so `submitted_at` and historical correlation stay
+    correct.
+
+    Any other current status returns 422; another learner's submission
+    returns 404.
+    """
+
+    permission_classes = [IsAuthenticated, IsEmailVerified, IsLearnerUser]
+
+    def post(self, request, submission_id):
+        try:
+            submission = retry_assignment_grading(request.user, submission_id)
+        except AssignmentSubmission.DoesNotExist:
+            return Response(
+                {'success': False, 'message': 'Submission not found.'},
+                status=status.HTTP_404_NOT_FOUND,
+            )
+        except AssignmentSubmissionError as e:
+            return Response(
+                {'success': False, 'message': e.message},
+                status=e.http_status,
+            )
+        except Exception as e:
+            logger.error(
+                'Assignment retry failed for user=%s submission=%s: %s',
+                request.user.id, submission_id, e,
+            )
+            return Response(
+                {'success': False, 'message': 'An unexpected error occurred. Please try again.'},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            )
+
+        return Response(
+            {
+                'success': True,
+                'message': 'Grading re-enqueued.',
+                'data': {
+                    'submission_id': submission.id,
+                    'status': submission.status,
+                },
+            },
+            status=status.HTTP_202_ACCEPTED,
         )

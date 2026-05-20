@@ -1,25 +1,34 @@
-> **Implementation Status (2026-05-17):** Phase 1 **and the quiz portion of Phase 2** are complete and tested.
+> **Implementation Status (2026-05-20):** Phase 1 **and the quiz + assignment portions of Phase 2** are complete and tested. Coding-exercise consumption is still to build.
 >
 > **Phase 1 (lecture consumption):**
 > - `GET /api/v1/courses/learn/<slug>/curriculum/` → `LearnerCurriculumView`
 > - `GET /api/v1/courses/learn/lectures/<lecture_id>/` → `LearnerLectureDetailView`
 > - `POST /api/v1/courses/learn/lectures/<lecture_id>/progress/` → `LearnerLectureProgressView`
 >
-> **Phase 2 — quiz portion (newly landed):**
+> **Phase 2 — quiz portion:**
 > - `GET /api/v1/courses/learn/quizzes/<quiz_id>/` → `LearnerQuizDetailView`
 > - `POST /api/v1/courses/learn/quizzes/<quiz_id>/submit/` → `LearnerQuizSubmitView`
 >
-> Supporting infrastructure: new models `QuizAttempt` + `QuizAttemptAnswer` (`courses/all_models/assessment_models.py`); new service functions `get_quiz_for_consumption` and `submit_quiz_attempt` (`courses/services/learner_service.py`); new serializers `LearnerQuizDetailSerializer`, `QuizSubmissionSerializer`, plus the helper function `build_quiz_attempt_result` (`courses/all_serializers/learner_serializers.py`); tests in `courses/all_tests/test_learner_quiz_consumption.py` (15 cases).
+> **Phase 2 — assignment portion (newly landed):**
+> - `GET /api/v1/courses/learn/assignments/<assignment_id>/` → `LearnerAssignmentDetailView`
+> - `POST /api/v1/courses/learn/assignments/<assignment_id>/submit/` → `LearnerAssignmentSubmitView`
+> - `GET /api/v1/courses/learn/assignments/submissions/<submission_id>/` → `LearnerAssignmentSubmissionDetailView`
+> - `POST /api/v1/courses/learn/assignments/submissions/<submission_id>/retry/` → `LearnerAssignmentSubmissionRetryView`
 >
-> Behaviour decisions made during implementation:
+> Supporting infrastructure: new models `AssignmentSubmission` + `AssignmentSubmissionAnswer` (`courses/all_models/assessment_models.py`); new `AssignmentQuestion.rubric` JSONField; new service module `courses/services/assignment_grading.py` with the `RubricGrader` class; new service functions `get_assignment_for_consumption`, `submit_assignment`, `get_learner_assignment_submission`, `retry_assignment_grading` (`courses/services/learner_service.py`); new Celery task `grade_assignment_submission_task` (`courses/tasks.py`); new learner serializers `LearnerAssignmentDetailSerializer`, `AssignmentSubmissionInputSerializer`, plus the helper `build_assignment_submission_result` (`courses/all_serializers/learner_serializers.py`); tests in `courses/all_tests/test_learner_assignment_consumption.py` (40 cases). Full design rationale lives in [LEARNER_ASSIGNMENT_CONSUMPTION_DESIGN.md](LEARNER_ASSIGNMENT_CONSUMPTION_DESIGN.md).
 >
-> - **Retake policy:** unlimited attempts. Each `POST /submit/` creates a new `QuizAttempt` row. No `attempt_number` cap. Frontend can read `latest_attempt` from `GET /learn/quizzes/<id>/` for the "you scored X/Y last time" prompt.
-> - **Scoring:** simple correct/total. There is no `passing_score` field on `Quiz`; per the product rule the score is informational, not gate-keeping.
-> - **Per-question feedback:** `correct_answer_id` + `correct_answer_text` are returned **only when `is_correct=false`** — matches the requirement "if not then it will show the correct answer alongside of the verdict." Unanswered questions (`selected_answer_id: null`) score as wrong and reveal the correct answer.
-> - **Frozen-attempt invariant:** `QuizAttemptAnswer.is_correct` is denormalized at submit time. An instructor flipping the correct-answer key after a learner has attempted the quiz does NOT retroactively rewrite the historical attempt.
-> - **Progress integration:** quiz completion now counts toward `enrollment.progress_percent`. `recalculate_progress()` treats a quiz as complete once the learner has ≥1 `QuizAttempt` for it, and `submit_quiz_attempt` calls the recalc at the end of its transaction. Assignment + coding-exercise completion remain stubs pending their submission models.
+> Behaviour decisions made during the assignment implementation:
 >
-> Still to build (Phase 2 remainder + Phase 3+): assignment consume + submit, coding-exercise consume + runtime/submit. The "Recommended Endpoint Set" section below describes the planned shape for those.
+> - **Grading model:** deterministic rubric-based auto-grading, not instructor manual grading. Each `AssignmentQuestion` carries a `rubric` JSONField listing criteria (`keyword`, `regex`, `min_length`, `max_length`, `any_of`, `all_of`) whose `points` must sum to `question.points`. `RubricGrader` evaluates each criterion against the learner's `answer_text` and returns `(score, criterion_results, feedback)`.
+> - **Async grading:** the submit endpoint returns `202` with `status='submitted'`. A Celery task (`grade_assignment_submission_task`, decorated `acks_late=True`) runs the grader and transitions the row to `passed` / `failed` / `grading_failed`. The learner polls the submission-detail endpoint.
+> - **Snapshot invariant:** at submit time, `AssignmentSubmissionAnswer` stores a frozen `rubric_snapshot` and `max_score` from the live `AssignmentQuestion`. Later instructor edits to `rubric` or `points` do NOT retroactively rewrite past submissions — same invariant as `QuizAttemptAnswer.is_correct`.
+> - **In-flight constraint:** at most one submission per `(user, assignment)` in `submitted` or `grading` state, enforced by a Postgres partial unique index plus a belt-and-braces `.exists()` check.
+> - **Multi-attempt + retry:** after a terminal verdict (`passed`, `failed`, `grading_failed`), the learner may resubmit (new row via `/submit/`) or retry the grader against the existing row via `/retry/`. Retry is only allowed from `grading_failed` — anything else → `422`.
+> - **`model_answer` reveal:** included on each answer in the submission-detail payload only when `status in ('passed', 'failed')`. Hidden during `submitted`, `grading`, and `grading_failed` — a failed-to-grade submission shouldn't leak the answer key.
+> - **No instructor read endpoints in v1.** Auto-grading runs without instructor action, so listing/inspecting submissions adds zero learner-facing value. Admin / analytics dashboards query the DB directly. Manual override is a Phase-3 addition.
+> - **Progress integration:** `recalculate_progress()` now counts assignment submissions with `status='passed'` toward `enrollment.progress_percent`. The grading task fires the recalc via `transaction.on_commit` only when the final status is `passed`.
+>
+> Still to build (Phase 3+): coding-exercise consume + runtime/submit; manual override / instructor moderation surface for assignment submissions. The "Recommended Endpoint Set" section below describes the planned shape for the coding side.
 
 ---
 

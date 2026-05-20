@@ -22,6 +22,9 @@ from django.db.models import Prefetch
 
 from courses.models import (
     Assignment,
+    AssignmentQuestion,
+    AssignmentSubmission,
+    AssignmentSubmissionAnswer,
     CodingExercise,
     CourseSection,
     Enrollment,
@@ -432,3 +435,210 @@ def submit_quiz_attempt(
         transaction.on_commit(lambda: recalculate_progress(enrollment))
 
     return attempt
+
+
+# ---------------------------------------------------------------------------
+# Assignment consumption + submission (Phase 2)
+# ---------------------------------------------------------------------------
+
+def get_assignment_for_consumption(user, assignment_id: int):
+    """Fetch an assignment and verify the user can consume it.
+
+    Returns (assignment, course, is_instructor, latest_submission_or_none).
+    Raises Assignment.DoesNotExist when missing OR the user has no
+    consumption-side access to its course (numeric-ID URL -> 404, not 403).
+
+    Questions are prefetched ordered by position/id; rubric and model_answer
+    are intentionally NOT loaded into `.only(...)` because the learner
+    endpoint never reads them — the instructor-only fields are stripped at
+    the serializer layer anyway.
+    """
+    assignment = (
+        Assignment.objects
+        .select_related('section__course')
+        .prefetch_related(
+            'section__course__instructors',
+            Prefetch(
+                'questions',
+                queryset=AssignmentQuestion.objects
+                    .only('id', 'assignment_id', 'question_text', 'points', 'hint', 'position')
+                    .order_by('position', 'id'),
+            ),
+        )
+        .filter(pk=assignment_id)
+        .first()
+    )
+    if assignment is None:
+        raise Assignment.DoesNotExist
+    course = assignment.section.course
+
+    is_instructor, enrollment = resolve_course_access(user, course)
+    if not is_instructor and enrollment is None:
+        raise Assignment.DoesNotExist
+
+    latest_submission = None
+    if not is_instructor:
+        latest_submission = (
+            AssignmentSubmission.objects
+            .filter(user=user, assignment=assignment)
+            .order_by('-submitted_at')
+            .first()
+        )
+
+    return assignment, course, is_instructor, latest_submission
+
+
+class AssignmentSubmissionError(Exception):
+    """Raised when a submission cannot be created for a domain reason
+    (e.g. an in-flight submission already exists). Carries the HTTP status
+    code the view should return."""
+
+    def __init__(self, message: str, http_status: int = 422):
+        super().__init__(message)
+        self.message = message
+        self.http_status = http_status
+
+
+@transaction.atomic
+def submit_assignment(
+    user,
+    assignment: Assignment,
+    answers_payload: list[dict],
+    enrollment: Optional[Enrollment] = None,
+) -> AssignmentSubmission:
+    """Create an AssignmentSubmission + per-question answer rows and
+    enqueue grading.
+
+    `answers_payload` is a list of `{question_id, answer_text}` dicts
+    (shape validated at the serializer layer). This function:
+      1. Enforces the in-flight-submission constraint (belt-and-braces on
+         top of the partial unique index, since SQLite environments don't
+         honour the partial condition).
+      2. Snapshots `question.points` and `question.rubric` onto each
+         AssignmentSubmissionAnswer so historical submissions stay frozen
+         against later authoring edits.
+      3. Schedules the Celery grading task via `transaction.on_commit` —
+         never enqueue before commit, otherwise a rolled-back transaction
+         would leak a phantom task into the queue.
+
+    Returns the freshly-created AssignmentSubmission (status='submitted').
+    """
+    # Belt-and-braces in-flight check; the Postgres partial unique index is
+    # the durable guarantee.
+    inflight_exists = AssignmentSubmission.objects.filter(
+        user=user,
+        assignment=assignment,
+        status__in=AssignmentSubmission.IN_FLIGHT_STATUSES,
+    ).exists()
+    if inflight_exists:
+        raise AssignmentSubmissionError(
+            'You already have a submission for this assignment that is still being graded.',
+            http_status=422,
+        )
+
+    questions = list(
+        assignment.questions
+        .only('id', 'points', 'rubric')
+        .order_by('position', 'id')
+    )
+    if not questions:
+        raise AssignmentSubmissionError(
+            'This assignment has no questions to submit answers for.',
+            http_status=422,
+        )
+
+    answer_text_by_qid: dict[int, str] = {
+        item['question_id']: (item.get('answer_text') or '')
+        for item in answers_payload
+    }
+
+    # Snapshot the assignment's declared total. Independent of
+    # sum(question.points): if the instructor under- or over-allocated
+    # question points relative to total_score, that's an authoring concern,
+    # but the learner-facing denominator is always the declared total.
+    submission = AssignmentSubmission.objects.create(
+        user=user,
+        assignment=assignment,
+        status=AssignmentSubmission.Status.SUBMITTED,
+        max_score=assignment.total_score,
+    )
+
+    AssignmentSubmissionAnswer.objects.bulk_create([
+        AssignmentSubmissionAnswer(
+            submission=submission,
+            question=q,
+            answer_text=answer_text_by_qid.get(q.id, ''),
+            max_score=q.points or 0,
+            rubric_snapshot=q.rubric or [],
+        )
+        for q in questions
+    ])
+
+    # Defer Celery dispatch until after commit so a rolled-back transaction
+    # cannot leak a phantom task into the queue.
+    from courses.tasks import grade_assignment_submission_task  # local import to avoid Celery import at module load
+    submission_id = submission.id
+    transaction.on_commit(
+        lambda: grade_assignment_submission_task.delay(submission_id)
+    )
+    return submission
+
+
+def get_learner_assignment_submission(user, submission_id: int) -> AssignmentSubmission:
+    """Fetch a learner's own submission for the detail endpoint.
+
+    Raises AssignmentSubmission.DoesNotExist when the row is missing OR
+    belongs to another user. Numeric ID -> 404, never 403, never leak
+    existence.
+    """
+    submission = (
+        AssignmentSubmission.objects
+        .select_related('assignment__section__course')
+        .prefetch_related(
+            'answers__question',
+        )
+        .filter(pk=submission_id, user=user)
+        .first()
+    )
+    if submission is None:
+        raise AssignmentSubmission.DoesNotExist
+    return submission
+
+
+@transaction.atomic
+def retry_assignment_grading(
+    user,
+    submission_id: int,
+) -> AssignmentSubmission:
+    """Re-enqueue grading for the caller's own submission stuck in
+    `grading_failed`.
+
+    Raises AssignmentSubmission.DoesNotExist when the row is missing OR
+    belongs to another user. Raises AssignmentSubmissionError(422) when
+    the submission is not in `grading_failed`.
+    """
+    submission = (
+        AssignmentSubmission.objects
+        .select_for_update()
+        .filter(pk=submission_id, user=user)
+        .first()
+    )
+    if submission is None:
+        raise AssignmentSubmission.DoesNotExist
+
+    if submission.status != AssignmentSubmission.Status.GRADING_FAILED:
+        raise AssignmentSubmissionError(
+            'Only submissions in grading_failed can be retried.',
+            http_status=422,
+        )
+
+    submission.status = AssignmentSubmission.Status.GRADING
+    submission.grading_error = ''
+    submission.save(update_fields=['status', 'grading_error', 'updated_at'])
+
+    from courses.tasks import grade_assignment_submission_task
+    submission_id_local = submission.id
+    transaction.on_commit(
+        lambda: grade_assignment_submission_task.delay(submission_id_local)
+    )
+    return submission

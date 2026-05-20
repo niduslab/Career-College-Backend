@@ -2,6 +2,7 @@ from django.conf import settings
 from django.contrib.contenttypes.fields import GenericRelation
 from django.core.exceptions import ValidationError
 from django.db import models
+from django.db.models import Q
 
 from courses.all_models.content_models import SectionContent
 from courses.all_models.course_models import CourseSection, TimestampedModel
@@ -345,6 +346,11 @@ class Assignment(TimestampedModel):
     title = models.CharField(max_length=255)
     description = models.TextField(blank=True, default='')
     instructions = models.TextField(blank=True, default='')
+    # total_score is the instructor-declared "this assignment is worth N points"
+    # value. It's independent of sum(question.points) — the questions are a
+    # sub-allocation guide, but total_score is the authoritative denominator
+    # the learner sees and the value passing_score is measured against.
+    total_score = models.PositiveIntegerField(default=0)
     passing_score = models.PositiveIntegerField(default=0)
     section_content = GenericRelation(
         SectionContent,
@@ -377,6 +383,17 @@ class AssignmentQuestion(models.Model):
     question_text = models.TextField()
     # model_answer is INSTRUCTOR-ONLY and must never be exposed to learners.
     model_answer = models.TextField(blank=True, default='')
+    # rubric drives auto-grading. List of criterion objects; INSTRUCTOR-ONLY.
+    rubric = models.JSONField(
+        default=list,
+        blank=True,
+        help_text=(
+            'List of grading criteria, e.g. '
+            '[{"type": "keyword", "value": "x", "points": 2, '
+            '"feedback_on_match": "...", "feedback_on_miss": "..."}]. '
+            'Sum of criterion.points must equal this question.points.'
+        ),
+    )
     points = models.PositiveIntegerField(default=10)
     hint = models.TextField(blank=True, default='')
     position = models.PositiveIntegerField(db_index=True)
@@ -398,6 +415,135 @@ class AssignmentQuestion(models.Model):
 
     def __str__(self):
         return f'Q{self.position}: {self.question_text[:80]}'
+
+
+# =============================================================================
+# Assignment submissions — learner attempts at an assignment.
+#
+# Submission flow (Phase-2 learner consumption):
+#   1. Learner POSTs answers to /learn/assignments/<id>/submit/.
+#   2. Service creates an AssignmentSubmission(status=submitted) plus one
+#      AssignmentSubmissionAnswer per question, copying question.rubric and
+#      question.points into the answer row as a frozen snapshot.
+#   3. transaction.on_commit dispatches grade_assignment_submission_task to
+#      Celery; the task transitions status submitted -> grading, evaluates
+#      each answer against its rubric_snapshot, and ends in passed | failed
+#      | grading_failed.
+#   4. recalculate_progress fires (via on_commit inside the task) only when
+#      the final status is passed.
+#
+# The rubric_snapshot + per-criterion result fields make historical
+# submissions immune to later edits of AssignmentQuestion.rubric or
+# AssignmentQuestion.points -- mirrors how QuizAttemptAnswer.is_correct
+# denormalizes the live answer key.
+# =============================================================================
+
+
+class AssignmentSubmission(TimestampedModel):
+    """A single learner's submission of an Assignment."""
+
+    class Status(models.TextChoices):
+        SUBMITTED = 'submitted', 'Submitted'
+        GRADING = 'grading', 'Grading'
+        PASSED = 'passed', 'Passed'
+        FAILED = 'failed', 'Failed'
+        GRADING_FAILED = 'grading_failed', 'Grading failed'
+
+    TERMINAL_STATUSES = (Status.PASSED, Status.FAILED, Status.GRADING_FAILED)
+    IN_FLIGHT_STATUSES = (Status.SUBMITTED, Status.GRADING)
+
+    user = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name='assignment_submissions',
+    )
+    assignment = models.ForeignKey(
+        Assignment,
+        on_delete=models.CASCADE,
+        related_name='submissions',
+    )
+    submitted_at = models.DateTimeField(auto_now_add=True)
+    graded_at = models.DateTimeField(null=True, blank=True)
+    status = models.CharField(
+        max_length=20,
+        choices=Status.choices,
+        default=Status.SUBMITTED,
+        db_index=True,
+    )
+    total_score = models.PositiveIntegerField(default=0)
+    max_score = models.PositiveIntegerField()
+    grading_error = models.TextField(blank=True, default='')
+
+    class Meta:
+        db_table = 'assignment_submissions'
+        verbose_name = 'Assignment Submission'
+        verbose_name_plural = 'Assignment Submissions'
+        ordering = ['-submitted_at']
+        indexes = [
+            models.Index(fields=['user', 'assignment', '-submitted_at'], name='idx_asub_user_assign_date'),
+            models.Index(fields=['assignment', 'status'], name='idx_asub_assign_status'),
+        ]
+        constraints = [
+            # One in-flight submission per (user, assignment). Postgres-only;
+            # SQLite silently ignores partial conditions. Service layer also
+            # checks .exists() before INSERT as belt-and-braces for non-prod
+            # environments running on SQLite.
+            models.UniqueConstraint(
+                fields=['user', 'assignment'],
+                condition=Q(status__in=['submitted', 'grading']),
+                name='uniq_inflight_assignment_submission',
+            ),
+        ]
+
+    def __str__(self):
+        return (
+            f'Submission {self.pk}: {self.user} on assignment {self.assignment_id} '
+            f'[{self.status} {self.total_score}/{self.max_score}]'
+        )
+
+
+class AssignmentSubmissionAnswer(models.Model):
+    """One per-question record within an AssignmentSubmission."""
+
+    submission = models.ForeignKey(
+        AssignmentSubmission,
+        on_delete=models.CASCADE,
+        related_name='answers',
+    )
+    question = models.ForeignKey(
+        AssignmentQuestion,
+        on_delete=models.CASCADE,
+        related_name='+',
+    )
+    answer_text = models.TextField(blank=True, default='')
+    score = models.PositiveIntegerField(default=0)
+    max_score = models.PositiveIntegerField()
+    # Frozen at submit time so later rubric edits don't rewrite past grades.
+    rubric_snapshot = models.JSONField(default=list, blank=True)
+    # Written by the grader; one dict per rubric criterion.
+    criterion_results = models.JSONField(default=list, blank=True)
+    feedback = models.TextField(blank=True, default='')
+
+    class Meta:
+        db_table = 'assignment_submission_answers'
+        verbose_name = 'Assignment Submission Answer'
+        verbose_name_plural = 'Assignment Submission Answers'
+        ordering = ['submission_id', 'question_id']
+        constraints = [
+            models.UniqueConstraint(
+                fields=['submission', 'question'],
+                name='uniq_submission_question',
+            ),
+        ]
+        indexes = [
+            models.Index(fields=['submission', 'question'], name='idx_asubans_sub_question'),
+        ]
+
+    def __str__(self):
+        return (
+            f'AnswerRow sub={self.submission_id} q={self.question_id} '
+            f'[{self.score}/{self.max_score}]'
+        )
 
 
 # =============================================================================

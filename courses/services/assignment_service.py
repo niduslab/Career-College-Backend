@@ -39,8 +39,13 @@ def _get_owned_question(question_id, user) -> AssignmentQuestion:
 def update_assignment(assignment_id, user, validated_data) -> Assignment:
     assignment = _get_owned_assignment(assignment_id, user)
 
-    # Only allow these four fields through partial update.
-    allowed_fields = {'title', 'description', 'instructions', 'passing_score'}
+    # Allow-list of partially-updatable fields. Keep in sync with
+    # AssignmentCreateUpdateSerializer.Meta.fields — adding a writable field
+    # to the serializer without adding it here means the validator passes
+    # but the write silently drops.
+    allowed_fields = {
+        'title', 'description', 'instructions', 'total_score', 'passing_score',
+    }
     for field in allowed_fields:
         if field in validated_data:
             setattr(assignment, field, validated_data[field])
@@ -96,7 +101,10 @@ def add_question(assignment_id, user, validated_data) -> AssignmentQuestion:
 def update_question(question_id, user, validated_data) -> AssignmentQuestion:
     question = _get_owned_question(question_id, user)
 
-    allowed_fields = {'question_text', 'model_answer', 'points', 'hint'}
+    # Allow-list of partially-updatable fields. Keep in sync with
+    # AssignmentQuestionSerializer.Meta.fields (minus read-only ones) so a
+    # newly-added writable field doesn't silently drop on PATCH.
+    allowed_fields = {'question_text', 'model_answer', 'rubric', 'points', 'hint'}
     for field in allowed_fields:
         if field in validated_data:
             setattr(question, field, validated_data[field])

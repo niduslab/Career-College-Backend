@@ -17,7 +17,9 @@ from courses.services.assignment_service import (
     update_question,
 )
 from courses.services.enrollment_service import (
+    CATALOG_SORT_OPTIONS,
     enroll_learner,
+    filter_catalog_courses,
     get_catalog_courses,
     get_learner_enrollments,
     recalculate_progress,
@@ -56,7 +58,9 @@ __all__ = [
     'reorder_questions',
     'update_assignment',
     'update_question',
+    'CATALOG_SORT_OPTIONS',
     'enroll_learner',
+    'filter_catalog_courses',
     'get_catalog_courses',
     'get_learner_enrollments',
     'recalculate_progress',

@@ -18,6 +18,7 @@ from courses.serializers import (
 )
 from courses.services import (
     enroll_learner,
+    filter_catalog_courses,
     get_catalog_courses,
     get_learner_enrollments,
     load_catalog_curriculum,
@@ -36,31 +37,21 @@ class CatalogCourseListView(APIView):
     """
     GET /api/v1/courses/catalog/
 
-    Public paginated list of published courses. Supports filtering
-    via query params: ?category=<slug>&level=<level>&language=<lang>&search=<text>
+    Public paginated list of published courses. Multi-criteria filtering
+    and sorting are delegated to ``filter_catalog_courses`` — see that
+    function's docstring for the full query-param contract.
     """
 
     permission_classes = [AllowAny]
 
     def get(self, request):
-        queryset = get_catalog_courses()
-
-        # ── Optional filters ──
-        category_slug = request.query_params.get('category')
-        if category_slug:
-            queryset = queryset.filter(category__slug=category_slug)
-
-        level = request.query_params.get('level')
-        if level:
-            queryset = queryset.filter(level=level)
-
-        language = request.query_params.get('language')
-        if language:
-            queryset = queryset.filter(language__iexact=language)
-
-        search = request.query_params.get('search')
-        if search:
-            queryset = queryset.filter(title__icontains=search)
+        try:
+            queryset = filter_catalog_courses(get_catalog_courses(), request.query_params)
+        except ValidationError as e:
+            return Response(
+                {'success': False, 'message': 'Invalid filter parameters.', 'errors': e.message_dict},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
 
         paginator = StandardResultsSetPagination()
         page = paginator.paginate_queryset(queryset, request)

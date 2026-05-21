@@ -125,17 +125,157 @@ Use an admin or instructor account to create and publish a course (see `COURSES_
 
 ### 6.2 Filter the Catalog
 
-Append any combination of query params:
+The catalog supports multi-criteria filtering and sorting. All params are
+optional and combine with AND. Successful filtered responses follow the
+same `200` paginated shape as 6.1.
+
+#### Quick reference — all supported params
+
+**Filter fields** (all optional, AND-combined):
+
+| Param | Type / accepted values | Example |
+|---|---|---|
+| `category` | slug (single) | `?category=programming` |
+| `subcategory` | slug (single) | `?subcategory=python` |
+| `level` | CSV of `beginner`, `intermediate`, `advanced` | `?level=beginner,intermediate` |
+| `language` | CSV of language strings (case-insensitive) | `?language=english,bangla` |
+| `price_type` | `free` or `paid` | `?price_type=free` |
+| `price_min` | non-negative decimal | `?price_min=10` |
+| `price_max` | non-negative decimal | `?price_max=99.99` |
+| `duration_min` | non-negative integer (minutes) | `?duration_min=60` |
+| `duration_max` | non-negative integer (minutes) | `?duration_max=240` |
+| `search` | text — matches title, description, instructor full name | `?search=python` |
+| `page` | page number (see Section 11) | `?page=2` |
+| `page_size` | items per page, max 100 (see Section 11) | `?page_size=25` |
+
+**Sort field** (`?sort=<key>` — one value at a time):
+
+| Key | Effect |
+|---|---|
+| `relevance` | Title match rank desc, then newest. Default when `?search=` is present. |
+| `newest` | `-published_at`. Default when no `?search=`. |
+| `popularity` | Active enrollment count desc, then newest. |
+| `price_asc` | Price ascending. |
+| `price_desc` | Price descending. |
+| `rating` | Stubbed — currently falls back to `newest` until the course-rating field ships. |
+
+Per-field detail (validation rules, multi-select behavior, edge cases)
+follows in 6.2.1 – 6.2.9.
+
+#### 6.2.1 Category / subcategory
+
+| Filter | Param | Example | Behavior |
+|---|---|---|---|
+| By top-level category | `?category=<slug>` | `?category=programming` | Matches that category **and** every subcategory under it. |
+| By subcategory only | `?subcategory=<slug>` | `?subcategory=python` | Matches the exact subcategory. |
+| By both (with validation) | `?category=<parent>&subcategory=<child>` | `?category=programming&subcategory=python` | Only returns rows whose category is the child **and** whose parent is the given category. Mismatched pairs (e.g. `?category=cooking&subcategory=python`) return an empty list. |
+
+#### 6.2.2 Level (multi-select)
+
+CSV — picks multiple levels at once. Accepted values: `beginner`, `intermediate`, `advanced`.
+
+| Example | Result |
+|---|---|
+| `?level=intermediate` | Intermediate only |
+| `?level=beginner,intermediate` | Beginner OR Intermediate |
+
+#### 6.2.3 Language (multi-select, case-insensitive)
+
+CSV — accepts any language string the model stores (case-insensitive match).
+
+| Example | Result |
+|---|---|
+| `?language=English` | English courses |
+| `?language=english,bangla` | English OR Bangla |
+
+#### 6.2.4 Price
 
 | Filter | Param | Example |
-|--------|-------|---------|
-| By category | `?category=backend` | `{{base_url}}/catalog/?category=backend` |
-| By level | `?level=intermediate` | `{{base_url}}/catalog/?level=intermediate` |
-| By language | `?language=English` | `{{base_url}}/catalog/?language=English` |
-| By keyword | `?search=python` | `{{base_url}}/catalog/?search=python` |
-| Combine | all | `{{base_url}}/catalog/?level=beginner&search=django` |
+|---|---|---|
+| Free only | `?price_type=free` | `{{base_url}}/catalog/?price_type=free` |
+| Paid only | `?price_type=paid` | `{{base_url}}/catalog/?price_type=paid` |
+| Minimum price | `?price_min=<decimal>` | `?price_min=10` |
+| Maximum price | `?price_max=<decimal>` | `?price_max=99.99` |
+| Price range | both bounds | `?price_min=10&price_max=99.99` |
 
-All filtered responses follow the same `200` paginated shape as 6.1.
+`price_min` and `price_max` must be non-negative. Negative values return `400`.
+
+#### 6.2.5 Duration (in minutes)
+
+| Filter | Param | Example | Notes |
+|---|---|---|---|
+| Minimum duration | `?duration_min=<int>` | `?duration_min=60` | 1+ hour |
+| Maximum duration | `?duration_max=<int>` | `?duration_max=240` | ≤ 4 hours |
+| Duration range | both bounds | `?duration_min=60&duration_max=240` | 1–4 hours |
+
+Frontends rendering "Hours / Weeks / Months" sliders convert to minutes
+before sending. Values must be non-negative integers.
+
+#### 6.2.6 Search
+
+`?search=<text>` matches against **title**, **description**, and
+**instructor full name** (case-insensitive substring).
+
+| Example | What matches |
+|---|---|
+| `?search=python` | Any course with "python" in the title or description, or any course taught by an instructor whose name contains "python". |
+| `?search=sarah%20chen` | Courses by instructors named "Sarah Chen". |
+
+#### 6.2.7 Sort
+
+`?sort=<key>` — one of:
+
+| Key | Order |
+|---|---|
+| `relevance` | Title match rank desc, then newest. Default when `?search=` is present. |
+| `newest` | `-published_at`. Default when no search term. |
+| `popularity` | Active enrollment count desc, then newest. |
+| `price_asc` | Price ascending. |
+| `price_desc` | Price descending. |
+| `rating` | **Stubbed** — currently falls back to `newest` until the course-rating field ships. |
+
+Unknown sort keys return `400` (see 6.2.9).
+
+#### 6.2.8 Combining filters
+
+All params AND together. Example: beginner courses in the `programming-python`
+subcategory, under $50, taught in English, ordered by popularity:
+
+```
+{{base_url}}/catalog/?category=programming&subcategory=python&level=beginner&price_max=50&language=english&sort=popularity
+```
+
+#### 6.2.9 Filter validation errors
+
+Invalid filter values return `400` with a field-keyed `errors` object so
+the frontend can highlight every bad input at once.
+
+| Bad input | Status | Sample error |
+|---|---|---|
+| `?sort=cheapest` | 400 | `{"sort": ["Invalid sort \"cheapest\". Must be one of: newest, popularity, price_asc, price_desc, rating, relevance."]}` |
+| `?level=expert` | 400 | `{"level": ["Invalid level(s): expert. Must be one of: advanced, beginner, intermediate."]}` |
+| `?level=beginner,foobar` | 400 | `{"level": ["Invalid level(s): foobar. Must be one of: advanced, beginner, intermediate."]}` |
+| `?price_min=-10` | 400 | `{"price_min": ["Must be non-negative."]}` |
+| `?price_max=abc` | 400 | `{"price_max": ["\"abc\" is not a valid number."]}` |
+| `?duration_max=3.5` | 400 | `{"duration_max": ["\"3.5\" is not a valid integer."]}` |
+| `?duration_min=-5` | 400 | `{"duration_min": ["Must be non-negative."]}` |
+
+Multiple bad fields are reported in one response:
+
+```http
+GET {{base_url}}/catalog/?sort=foo&level=wizard&price_min=-1
+```
+```json
+{
+  "success": false,
+  "message": "Invalid filter parameters.",
+  "errors": {
+    "sort": ["Invalid sort \"foo\". Must be one of: newest, popularity, price_asc, price_desc, rating, relevance."],
+    "level": ["Invalid level(s): wizard. Must be one of: advanced, beginner, intermediate."],
+    "price_min": ["Must be non-negative."]
+  }
+}
+```
 
 ### 6.3 View a Single Course Detail
 
@@ -436,14 +576,19 @@ Run these requests in order for a complete end-to-end check:
 |------|--------|-----|------|----------------|
 | 1 | GET | `{{base_url}}/catalog/` | None | `200`, list of published courses |
 | 2 | GET | `{{base_url}}/catalog/{{course_slug}}/` | None | `200`, full course detail |
-| 3 | GET | `{{base_url}}/catalog/?search=python` | None | `200`, filtered results |
-| 4 | POST | `{{base_url}}/{{course_slug}}/enroll/` | Learner | `201`, `is_active: true`, `enrollment_type: "free"` |
-| 5 | POST | `{{base_url}}/{{course_slug}}/enroll/` | Learner | `422`, duplicate error |
-| 6 | GET | `{{base_url}}/my-courses/` | Learner | `200`, enrolled course appears |
-| 7 | GET | `{{base_url}}/my-courses/{{course_slug}}/` | Learner | `200`, `last_accessed_at` is now set |
-| 8 | POST | `{{base_url}}/{{course_slug}}/unenroll/` | Learner | `200`, `is_active: false` |
-| 9 | GET | `{{base_url}}/my-courses/` | Learner | `200`, list is now empty |
-| 10 | POST | `{{base_url}}/{{course_slug}}/enroll/` | Learner | `201`, same enrollment `id`, reactivated |
+| 3 | GET | `{{base_url}}/catalog/?search=python` | None | `200`, filtered results matching title / description / instructor name |
+| 4 | GET | `{{base_url}}/catalog/?level=beginner,intermediate` | None | `200`, only beginner OR intermediate courses |
+| 5 | GET | `{{base_url}}/catalog/?price_type=free&sort=newest` | None | `200`, only free courses, newest first |
+| 6 | GET | `{{base_url}}/catalog/?price_min=10&price_max=99&duration_min=60&sort=price_asc` | None | `200`, range filters AND'd, ordered by price asc |
+| 7 | GET | `{{base_url}}/catalog/?sort=cheapest` | None | `400`, `errors.sort` lists the valid sort keys |
+| 8 | GET | `{{base_url}}/catalog/?level=wizard&price_min=-1` | None | `400`, both `errors.level` and `errors.price_min` populated in one response |
+| 9 | POST | `{{base_url}}/{{course_slug}}/enroll/` | Learner | `201`, `is_active: true`, `enrollment_type: "free"` |
+| 10 | POST | `{{base_url}}/{{course_slug}}/enroll/` | Learner | `422`, duplicate error |
+| 11 | GET | `{{base_url}}/my-courses/` | Learner | `200`, enrolled course appears |
+| 12 | GET | `{{base_url}}/my-courses/{{course_slug}}/` | Learner | `200`, `last_accessed_at` is now set |
+| 13 | POST | `{{base_url}}/{{course_slug}}/unenroll/` | Learner | `200`, `is_active: false` |
+| 14 | GET | `{{base_url}}/my-courses/` | Learner | `200`, list is now empty |
+| 15 | POST | `{{base_url}}/{{course_slug}}/enroll/` | Learner | `201`, same enrollment `id`, reactivated |
 
 ---
 

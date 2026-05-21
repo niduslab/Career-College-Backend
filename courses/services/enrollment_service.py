@@ -6,7 +6,14 @@ from django.db import IntegrityError, transaction
 from django.db.models import F, QuerySet
 from django.utils import timezone
 
-from courses.models import Enrollment, NidusCourse, QuizAttempt, SectionContent, WatchProgress
+from courses.models import (
+    AssignmentSubmission,
+    Enrollment,
+    NidusCourse,
+    QuizAttempt,
+    SectionContent,
+    WatchProgress,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -167,10 +174,24 @@ def recalculate_progress(enrollment: Enrollment) -> Enrollment:
     else:
         completed_quizzes = 0
 
-    # Hooks for future learner submission models:
-    # - assignment completion when AssignmentSubmission.status == "passed"
-    # - coding completion when CodingSubmission.status == "accepted"
-    completed_assignments = 0
+    assignment_ids = {
+        object_id
+        for item_type, object_id in content_rows
+        if item_type == SectionContent.ItemType.ASSIGNMENT
+    }
+    if assignment_ids:
+        completed_assignment_ids = set(
+            AssignmentSubmission.objects.filter(
+                user=enrollment.user,
+                assignment_id__in=assignment_ids,
+                status=AssignmentSubmission.Status.PASSED,
+            ).values_list('assignment_id', flat=True)
+        )
+        completed_assignments = len(completed_assignment_ids)
+    else:
+        completed_assignments = 0
+
+    # Coding completion still reserved — lands with CodingSubmission.
     completed_coding = 0
 
     completed_items = (

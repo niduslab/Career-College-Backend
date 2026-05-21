@@ -32,6 +32,10 @@ from courses.views import (
     CourseSectionListAPIView,
     CourseSubmitForReviewView,
     CourseUnenrollView,
+    LearnerAssignmentDetailView,
+    LearnerAssignmentSubmissionDetailView,
+    LearnerAssignmentSubmissionRetryView,
+    LearnerAssignmentSubmitView,
     LearnerCurriculumView,
     LearnerLectureDetailView,
     LearnerLectureProgressView,
@@ -75,6 +79,10 @@ urlpatterns = [
     path('learn/lectures/<int:lecture_id>/progress/', LearnerLectureProgressView.as_view(), name='learner-lecture-progress'),
     path('learn/quizzes/<int:quiz_id>/', LearnerQuizDetailView.as_view(), name='learner-quiz-detail'),
     path('learn/quizzes/<int:quiz_id>/submit/', LearnerQuizSubmitView.as_view(), name='learner-quiz-submit'),
+    path('learn/assignments/<int:assignment_id>/', LearnerAssignmentDetailView.as_view(), name='learner-assignment-detail'),
+    path('learn/assignments/<int:assignment_id>/submit/', LearnerAssignmentSubmitView.as_view(), name='learner-assignment-submit'),
+    path('learn/assignments/submissions/<int:submission_id>/', LearnerAssignmentSubmissionDetailView.as_view(), name='learner-assignment-submission-detail'),
+    path('learn/assignments/submissions/<int:submission_id>/retry/', LearnerAssignmentSubmissionRetryView.as_view(), name='learner-assignment-submission-retry'),
 
     # -------------------------------------------------------------------------
     # Instructor course management

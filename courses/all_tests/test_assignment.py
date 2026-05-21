@@ -118,7 +118,8 @@ class AssignmentCRUDTests(AssignmentTestBase):
 
     def test_patch_assignment_updates_allowed_fields(self):
         a = Assignment.objects.create(
-            section=self.section, title='Original', passing_score=10
+            section=self.section, title='Original',
+            total_score=100, passing_score=10,
         )
         url = reverse('courses:assignment-detail', kwargs={'assignment_id': a.id})
 
@@ -132,6 +133,50 @@ class AssignmentCRUDTests(AssignmentTestBase):
         self.assertEqual(a.title, 'Updated Title')
         self.assertEqual(a.passing_score, 80)
         self.assertEqual(a.instructions, 'do this')
+
+    def test_patch_assignment_persists_total_score(self):
+        # Regression test for the bug where the serializer accepted
+        # total_score but the service's allow-list silently dropped it.
+        a = Assignment.objects.create(
+            section=self.section, title='Initial', total_score=10, passing_score=0,
+        )
+        AssignmentQuestion.objects.create(
+            assignment=a, question_text='Q1', points=10, position=1,
+        )
+        url = reverse('courses:assignment-detail', kwargs={'assignment_id': a.id})
+
+        response = self.client.patch(url, {'total_score': 120}, format='json')
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        a.refresh_from_db()
+        self.assertEqual(a.total_score, 120)
+        # max_score (computed sum of question.points) stays at 10 — it is
+        # intentionally distinct from the declared total.
+        self.assertEqual(response.data['data']['total_score'], 120)
+        self.assertEqual(response.data['data']['max_score'], 10)
+
+    def test_patch_assignment_question_persists_rubric(self):
+        # Regression test for the matching bug on the question update path:
+        # serializer accepted rubric but the service's allow-list dropped it.
+        a = Assignment.objects.create(
+            section=self.section, title='Rubric Drift Repro',
+            total_score=10, passing_score=0,
+        )
+        q = AssignmentQuestion.objects.create(
+            assignment=a, question_text='Q?', points=5, position=1, rubric=[],
+        )
+        url = reverse('courses:assignment-question-detail', kwargs={'question_id': q.id})
+
+        new_rubric = [
+            {'type': 'keyword', 'value': 'API', 'points': 3, 'case_sensitive': True},
+            {'type': 'min_length', 'value': 50, 'points': 2},
+        ]
+        response = self.client.patch(url, {'rubric': new_rubric}, format='json')
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        q.refresh_from_db()
+        self.assertEqual(len(q.rubric), 2)
+        self.assertEqual(q.rubric[0]['value'], 'API')
 
     def test_delete_assignment_cascades_questions_and_section_content(self):
         a = Assignment.objects.create(section=self.section, title='Doomed')
@@ -500,6 +545,7 @@ class AssignmentCurriculumFlowTests(AssignmentTestBase):
             'title': 'Reflection Essay',
             'description': 'Reflect on the lecture.',
             'instructions': 'Write 300+ words.',
+            'total_score': 100,
             'passing_score': 60,
         }
         payload.update(overrides)

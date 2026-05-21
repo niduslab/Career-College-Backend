@@ -28,10 +28,15 @@ from courses.services.curriculum_service import (
     load_catalog_curriculum,
 )
 from courses.services.learner_service import (
+    AssignmentSubmissionError,
+    get_assignment_for_consumption,
     get_consumption_lecture,
+    get_learner_assignment_submission,
     get_quiz_for_consumption,
     load_learner_curriculum,
     resolve_course_access,
+    retry_assignment_grading,
+    submit_assignment,
     submit_quiz_attempt,
     upsert_watch_progress,
 )
@@ -64,4 +69,9 @@ __all__ = [
     'resolve_course_access',
     'submit_quiz_attempt',
     'upsert_watch_progress',
+    'AssignmentSubmissionError',
+    'get_assignment_for_consumption',
+    'get_learner_assignment_submission',
+    'retry_assignment_grading',
+    'submit_assignment',
 ]

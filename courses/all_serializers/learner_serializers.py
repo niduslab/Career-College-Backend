@@ -19,7 +19,7 @@ from courses.all_serializers.content_serializers import (
     _normalize_media_relative_path,
     _normalize_renditions_playlists,
 )
-from courses.models import QuizAnswer
+from courses.models import AssignmentSubmission, QuizAnswer
 
 
 class LearnerWatchProgressSerializer(serializers.Serializer):
@@ -255,4 +255,177 @@ def build_quiz_attempt_result(attempt) -> dict:
         'max_score': attempt.max_score,
         'submitted_at': attempt.submitted_at,
         'questions': questions_payload,
+    }
+
+
+# ---------------------------------------------------------------------------
+# Assignment consumption + submission (Phase 2)
+# ---------------------------------------------------------------------------
+
+class _LearnerAssignmentQuestionSerializer(serializers.Serializer):
+    """Learner-safe assignment question payload.
+
+    `model_answer` and `rubric` are deliberately NOT declared — absence is
+    a stronger guarantee than conditional removal. Same pattern as the
+    quiz answer-option serializer.
+    """
+
+    id = serializers.IntegerField()
+    question_text = serializers.CharField()
+    points = serializers.IntegerField()
+    hint = serializers.CharField()
+    position = serializers.IntegerField()
+
+
+def _latest_submission_summary(submission) -> dict | None:
+    if submission is None:
+        return None
+    return {
+        'submission_id': submission.id,
+        'status': submission.status,
+        'total_score': submission.total_score,
+        'max_score': submission.max_score,
+        'submitted_at': submission.submitted_at,
+        'graded_at': submission.graded_at,
+    }
+
+
+class LearnerAssignmentDetailSerializer(serializers.Serializer):
+    """Learner-safe assignment payload for the attempt UI."""
+
+    id = serializers.IntegerField()
+    section_id = serializers.IntegerField()
+    title = serializers.CharField()
+    description = serializers.CharField()
+    instructions = serializers.CharField()
+    passing_score = serializers.IntegerField()
+    max_score = serializers.SerializerMethodField()
+    question_count = serializers.SerializerMethodField()
+    questions = serializers.SerializerMethodField()
+    latest_submission = serializers.SerializerMethodField()
+
+    def _prefetched_questions(self, assignment):
+        prefetched = getattr(assignment, '_prefetched_objects_cache', {})
+        if 'questions' in prefetched:
+            return prefetched['questions']
+        return list(assignment.questions.order_by('position', 'id'))
+
+    def get_max_score(self, assignment) -> int:
+        return sum((q.points or 0) for q in self._prefetched_questions(assignment))
+
+    def get_question_count(self, assignment) -> int:
+        return len(self._prefetched_questions(assignment))
+
+    def get_questions(self, assignment):
+        return _LearnerAssignmentQuestionSerializer(
+            self._prefetched_questions(assignment), many=True,
+        ).data
+
+    def get_latest_submission(self, _assignment):
+        return _latest_submission_summary(self.context.get('latest_submission'))
+
+
+class _AssignmentAnswerSubmissionSerializer(serializers.Serializer):
+    """One entry in the POST /submit/ body's `answers` list."""
+
+    question_id = serializers.IntegerField()
+    answer_text = serializers.CharField(allow_blank=True, trim_whitespace=False)
+
+
+class AssignmentSubmissionInputSerializer(serializers.Serializer):
+    """Validate the POST body for `/learn/assignments/<id>/submit/`."""
+
+    answers = _AssignmentAnswerSubmissionSerializer(many=True, allow_empty=False)
+
+    def validate_answers(self, value):
+        seen = set()
+        for item in value:
+            qid = item['question_id']
+            if qid in seen:
+                raise serializers.ValidationError(
+                    f'question_id {qid} appears more than once in the payload.'
+                )
+            seen.add(qid)
+        return value
+
+    def validate(self, attrs):
+        assignment = self.context.get('assignment')
+        if assignment is None:
+            return attrs
+
+        prefetched = getattr(assignment, '_prefetched_objects_cache', {})
+        if 'questions' in prefetched:
+            question_ids = {q.id for q in prefetched['questions']}
+        else:
+            question_ids = set(assignment.questions.values_list('id', flat=True))
+
+        errors = []
+        submitted_ids = set()
+        for item in attrs['answers']:
+            qid = item['question_id']
+            submitted_ids.add(qid)
+            if qid not in question_ids:
+                errors.append(f'question_id {qid} does not belong to this assignment.')
+
+        missing = question_ids - submitted_ids
+        if missing:
+            errors.append(
+                f'Missing answers for question_id(s): {sorted(missing)}. '
+                'All questions must have an answer (use an empty string to skip).'
+            )
+
+        if errors:
+            raise serializers.ValidationError({'answers': errors})
+        return attrs
+
+
+def build_assignment_submission_result(submission) -> dict:
+    """Build the response payload for an assignment submission detail GET.
+
+    Always returns: id, assignment_id, status, total_score, max_score,
+    submitted_at, graded_at, grading_error, answers.
+
+    Each answer row includes: question_id, question_text, answer_text,
+    score, max_score, criterion_results, feedback. The instructor's
+    `model_answer` is included on a per-question basis **only** when the
+    submission has reached a terminal graded state (`passed` or `failed`).
+    During `submitted` / `grading` / `grading_failed`, `model_answer` is
+    omitted entirely — absence beats conditional null.
+    """
+    reveal_model_answer = submission.status in (
+        AssignmentSubmission.Status.PASSED,
+        AssignmentSubmission.Status.FAILED,
+    )
+
+    answer_rows = list(
+        submission.answers
+        .select_related('question')
+        .order_by('question__position', 'question_id')
+    )
+
+    answers_payload = []
+    for row in answer_rows:
+        item = {
+            'question_id': row.question_id,
+            'question_text': row.question.question_text,
+            'answer_text': row.answer_text,
+            'score': row.score,
+            'max_score': row.max_score,
+            'criterion_results': row.criterion_results,
+            'feedback': row.feedback,
+        }
+        if reveal_model_answer:
+            item['model_answer'] = row.question.model_answer
+        answers_payload.append(item)
+
+    return {
+        'submission_id': submission.id,
+        'assignment_id': submission.assignment_id,
+        'status': submission.status,
+        'total_score': submission.total_score,
+        'max_score': submission.max_score,
+        'submitted_at': submission.submitted_at,
+        'graded_at': submission.graded_at,
+        'grading_error': submission.grading_error,
+        'answers': answers_payload,
     }

@@ -14,7 +14,7 @@
 10. [Quiz API Flow](#10-quiz-api-flow)
 11. [Assignment API Flow](#11-assignment-api-flow)
 12. [Coding Exercise API Flow](#12-coding-exercise-api-flow)
-12B. [Learner Consumption Endpoints (`/learn/...`)](#12b-learner-consumption-endpoints-learn)
+12B. [Learner Consumption Endpoints (`/learn/...`)](#12b-learner-consumption-endpoints-learn) — includes assignment auto-grading (12B.10–12B.14)
 12C. [My-Courses Endpoints (course header + dashboard)](#12c-my-courses-endpoints-course-header--dashboard)
 13. [Course Status Transitions](#13-course-status-transitions)
 14. [Common Error Responses You Should Test](#14-common-error-responses-you-should-test)
@@ -575,6 +575,7 @@ All write endpoints require a verified-instructor JWT. `model_answer` on a quest
   "title": "Reflection Essay",
   "description": "Reflect on the REST fundamentals lecture.",
   "instructions": "Write at least 300 words. Cite at least one example.",
+  "total_score": 100,
   "passing_score": 60,
   "position": 4
 }
@@ -594,6 +595,7 @@ All write endpoints require a verified-instructor JWT. `model_answer` on a quest
     "content": {
       "id": 1,
       "title": "Reflection Essay",
+      "total_score": 100,
       "passing_score": 60
     }
   }
@@ -603,11 +605,17 @@ All write endpoints require a verified-instructor JWT. `model_answer` on a quest
   - `data.id` as `content_id` (the section-content slot id)
   - `data.object_id` as `assignment_id` (the actual assignment id)
 
+**Field semantics:**
+
+- `total_score` is the instructor-declared "this assignment is worth N points" value. It's the denominator the learner sees and the figure `passing_score` is measured against.
+- `passing_score` must be `<= total_score`. Mismatch → `400` with `errors.passing_score`.
+- `total_score` is **independent** of the sum of `question.points`. The questions are a sub-allocation guide — the authoring UI can compare `total_score` against the response's `max_score` (sum-of-question-points) to flag under-/over-funded rubrics. A learner can never score more than `sum(question.points)`, so the instructor should keep the two roughly aligned.
+
 ### 11.2 List Assignments in a Section
 - Method: `GET`
 - URL: `{{base_url}}/sections/{{section_id}}/assignments/`
 - Expected status: `200`
-- Returns assignments belonging to that section, newest first. Each row includes nested `questions` and a computed `max_score` (sum of question points).
+- Returns assignments belonging to that section, newest first. Each row includes nested `questions`, the instructor-declared `total_score`, and a computed `max_score` (sum of `question.points`).
 
 ### 11.3 Get Assignment Detail
 - Method: `GET`
@@ -623,6 +631,7 @@ All write endpoints require a verified-instructor JWT. `model_answer` on a quest
     "title": "Reflection Essay",
     "description": "Reflect on the REST fundamentals lecture.",
     "instructions": "Write at least 300 words. Cite at least one example.",
+    "total_score": 100,
     "passing_score": 60,
     "max_score": 0,
     "questions": [],
@@ -631,6 +640,8 @@ All write endpoints require a verified-instructor JWT. `model_answer` on a quest
   }
 }
 ```
+
+`total_score` is the declared total; `max_score` is the sum of `question.points`. They are distinct on purpose — see 11.1.
 
 > **Note:** the dedicated assignment endpoint **does not accept POST**. Sending `POST {{base_url}}/sections/{{section_id}}/assignments/` returns `405 Method Not Allowed`. Always create through `sections/{id}/contents/` (section 11.1).
 
@@ -641,11 +652,13 @@ All write endpoints require a verified-instructor JWT. `model_answer` on a quest
 ```json
 {
   "title": "Reflection Essay (Updated)",
+  "total_score": 120,
   "passing_score": 70
 }
 ```
 - Expected status: `200`
-- Allowed partial-update fields: `title`, `description`, `instructions`, `passing_score`.
+- Allowed partial-update fields: `title`, `description`, `instructions`, `total_score`, `passing_score`.
+- Cross-field rule on partials: if you change only one side, the validator uses the existing value of the other. Updating `passing_score` alone to a value greater than the stored `total_score` → `400`.
 
 ### 11.5 Delete Assignment
 - Method: `DELETE`
@@ -671,7 +684,30 @@ All write endpoints require a verified-instructor JWT. `model_answer` on a quest
   "question_text": "What surprised you most about REST design?",
   "model_answer": "Reference reflection: idempotency boundaries, statelessness trade-offs.",
   "points": 10,
-  "hint": "Reference at least one HTTP verb."
+  "hint": "Reference at least one HTTP verb.",
+  "rubric": [
+    {
+      "type": "keyword",
+      "value": "idempotency",
+      "points": 4,
+      "feedback_on_match": "Correctly identifies idempotency.",
+      "feedback_on_miss": "Missing the concept of idempotency."
+    },
+    {
+      "type": "any_of",
+      "value": ["GET", "POST", "PUT", "PATCH", "DELETE"],
+      "points": 2,
+      "feedback_on_match": "Mentions an HTTP verb.",
+      "feedback_on_miss": "No HTTP verb referenced."
+    },
+    {
+      "type": "min_length",
+      "value": 80,
+      "points": 4,
+      "feedback_on_match": "Answer is detailed enough.",
+      "feedback_on_miss": "Answer is too short — aim for at least 80 characters."
+    }
+  ]
 }
 ```
 - Expected status: `201`
@@ -685,6 +721,11 @@ All write endpoints require a verified-instructor JWT. `model_answer` on a quest
     "assignment_id": 1,
     "question_text": "What surprised you most about REST design?",
     "model_answer": "Reference reflection: idempotency boundaries, statelessness trade-offs.",
+    "rubric": [
+      {"type": "keyword", "value": "idempotency", "points": 4, "feedback_on_match": "...", "feedback_on_miss": "..."},
+      {"type": "any_of",  "value": ["GET","POST","PUT","PATCH","DELETE"], "points": 2, "feedback_on_match": "...", "feedback_on_miss": "..."},
+      {"type": "min_length", "value": 80, "points": 4, "feedback_on_match": "...", "feedback_on_miss": "..."}
+    ],
     "points": 10,
     "hint": "Reference at least one HTTP verb.",
     "position": 1
@@ -693,6 +734,26 @@ All write endpoints require a verified-instructor JWT. `model_answer` on a quest
 ```
 - Save `data.id` as `aq_id`.
 - `position` is server-assigned (next available slot for that assignment) — do not send it in the body.
+
+**Rubric authoring rules (enforced by the serializer):**
+
+- `sum(criterion.points)` must equal `question.points`. Mismatch → `400`.
+- Supported `type` values: `keyword`, `regex`, `min_length`, `max_length`, `any_of`, `all_of`. Unknown `type` → `400`.
+- `regex` criteria are compiled at save time; an unparseable pattern → `400`.
+- `case_sensitive` (boolean, optional) is only honoured by `keyword` and `regex`; defaults to `false`.
+- An empty rubric (`"rubric": []`) is allowed during draft authoring but will produce a `score=0` submission once the course is published — fill it out before submitting the course for review.
+- `rubric` is **instructor-only** in the response. The same endpoint called by a non-instructor would omit it (along with `model_answer`).
+
+**Example error — points mismatch:**
+```json
+{
+  "success": false,
+  "message": "Validation failed.",
+  "errors": {
+    "non_field_errors": ["sum of criterion.points (7) must equal question.points (10)."]
+  }
+}
+```
 
 ### 11.7 List Assignment Questions
 - Method: `GET`
@@ -1465,6 +1526,226 @@ All `/learn/...` endpoints require a verified-email JWT. `GET` endpoints accept 
 **Instructor calling submit**
 - Authenticated as the course's instructor.
 - Expected status: `403`. Instructor preview is read-only — attempt history stays clean.
+
+### 12B.10 Get Learner Assignment Detail (Attempt UI)
+- Method: `GET`
+- URL: `{{base_url}}/learn/assignments/{{assignment_id}}/`
+- Headers: enrolled learner JWT (instructor-preview also allowed).
+- Expected status: `200`
+- Example response:
+```json
+{
+  "success": true,
+  "data": {
+    "id": 1,
+    "section_id": 1,
+    "title": "REST Reflection",
+    "description": "Reflect on what you learned.",
+    "instructions": "Answer both questions fully.",
+    "passing_score": 5,
+    "max_score": 10,
+    "question_count": 2,
+    "questions": [
+      {
+        "id": 1,
+        "question_text": "What surprised you most about REST design?",
+        "points": 6,
+        "hint": "Reference at least one HTTP verb.",
+        "position": 1
+      },
+      {
+        "id": 2,
+        "question_text": "How does idempotency change retry logic?",
+        "points": 4,
+        "hint": "",
+        "position": 2
+      }
+    ],
+    "latest_submission": null
+  }
+}
+```
+
+Notes:
+- `model_answer` and `rubric` are **never** present in this payload. The learner serializer doesn't declare them; absence is a stronger guarantee than conditional removal.
+- `latest_submission` summarizes the caller's most recent submission (`submission_id`, `status`, `total_score`, `max_score`, `submitted_at`, `graded_at`). Use it to decide whether to show the new-attempt form or surface the prior submission's feedback (see *Resubmission UX* below).
+
+### 12B.11 Submit an Assignment (auto-graded)
+- Method: `POST`
+- URL: `{{base_url}}/learn/assignments/{{assignment_id}}/submit/`
+- Headers: enrolled learner JWT.
+- Body:
+```json
+{
+  "answers": [
+    {"question_id": 1, "answer_text": "Idempotency means PUT and DELETE are safe to retry without compounding side effects, unlike POST. That guides retry policy at the gateway."},
+    {"question_id": 2, "answer_text": "Idempotent verbs let the client retry on network failure without worrying about duplicate state changes."}
+  ]
+}
+```
+- Expected status: `202 Accepted`
+- Example response:
+```json
+{
+  "success": true,
+  "message": "Assignment submitted. Grading is in progress.",
+  "data": {
+    "submission_id": 7,
+    "assignment_id": 1,
+    "status": "submitted",
+    "submitted_at": "2026-05-20T11:42:18.301Z",
+    "max_score": 10
+  }
+}
+```
+
+Notes:
+- The response returns immediately with `status='submitted'`. A Celery task (`grade_assignment_submission_task`) runs the rubric grader out-of-band. The learner should poll `GET /learn/assignments/submissions/{submission_id}/` until `status` transitions to a terminal value (`passed`, `failed`, or `grading_failed`).
+- `max_score` is snapshotted at submit time. Even if the instructor later edits `AssignmentQuestion.points`, the submission's max stays frozen — historical submissions never get retroactively rescored.
+- All questions on the assignment must appear in the `answers` array (use an empty string `""` for a deliberately-blank answer). Missing a question → `400`.
+
+### 12B.12 Get Learner Submission Detail (polling target)
+- Method: `GET`
+- URL: `{{base_url}}/learn/assignments/submissions/{{submission_id}}/`
+- Headers: the same learner that submitted (other learners → `404`).
+- Expected status: `200`
+- Example response while still grading:
+```json
+{
+  "success": true,
+  "data": {
+    "submission_id": 7,
+    "assignment_id": 1,
+    "status": "grading",
+    "total_score": 0,
+    "max_score": 10,
+    "submitted_at": "2026-05-20T11:42:18.301Z",
+    "graded_at": null,
+    "grading_error": "",
+    "answers": [
+      {
+        "question_id": 1,
+        "question_text": "What surprised you most about REST design?",
+        "answer_text": "Idempotency means PUT and DELETE are safe to retry ...",
+        "score": 0,
+        "max_score": 6,
+        "criterion_results": [],
+        "feedback": ""
+      }
+    ]
+  }
+}
+```
+- Example response once graded (`status='passed'` or `'failed'`):
+```json
+{
+  "success": true,
+  "data": {
+    "submission_id": 7,
+    "assignment_id": 1,
+    "status": "passed",
+    "total_score": 10,
+    "max_score": 10,
+    "submitted_at": "2026-05-20T11:42:18.301Z",
+    "graded_at": "2026-05-20T11:42:19.522Z",
+    "grading_error": "",
+    "answers": [
+      {
+        "question_id": 1,
+        "question_text": "What surprised you most about REST design?",
+        "answer_text": "Idempotency means PUT and DELETE are safe to retry ...",
+        "score": 6,
+        "max_score": 6,
+        "criterion_results": [
+          {"index": 0, "type": "keyword",    "matched": true,  "points_awarded": 4, "feedback": "Correctly identifies idempotency."},
+          {"index": 1, "type": "any_of",     "matched": true,  "points_awarded": 2, "feedback": "Mentions an HTTP verb."}
+        ],
+        "feedback": "Correctly identifies idempotency.\nMentions an HTTP verb.",
+        "model_answer": "Reference reflection: idempotency boundaries, ..."
+      },
+      {
+        "question_id": 2,
+        "question_text": "How does idempotency change retry logic?",
+        "answer_text": "Idempotent verbs let the client retry ...",
+        "score": 4,
+        "max_score": 4,
+        "criterion_results": [
+          {"index": 0, "type": "keyword", "matched": true, "points_awarded": 4, "feedback": "Mentions retry logic."}
+        ],
+        "feedback": "Mentions retry logic.",
+        "model_answer": "An idempotent verb means clients can safely retry ..."
+      }
+    ]
+  }
+}
+```
+
+Reveal rule (verify in tests):
+- `model_answer` is **omitted entirely** on each answer when `status in ('submitted', 'grading', 'grading_failed')`. It is **included** only when `status in ('passed', 'failed')`.
+
+**Polling pattern (frontend reference):**
+
+1. After `POST /submit/` returns `202`, poll `GET /learn/assignments/submissions/{submission_id}/` every 2–5 seconds.
+2. Stop polling once `status` is one of `passed`, `failed`, or `grading_failed`.
+3. If terminal status is `grading_failed`, show the `grading_error` to the user and offer the retry button (see 12B.13).
+
+### 12B.13 Retry a Failed Grading
+- Method: `POST`
+- URL: `{{base_url}}/learn/assignments/submissions/{{submission_id}}/retry/`
+- Headers: the same learner that owns the submission.
+- Body: empty (none required).
+- Expected status: `202 Accepted` when the prior status was `grading_failed`.
+- Example response:
+```json
+{
+  "success": true,
+  "message": "Grading re-enqueued.",
+  "data": {
+    "submission_id": 7,
+    "status": "grading"
+  }
+}
+```
+
+Notes:
+- The same submission row is reused — `submitted_at` is unchanged, `grading_error` is cleared, `status` flips to `grading`, and the Celery task is re-dispatched. The learner can keep polling the same submission detail endpoint.
+- Only `grading_failed` is retryable. Any other status → `422` with `"Only submissions in grading_failed can be retried."`.
+- A submission owned by a different learner → `404` (existence not leaked).
+- For a learner who wants to take a fresh attempt after a graded `failed`/`passed`, use `POST /submit/` to create a new submission row — that's distinct from `/retry/`, which only re-runs the grader against the existing answers.
+
+### 12B.14 Assignment Submission Error Cases
+
+**In-flight submission already exists** (caller has one with `status in ('submitted', 'grading')`).
+- Expected status: `422`
+- Example response:
+```json
+{
+  "success": false,
+  "message": "You already have a submission for this assignment that is still being graded."
+}
+```
+
+**Question ID not in this assignment.**
+- Expected status: `400` with `errors.answers` listing the offending IDs.
+
+**Duplicate `question_id` in the payload.**
+- Expected status: `400`.
+
+**Missing some questions in the payload.**
+- Expected status: `400`. The serializer enforces all-or-nothing — every question on the assignment must appear in `answers`. Use `"answer_text": ""` for an intentionally-blank answer.
+
+**Unenrolled learner.**
+- Expected status: `404` (existence not leaked — same as a non-existent assignment).
+
+**Instructor calling `/submit/` or `/retry/`.**
+- Expected status: `403`. Preview must not pollute submission history.
+
+**Submission detail for another learner's submission.**
+- Expected status: `404`.
+
+### Resubmission UX (frontend responsibility)
+
+After a `failed` (or `grading_failed`) verdict the learner can retry the grader (12B.13) **or** submit fresh answers via `POST /submit/`. The frontend should fetch the most recent submission detail and render its `criterion_results` next to the new submission form — otherwise the learner has no idea which criteria they missed last time. The backend already returns everything needed; this is a UI wiring concern.
 
 ## 12C) My-Courses Endpoints (course header + dashboard)
 

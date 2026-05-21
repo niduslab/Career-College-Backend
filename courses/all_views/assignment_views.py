@@ -112,7 +112,12 @@ class AssignmentDetailAPIView(APIView):
         if err := guard_editable(assignment.section.course):
             return err
 
-        serializer = AssignmentCreateUpdateSerializer(data=request.data, partial=True)
+        # Pass the instance so cross-field validation (e.g. passing_score
+        # <= total_score) can fall back to existing values when one side is
+        # absent from the partial payload.
+        serializer = AssignmentCreateUpdateSerializer(
+            instance=assignment, data=request.data, partial=True,
+        )
         if not serializer.is_valid():
             return Response(
                 {'success': False, 'message': 'Validation failed.', 'errors': serializer.errors},
@@ -198,7 +203,7 @@ class AssignmentQuestionListCreateAPIView(APIView):
             )
 
         # Filter to fields the service actually owns; position is assigned by the service.
-        write_fields = {'question_text', 'model_answer', 'points', 'hint'}
+        write_fields = {'question_text', 'model_answer', 'rubric', 'points', 'hint'}
         payload = {k: v for k, v in serializer.validated_data.items() if k in write_fields}
 
         try:
@@ -258,8 +263,12 @@ class AssignmentQuestionDetailAPIView(APIView):
         if err := guard_editable(question.assignment.section.course):
             return err
 
+        # Pass the instance so the rubric / points cross-field validator can
+        # fall back to existing values when one side is absent from the
+        # partial payload.
         serializer = AssignmentQuestionSerializer(
-            data=request.data, partial=True, context={'request': request}
+            instance=question, data=request.data, partial=True,
+            context={'request': request},
         )
         if not serializer.is_valid():
             return Response(
@@ -267,7 +276,7 @@ class AssignmentQuestionDetailAPIView(APIView):
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
-        write_fields = {'question_text', 'model_answer', 'points', 'hint'}
+        write_fields = {'question_text', 'model_answer', 'rubric', 'points', 'hint'}
         payload = {k: v for k, v in serializer.validated_data.items() if k in write_fields}
 
         try:

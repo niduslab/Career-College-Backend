@@ -1,10 +1,15 @@
+from datetime import timedelta
+from decimal import Decimal
+
 from django.contrib.contenttypes.models import ContentType
 from django.urls import reverse
+from django.utils import timezone
 from rest_framework import status
 from rest_framework.test import APITestCase
 
 from authentication.models import User
 from courses.models import (
+    CourseCategory,
     CourseSection,
     Enrollment,
     Lecture,
@@ -267,3 +272,283 @@ class EnrollmentAPITests(APITestCase):
         enrollment.refresh_from_db()
         self.assertEqual(enrollment.progress_percent, 100)
         self.assertIsNotNone(enrollment.completed_at)
+
+
+class CatalogFilterTests(APITestCase):
+    """End-to-end coverage of the multi-criteria catalog filter/sort API.
+
+    Touches: C1 (search hits full_name), H1/H2 (category/subcategory tree),
+    M4/M5/M6 (validator 400s), and sort ordering (newest, popularity,
+    price_asc, relevance).
+    """
+
+    @classmethod
+    def setUpTestData(cls):
+        # Two instructors with non-overlapping name tokens — used to assert
+        # that ?search= hits instructor full_name (C1) and that other
+        # search terms don't accidentally match instructor names.
+        cls.alice = User.objects.create_user(
+            email='catalog_alice@example.com', password='pw12345!',
+            full_name='Alice Smith', user_type='instructor',
+            is_email_verified=True,
+        )
+        cls.bob = User.objects.create_user(
+            email='catalog_bob@example.com', password='pw12345!',
+            full_name='Bob Carpenter', user_type='instructor',
+            is_email_verified=True,
+        )
+
+        # Two-level category tree:
+        #   Programming → Python, Rust
+        #   Cooking → Italian
+        cls.prog = CourseCategory.objects.create(name='Programming', slug='programming')
+        cls.python_cat = CourseCategory.objects.create(name='Python', slug='python', parent=cls.prog)
+        cls.rust_cat = CourseCategory.objects.create(name='Rust', slug='rust', parent=cls.prog)
+        cls.cooking = CourseCategory.objects.create(name='Cooking', slug='cooking')
+        cls.italian = CourseCategory.objects.create(name='Italian', slug='italian', parent=cls.cooking)
+
+        cls.c_python_intro = cls._make_course(
+            title='Intro to Python', slug='intro-to-python',
+            category=cls.python_cat, level=NidusCourse.CourseLevel.BEGINNER,
+            language='English', price=Decimal('0'), duration_minutes=60,
+        )
+        cls.c_python_adv = cls._make_course(
+            title='Advanced Python Tricks', slug='advanced-python-tricks',
+            category=cls.python_cat, level=NidusCourse.CourseLevel.ADVANCED,
+            language='English', price=Decimal('49.99'), duration_minutes=600,
+        )
+        cls.c_python_start = cls._make_course(
+            title='Python for Beginners', slug='python-for-beginners',
+            category=cls.python_cat, level=NidusCourse.CourseLevel.BEGINNER,
+            language='English', price=Decimal('19.99'), duration_minutes=120,
+        )
+        cls.c_rust = cls._make_course(
+            title='Learning Rust', slug='learning-rust',
+            category=cls.rust_cat, level=NidusCourse.CourseLevel.INTERMEDIATE,
+            language='English', price=Decimal('29.99'), duration_minutes=240,
+        )
+        cls.c_italian = cls._make_course(
+            title='Italian Pasta Mastery', slug='italian-pasta-mastery',
+            category=cls.italian, level=NidusCourse.CourseLevel.BEGINNER,
+            language='English', price=Decimal('19.99'), duration_minutes=180,
+            instructors=[cls.bob],
+        )
+        cls.c_bangla = cls._make_course(
+            title='Bangla Calligraphy', slug='bangla-calligraphy',
+            category=None, level=NidusCourse.CourseLevel.BEGINNER,
+            language='Bangla', price=Decimal('0'), duration_minutes=90,
+        )
+        cls.c_draft = cls._make_course(
+            title='Unpublished Stuff', slug='unpublished-stuff',
+            status=NidusCourse.CourseStatus.DRAFT,
+        )
+
+        # Three enrollments staged for the popularity sort assertion:
+        # adv:2 > rust:1 > everyone else:0.
+        l1 = User.objects.create_user(
+            email='catalog_l1@example.com', password='pw',
+            full_name='L1', user_type='learner', is_email_verified=True,
+        )
+        l2 = User.objects.create_user(
+            email='catalog_l2@example.com', password='pw',
+            full_name='L2', user_type='learner', is_email_verified=True,
+        )
+        Enrollment.objects.create(user=l1, course=cls.c_python_adv)
+        Enrollment.objects.create(user=l2, course=cls.c_python_adv)
+        Enrollment.objects.create(user=l1, course=cls.c_rust)
+
+    @classmethod
+    def _make_course(cls, *, title, slug, instructors=None, **kwargs):
+        defaults = dict(
+            description='A course used by catalog filter tests.',
+            status=NidusCourse.CourseStatus.PUBLISHED,
+            price=Decimal('0'),
+            language='English',
+            level=NidusCourse.CourseLevel.BEGINNER,
+            duration_minutes=120,
+        )
+        defaults.update(kwargs)
+        course = NidusCourse.objects.create(
+            created_by=cls.alice, title=title, slug=slug, **defaults
+        )
+        for inst in (instructors or [cls.alice]):
+            course.instructors.add(inst)
+        return course
+
+    def _slugs(self, response):
+        return [row['slug'] for row in response.data['data']['results']]
+
+    # ── C1: search must hit instructors.full_name ────────────────────────
+
+    def test_search_matches_instructor_full_name(self):
+        # 'Carpenter' lives only in Bob's full_name; Bob teaches just c_italian.
+        # No course title or description contains 'Carpenter' → only c_italian
+        # can satisfy this search, and only via the full_name join.
+        response = self.client.get(
+            reverse('courses:catalog-list'), {'search': 'Carpenter'}
+        )
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(set(self._slugs(response)), {self.c_italian.slug})
+
+    # ── H1: category + subcategory must validate the parent/child pair ──
+
+    def test_category_plus_matching_subcategory_returns_python_rows(self):
+        response = self.client.get(
+            reverse('courses:catalog-list'),
+            {'category': 'programming', 'subcategory': 'python'},
+        )
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(set(self._slugs(response)), {
+            self.c_python_intro.slug,
+            self.c_python_adv.slug,
+            self.c_python_start.slug,
+        })
+
+    def test_category_plus_mismatched_subcategory_returns_empty(self):
+        # python's parent is 'programming', not 'cooking' → no rows can match.
+        response = self.client.get(
+            reverse('courses:catalog-list'),
+            {'category': 'cooking', 'subcategory': 'python'},
+        )
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data['data']['count'], 0)
+
+    def test_subcategory_only_returns_exact_subcategory_rows(self):
+        response = self.client.get(
+            reverse('courses:catalog-list'), {'subcategory': 'italian'}
+        )
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(set(self._slugs(response)), {self.c_italian.slug})
+
+    # ── H2: parent category must roll up to subcategory rows ─────────────
+
+    def test_parent_category_rolls_up_to_subcategory_rows(self):
+        response = self.client.get(
+            reverse('courses:catalog-list'), {'category': 'programming'}
+        )
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        slugs = set(self._slugs(response))
+        self.assertEqual(slugs, {
+            self.c_python_intro.slug,
+            self.c_python_adv.slug,
+            self.c_python_start.slug,
+            self.c_rust.slug,
+        })
+        # Cooking + Bangla + draft must not leak in.
+        self.assertNotIn(self.c_italian.slug, slugs)
+        self.assertNotIn(self.c_bangla.slug, slugs)
+        self.assertNotIn(self.c_draft.slug, slugs)
+
+    # ── M4: unknown sort returns 400 ─────────────────────────────────────
+
+    def test_unknown_sort_returns_400(self):
+        response = self.client.get(
+            reverse('courses:catalog-list'), {'sort': 'cheapest'}
+        )
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertFalse(response.data['success'])
+        self.assertIn('sort', response.data['errors'])
+
+    # ── M5: numeric range params must validate ───────────────────────────
+
+    def test_negative_price_min_returns_400(self):
+        response = self.client.get(
+            reverse('courses:catalog-list'), {'price_min': '-10'}
+        )
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn('price_min', response.data['errors'])
+
+    def test_non_numeric_price_max_returns_400(self):
+        response = self.client.get(
+            reverse('courses:catalog-list'), {'price_max': 'abc'}
+        )
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn('price_max', response.data['errors'])
+
+    def test_non_integer_duration_max_returns_400(self):
+        response = self.client.get(
+            reverse('courses:catalog-list'), {'duration_max': '3.5'}
+        )
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn('duration_max', response.data['errors'])
+
+    # ── M6: invalid level returns 400 ────────────────────────────────────
+
+    def test_invalid_level_returns_400(self):
+        response = self.client.get(
+            reverse('courses:catalog-list'), {'level': 'expert'}
+        )
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn('level', response.data['errors'])
+
+    # ── Validator collects every bad field in one response ───────────────
+
+    def test_combined_bad_inputs_returns_all_errors_together(self):
+        response = self.client.get(reverse('courses:catalog-list'), {
+            'sort': 'foo',
+            'level': 'wizard',
+            'price_min': '-1',
+        })
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertEqual(
+            set(response.data['errors'].keys()),
+            {'sort', 'level', 'price_min'},
+        )
+
+    # ── Sort ordering ────────────────────────────────────────────────────
+
+    def test_sort_newest_orders_by_published_at_desc(self):
+        # All catalog courses share roughly the same published_at from save().
+        # Force a known order by updating published_at directly.
+        now = timezone.now()
+        NidusCourse.objects.filter(pk=self.c_python_intro.pk).update(
+            published_at=now - timedelta(days=5)
+        )
+        NidusCourse.objects.filter(pk=self.c_python_adv.pk).update(
+            published_at=now - timedelta(days=1)
+        )
+
+        response = self.client.get(
+            reverse('courses:catalog-list'), {'sort': 'newest'}
+        )
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        slugs = self._slugs(response)
+        self.assertLess(
+            slugs.index(self.c_python_adv.slug),
+            slugs.index(self.c_python_intro.slug),
+        )
+
+    def test_sort_price_asc_orders_by_price_ascending(self):
+        response = self.client.get(
+            reverse('courses:catalog-list'), {'sort': 'price_asc'}
+        )
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        prices = [Decimal(row['price']) for row in response.data['data']['results']]
+        self.assertEqual(prices, sorted(prices))
+
+    def test_sort_popularity_orders_by_active_enrollment_count_desc(self):
+        # Staged enrollments: adv:2, rust:1, others:0 → adv first, rust before zeros.
+        response = self.client.get(
+            reverse('courses:catalog-list'), {'sort': 'popularity'}
+        )
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        slugs = self._slugs(response)
+        self.assertEqual(slugs[0], self.c_python_adv.slug)
+        rust_idx = slugs.index(self.c_rust.slug)
+        zero_count_slugs = {
+            self.c_python_intro.slug, self.c_python_start.slug,
+            self.c_italian.slug, self.c_bangla.slug,
+        }
+        for s in zero_count_slugs:
+            self.assertLess(rust_idx, slugs.index(s))
+
+    def test_sort_relevance_ranks_title_startswith_above_contains(self):
+        # 'Python for Beginners' (rank 2 — starts with 'Python') must come
+        # before 'Intro to Python' / 'Advanced Python Tricks' (rank 1 — contains).
+        response = self.client.get(
+            reverse('courses:catalog-list'),
+            {'search': 'Python', 'sort': 'relevance'},
+        )
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        slugs = self._slugs(response)
+        self.assertEqual(slugs[0], self.c_python_start.slug)

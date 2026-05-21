@@ -3,6 +3,7 @@ import os
 import uuid
 
 from django.conf import settings
+from django.contrib.postgres.indexes import GinIndex
 from django.core.exceptions import ValidationError
 from django.core.validators import MinValueValidator
 from django.db import models
@@ -167,6 +168,15 @@ class NidusCourse(models.Model):
             models.Index(fields=['is_published', '-published_at'], name='idx_ncourse_pub_date'),
             models.Index(fields=['language', 'level'], name='idx_ncourse_lang_level'),
             models.Index(fields=['created_by', 'status'], name='idx_ncourse_creator_status'),
+            # Catalog range-filter support (?price_min / ?price_max / ?duration_min / ?duration_max).
+            # `is_published` is the leading column because every catalog query filters on it.
+            models.Index(fields=['is_published', 'price'], name='idx_ncourse_pub_price'),
+            models.Index(fields=['is_published', 'duration_minutes'], name='idx_ncourse_pub_duration'),
+            # Catalog search (?search=...) does ILIKE '%foo%' against title and description.
+            # gin_trgm_ops makes that planner-friendly; requires the pg_trgm extension,
+            # which is installed by the accompanying migration.
+            GinIndex(name='idx_ncourse_title_trgm', fields=['title'], opclasses=['gin_trgm_ops']),
+            GinIndex(name='idx_ncourse_desc_trgm', fields=['description'], opclasses=['gin_trgm_ops']),
         ]
 
     def clean(self):

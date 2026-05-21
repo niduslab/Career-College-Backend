@@ -1,9 +1,10 @@
 import logging
 from datetime import timedelta
+from decimal import Decimal, InvalidOperation
 
 from django.core.exceptions import ValidationError
 from django.db import IntegrityError, transaction
-from django.db.models import F, QuerySet
+from django.db.models import Case, Count, F, IntegerField, Q, QuerySet, When
 from django.utils import timezone
 
 from courses.models import (
@@ -32,6 +33,282 @@ def get_catalog_courses() -> QuerySet[NidusCourse]:
         .prefetch_related('instructors')
         .order_by('-published_at')
     )
+
+
+# Catalog sort keys exposed to the public API. Treat any other value as the
+# default ("relevance" when ?search= is supplied, "newest" otherwise).
+CATALOG_SORT_OPTIONS = frozenset({
+    'relevance',
+    'newest',
+    'popularity',
+    'price_asc',
+    'price_desc',
+    'rating',
+})
+
+
+def _csv_param(params, key):
+    """Split a comma-separated query param into a deduped list of non-empty tokens.
+
+    Order is preserved — ``dict.fromkeys`` keeps first-seen insertion order
+    so the validator's error messages echo the user's input order back.
+    """
+    raw = params.get(key)
+    if not raw:
+        return []
+    return list(dict.fromkeys(
+        token.strip() for token in raw.split(',') if token.strip()
+    ))
+
+
+def _decimal_or_none(value):
+    if value in (None, ''):
+        return None
+    try:
+        return Decimal(value)
+    except (InvalidOperation, TypeError):
+        return None
+
+
+def _positive_int_or_none(value):
+    if value in (None, ''):
+        return None
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError):
+        return None
+    return parsed if parsed >= 0 else None
+
+
+def _validate_catalog_params(params):
+    """Validate catalog filter/sort params; raise ValidationError if any bad.
+
+    Collects every problem before raising so the frontend can fix all bad
+    fields in one round-trip rather than one-at-a-time.
+    """
+    errors = {}
+
+    # ── M4: ?sort= must be a known key (unknown values used to silently
+    # fall back to newest, hiding both backend typos and frontend bugs).
+    raw_sort = params.get('sort')
+    if raw_sort and raw_sort not in CATALOG_SORT_OPTIONS:
+        errors['sort'] = (
+            f'Invalid sort "{raw_sort}". Must be one of: '
+            f'{", ".join(sorted(CATALOG_SORT_OPTIONS))}.'
+        )
+
+    # ── M6: every ?level= token must be a real CourseLevel choice.
+    valid_levels = set(NidusCourse.CourseLevel.values)
+    bad_levels = [lvl for lvl in _csv_param(params, 'level') if lvl not in valid_levels]
+    if bad_levels:
+        errors['level'] = (
+            f'Invalid level(s): {", ".join(bad_levels)}. '
+            f'Must be one of: {", ".join(sorted(valid_levels))}.'
+        )
+
+    # ── M5: numeric range params must parse and be non-negative.
+    # The model itself constrains price with MinValueValidator(0); the API
+    # should mirror that, not silently accept impossible ranges.
+    for key in ('price_min', 'price_max'):
+        raw = params.get(key)
+        if raw in (None, ''):
+            continue
+        try:
+            parsed = Decimal(raw)
+        except (InvalidOperation, TypeError):
+            errors[key] = f'"{raw}" is not a valid number.'
+            continue
+        if parsed < 0:
+            errors[key] = 'Must be non-negative.'
+
+    for key in ('duration_min', 'duration_max'):
+        raw = params.get(key)
+        if raw in (None, ''):
+            continue
+        try:
+            parsed = int(raw)
+        except (TypeError, ValueError):
+            errors[key] = f'"{raw}" is not a valid integer.'
+            continue
+        if parsed < 0:
+            errors[key] = 'Must be non-negative.'
+
+    if errors:
+        raise ValidationError(errors)
+
+
+def filter_catalog_courses(queryset: QuerySet[NidusCourse], params) -> QuerySet[NidusCourse]:
+    """
+    Apply multi-criteria filtering and sorting to a catalog queryset.
+
+    ``params`` is request.query_params (or any mapping with .get()).
+
+    Supported filters (all optional, AND-combined):
+        category=<slug>                top-level CourseCategory.slug
+        subcategory=<slug>             child CourseCategory.slug (parent should be `category`)
+        level=<csv>                    e.g. ?level=beginner,intermediate
+        language=<csv>                 case-insensitive; e.g. ?language=english,bangla
+        price_type=free|paid           shortcut for price=0 / price>0
+        price_min=<decimal>            inclusive lower bound on price
+        price_max=<decimal>            inclusive upper bound on price
+        duration_min=<minutes>         inclusive lower bound on duration_minutes
+        duration_max=<minutes>         inclusive upper bound on duration_minutes
+        search=<text>                  matches title / description / instructor name
+        rating_min=<1-5>               course rating — REQUIRES new model field
+        min_reviews=<int>              minimum review count — REQUIRES Review model
+        instructor_rating_min=<1-5>    — REQUIRES instructor rating field
+
+    Supported sorts via ?sort=<key>:
+        relevance      title match rank (default when ?search= present)
+        newest         -published_at (default otherwise)
+        popularity     by active enrollment count desc
+        price_asc      price ascending
+        price_desc     price descending
+        rating         course rating desc — REQUIRES new model field
+
+    Raises ``django.core.exceptions.ValidationError`` with a field-keyed
+    error dict when any of the validated params is malformed. The catalog
+    view turns that into a 400 response. Validated params:
+        sort, level, price_min, price_max, duration_min, duration_max.
+    """
+    _validate_catalog_params(params)
+
+    # ── Category / subcategory ───────────────────────────────────────────
+    # Category is a single FK on NidusCourse; a course points at exactly one
+    # CourseCategory row, which itself may be a child (subcategory) via the
+    # self-FK `parent`. Three valid input shapes:
+    #   - subcategory only      → exact match on the subcategory slug
+    #   - category only         → match the category itself OR any of its children
+    #   - category + subcategory → match the subcategory, but only if its parent
+    #                              actually is the given category (rejects mismatched pairs)
+    category_slug = params.get('category')
+    subcategory_slug = params.get('subcategory')
+    if subcategory_slug and category_slug:
+        queryset = queryset.filter(
+            category__slug=subcategory_slug,
+            category__parent__slug=category_slug,
+        )
+    elif subcategory_slug:
+        queryset = queryset.filter(category__slug=subcategory_slug)
+    elif category_slug:
+        queryset = queryset.filter(
+            Q(category__slug=category_slug)
+            | Q(category__parent__slug=category_slug)
+        )
+
+    # ── Skill level (multi-select via CSV) ───────────────────────────────
+    levels = _csv_param(params, 'level')
+    if levels:
+        queryset = queryset.filter(level__in=levels)
+
+    # ── Language (multi-select, case-insensitive) ────────────────────────
+    languages = _csv_param(params, 'language')
+    if languages:
+        lang_q = Q()
+        for lang in languages:
+            lang_q |= Q(language__iexact=lang)
+        queryset = queryset.filter(lang_q)
+
+    # ── Price (free / paid / range) ──────────────────────────────────────
+    price_type = params.get('price_type')
+    if price_type == 'free':
+        queryset = queryset.filter(price=0)
+    elif price_type == 'paid':
+        queryset = queryset.filter(price__gt=0)
+
+    price_min = _decimal_or_none(params.get('price_min'))
+    if price_min is not None:
+        queryset = queryset.filter(price__gte=price_min)
+
+    price_max = _decimal_or_none(params.get('price_max'))
+    if price_max is not None:
+        queryset = queryset.filter(price__lte=price_max)
+
+    # ── Duration (in minutes — frontend converts hours/weeks/months) ─────
+    duration_min = _positive_int_or_none(params.get('duration_min'))
+    if duration_min is not None:
+        queryset = queryset.filter(duration_minutes__gte=duration_min)
+
+    duration_max = _positive_int_or_none(params.get('duration_max'))
+    if duration_max is not None:
+        queryset = queryset.filter(duration_minutes__lte=duration_max)
+
+    # ── Search across title, description, instructor name ────────────────
+    # The custom User model stores the human name in `full_name`; the
+    # AbstractUser-inherited first_name / last_name columns exist but are
+    # never populated in this project, so they must not be searched.
+    search = params.get('search')
+    if search:
+        queryset = queryset.filter(
+            Q(title__icontains=search)
+            | Q(description__icontains=search)
+            | Q(instructors__full_name__icontains=search)
+        ).distinct()
+
+    # ── TODO: filters that need new model fields ─────────────────────────
+    # Course rating (avg of CourseReview.rating, or a denormalized column).
+    #
+    #   rating_min = _decimal_or_none(params.get('rating_min'))
+    #   if rating_min is not None:
+    #       queryset = queryset.filter(avg_rating__gte=rating_min)
+    #
+    # Review count (requires a CourseReview model with FK 'reviews').
+    #
+    #   min_reviews = _positive_int_or_none(params.get('min_reviews'))
+    #   if min_reviews is not None:
+    #       queryset = queryset.annotate(
+    #           _review_count=Count('reviews')
+    #       ).filter(_review_count__gte=min_reviews)
+    #
+    # Instructor rating (requires InstructorProfile.avg_rating or similar).
+    #
+    #   instructor_rating_min = _decimal_or_none(params.get('instructor_rating_min'))
+    #   if instructor_rating_min is not None:
+    #       queryset = queryset.filter(
+    #           instructors__instructor_profile__avg_rating__gte=instructor_rating_min
+    #       ).distinct()
+    # ─────────────────────────────────────────────────────────────────────
+
+    sort = params.get('sort')
+    if sort not in CATALOG_SORT_OPTIONS:
+        sort = 'relevance' if search else 'newest'
+
+    return _apply_catalog_sort(queryset, sort, search)
+
+
+def _apply_catalog_sort(queryset, sort, search):
+    if sort == 'popularity':
+        return queryset.annotate(
+            _enrollment_count=Count(
+                'enrollments',
+                filter=Q(enrollments__is_active=True),
+                distinct=True,
+            )
+        ).order_by('-_enrollment_count', F('published_at').desc(nulls_last=True), '-id')
+
+    if sort == 'price_asc':
+        return queryset.order_by('price', F('published_at').desc(nulls_last=True), '-id')
+
+    if sort == 'price_desc':
+        return queryset.order_by('-price', F('published_at').desc(nulls_last=True), '-id')
+
+    if sort == 'rating':
+        # TODO: enable once NidusCourse.avg_rating (or aggregate) exists.
+        #   return queryset.order_by(F('avg_rating').desc(nulls_last=True), '-published_at', '-id')
+        return queryset.order_by(F('published_at').desc(nulls_last=True), '-id')
+
+    if sort == 'relevance' and search:
+        return queryset.annotate(
+            _relevance=Case(
+                When(title__istartswith=search, then=2),
+                When(title__icontains=search, then=1),
+                default=0,
+                output_field=IntegerField(),
+            )
+        ).order_by('-_relevance', F('published_at').desc(nulls_last=True), '-id')
+
+    # newest (and relevance without a search term)
+    return queryset.order_by(F('published_at').desc(nulls_last=True), '-id')
 
 
 def get_learner_enrollments(user) -> QuerySet[Enrollment]:

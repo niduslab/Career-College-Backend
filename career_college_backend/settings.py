@@ -34,10 +34,10 @@ def env_list(name, default=""):
 # See https://docs.djangoproject.com/en/5.2/howto/deployment/checklist/
 
 # SECURITY WARNING: keep the secret key used in production secret!
-SECRET_KEY = os.getenv('SECRET_KEY', 'unsafe-dev-secret-key')
+SECRET_KEY = os.getenv('SECRET_KEY')
 
 # SECURITY WARNING: don't run with debug turned on in production!
-DEBUG = env_bool('DEBUG', default=True)
+DEBUG = env_bool('DEBUG')
 
 ALLOWED_HOSTS = env_list('ALLOWED_HOSTS', default='127.0.0.1,localhost')
 
@@ -228,6 +228,26 @@ CELERY_ACCEPT_CONTENT = ['json']
 CELERY_TASK_SERIALIZER = 'json'
 CELERY_RESULT_SERIALIZER = 'json'
 CELERY_TIMEZONE = TIME_ZONE
+# Coding-exercise Run results live in the Celery result backend (Redis); they
+# expire after this many seconds and a polling task_id returns PENDING after.
+CELERY_RESULT_EXPIRES = int(os.getenv('CELERY_RESULT_EXPIRES', '3600'))
+# Required for the Run-mode poll endpoint to distinguish PENDING from STARTED.
+CELERY_TASK_TRACK_STARTED = True
+# Celery beat: reap CodingSubmissions stuck in queued/grading.
+CELERY_BEAT_SCHEDULE = {
+    'reap-stuck-coding-submissions': {
+        'task': 'courses.tasks.reap_stuck_coding_submissions_task',
+        'schedule': 60.0,
+    },
+}
+
+# Coding-exercise Docker runner image overrides. Defaults pull from Docker Hub,
+# which is rate-limited for unauthenticated pulls -- in production override to
+# a private registry. See courses/services/code_runner.py.
+RUNNER_IMAGE_PYTHON = os.getenv('RUNNER_IMAGE_PYTHON', 'python:3.12-slim')
+RUNNER_IMAGE_JAVASCRIPT = os.getenv('RUNNER_IMAGE_JAVASCRIPT', 'node:20-alpine')
+RUNNER_IMAGE_CPP = os.getenv('RUNNER_IMAGE_CPP', 'gcc:14')
+RUNNER_IMAGE_JAVA = os.getenv('RUNNER_IMAGE_JAVA', 'eclipse-temurin:21-jdk-alpine')
 
 # Default primary key field type
 # https://docs.djangoproject.com/en/5.2/ref/settings/#default-auto-field

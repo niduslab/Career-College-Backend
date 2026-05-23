@@ -31,14 +31,20 @@ from courses.services.curriculum_service import (
 )
 from courses.services.learner_service import (
     AssignmentSubmissionError,
+    CodingSubmissionError,
     get_assignment_for_consumption,
+    get_coding_exercise_for_consumption,
     get_consumption_lecture,
     get_learner_assignment_submission,
+    get_learner_coding_submission,
     get_quiz_for_consumption,
     load_learner_curriculum,
     resolve_course_access,
     retry_assignment_grading,
+    retry_coding_submission,
+    run_coding_exercise,
     submit_assignment,
+    submit_coding_exercise,
     submit_quiz_attempt,
     upsert_watch_progress,
 )
@@ -78,4 +84,10 @@ __all__ = [
     'get_learner_assignment_submission',
     'retry_assignment_grading',
     'submit_assignment',
+    'CodingSubmissionError',
+    'get_coding_exercise_for_consumption',
+    'get_learner_coding_submission',
+    'retry_coding_submission',
+    'run_coding_exercise',
+    'submit_coding_exercise',
 ]

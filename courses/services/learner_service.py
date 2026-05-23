@@ -26,6 +26,9 @@ from courses.models import (
     AssignmentSubmission,
     AssignmentSubmissionAnswer,
     CodingExercise,
+    CodingExerciseLanguageConfig,
+    CodingSubmission,
+    CodingTestCase,
     CourseSection,
     Enrollment,
     Lecture,
@@ -642,3 +645,206 @@ def retry_assignment_grading(
         lambda: grade_assignment_submission_task.delay(submission_id_local)
     )
     return submission
+
+
+# ---------------------------------------------------------------------------
+# Coding-exercise consumption + submission (Phase 2)
+# ---------------------------------------------------------------------------
+
+class CodingSubmissionError(Exception):
+    """Raised when a coding submission cannot be created/retried for a
+    domain reason (e.g. unsupported language, an in-flight submission
+    already exists, or trying to retry a non-error row). Carries the HTTP
+    status the view should return.
+    """
+
+    def __init__(self, message: str, http_status: int = 422):
+        super().__init__(message)
+        self.message = message
+        self.http_status = http_status
+
+
+def get_coding_exercise_for_consumption(user, exercise_id: int):
+    """Fetch a coding exercise + verify learner/instructor access.
+
+    Returns (exercise, course, is_instructor, latest_submission_or_none).
+    Raises CodingExercise.DoesNotExist when missing OR the user has no
+    consumption-side access (numeric-ID URL -> 404, never 403, mirroring
+    [docs of 403-vs-404 rule]).
+
+    Hidden test cases are filtered out at the prefetch layer for learners
+    -- the serializer never has the chance to leak them. For instructors
+    we prefetch all test cases (preview mode shows the full set).
+    """
+    exercise = (
+        CodingExercise.objects
+        .select_related('section__course')
+        .prefetch_related('section__course__instructors')
+        .filter(pk=exercise_id)
+        .first()
+    )
+    if exercise is None:
+        raise CodingExercise.DoesNotExist
+    course = exercise.section.course
+
+    is_instructor, enrollment = resolve_course_access(user, course)
+    if not is_instructor and enrollment is None:
+        raise CodingExercise.DoesNotExist
+
+    # Test cases: learners only get visible ones; instructors preview both.
+    tc_qs = exercise.test_cases.all().order_by('position', 'id')
+    if not is_instructor:
+        tc_qs = tc_qs.filter(is_hidden=False)
+    exercise._prefetched_test_cases = list(tc_qs)
+
+    # Language configs always exclude solution_code at the serializer layer
+    # (absence > conditional strip). The query loads it for instructors only
+    # so the same field is reused at the authoring serializer.
+    config_qs = exercise.language_configs.all().order_by('language')
+    exercise._prefetched_language_configs = list(config_qs)
+
+    latest_submission = None
+    if not is_instructor:
+        latest_submission = (
+            CodingSubmission.objects
+            .filter(user=user, exercise=exercise)
+            .order_by('-submitted_at')
+            .first()
+        )
+
+    return exercise, course, is_instructor, latest_submission
+
+
+def run_coding_exercise(user, exercise: CodingExercise, language: str, code: str) -> str:
+    """Dispatch a Run-mode evaluation. Returns the Celery task id for the
+    frontend to poll. No DB row is created; the result lives in the Celery
+    result backend and expires after CELERY_RESULT_EXPIRES.
+    """
+    _validate_language(exercise, language)
+    from courses.tasks import evaluate_coding_run_task  # local: avoid Celery at module load
+    async_result = evaluate_coding_run_task.delay(
+        exercise.id, language, code, exercise.time_limit_ms,
+    )
+    return async_result.id
+
+
+@transaction.atomic
+def submit_coding_exercise(
+    user,
+    exercise: CodingExercise,
+    language: str,
+    code: str,
+    enrollment: Optional[Enrollment] = None,
+) -> CodingSubmission:
+    """Create a CodingSubmission(queued) and enqueue the evaluation task.
+
+    Mirrors submit_assignment:
+      - Belt-and-braces in-flight check (a Postgres partial unique index
+        could also enforce this, but coding submissions are cheap enough
+        that we accept multiple queued attempts and just rely on the
+        application check).
+      - Celery dispatch via transaction.on_commit so a rolled-back
+        transaction can't leak a phantom task into the queue.
+    """
+    _validate_language(exercise, language)
+    if not code or not code.strip():
+        raise CodingSubmissionError('Code cannot be empty.', http_status=400)
+
+    inflight_exists = CodingSubmission.objects.filter(
+        user=user,
+        exercise=exercise,
+        status__in=CodingSubmission.IN_FLIGHT_STATUSES,
+    ).exists()
+    if inflight_exists:
+        raise CodingSubmissionError(
+            'You already have a submission for this exercise that is still being graded.',
+            http_status=422,
+        )
+
+    total_tests = exercise.test_cases.count()
+
+    submission = CodingSubmission.objects.create(
+        user=user,
+        exercise=exercise,
+        language=language,
+        code=code,
+        status=CodingSubmission.Status.QUEUED,
+        total_tests=total_tests,
+    )
+
+    from courses.tasks import evaluate_coding_submission_task  # local import
+    submission_id = submission.id
+    transaction.on_commit(
+        lambda: evaluate_coding_submission_task.delay(submission_id)
+    )
+    return submission
+
+
+def get_learner_coding_submission(user, submission_id: int) -> CodingSubmission:
+    """Fetch a learner's own coding submission for the detail endpoint.
+
+    Raises CodingSubmission.DoesNotExist when missing OR owned by another
+    user (numeric ID -> 404; never leak existence).
+    """
+    submission = (
+        CodingSubmission.objects
+        .select_related('exercise__section__course')
+        .prefetch_related('test_results')
+        .filter(pk=submission_id, user=user)
+        .first()
+    )
+    if submission is None:
+        raise CodingSubmission.DoesNotExist
+    return submission
+
+
+@transaction.atomic
+def retry_coding_submission(user, submission_id: int) -> CodingSubmission:
+    """Re-enqueue evaluation for the caller's own submission stuck in ERROR.
+
+    Mirrors retry_assignment_grading. Only the ERROR terminal status is
+    retryable -- PASSED/FAILED are correct verdicts the learner shouldn't
+    retry, they should submit fresh code instead.
+    """
+    submission = (
+        CodingSubmission.objects
+        .select_for_update()
+        .filter(pk=submission_id, user=user)
+        .first()
+    )
+    if submission is None:
+        raise CodingSubmission.DoesNotExist
+
+    if submission.status != CodingSubmission.Status.ERROR:
+        raise CodingSubmissionError(
+            'Only submissions in error state can be retried.',
+            http_status=422,
+        )
+
+    submission.status = CodingSubmission.Status.QUEUED
+    submission.error_message = ''
+    submission.completed_at = None
+    submission.save(update_fields=[
+        'status', 'error_message', 'completed_at', 'updated_at',
+    ])
+
+    from courses.tasks import evaluate_coding_submission_task  # local import
+    submission_id_local = submission.id
+    transaction.on_commit(
+        lambda: evaluate_coding_submission_task.delay(submission_id_local)
+    )
+    return submission
+
+
+def _validate_language(exercise: CodingExercise, language: str) -> None:
+    supported = exercise.supported_languages or []
+    if supported and language not in supported:
+        raise CodingSubmissionError(
+            f"Language '{language}' is not configured for this exercise.",
+            http_status=400,
+        )
+    if language not in {'python', 'javascript', 'cpp', 'java'}:
+        raise CodingSubmissionError(
+            f"Unsupported language: {language}",
+            http_status=400,
+        )

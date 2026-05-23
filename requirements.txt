@@ -25,5 +25,8 @@ redis>=5.2,<6.0
 # Video processing
 ffmpeg-python>=0.2,<1.0
 
+# Code execution sandbox (Docker SDK for the coding-exercise runner)
+docker>=7.0,<8.0
+
 # Production server
 gunicorn>=22.0,<23.0

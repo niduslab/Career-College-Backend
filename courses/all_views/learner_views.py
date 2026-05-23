@@ -27,11 +27,14 @@ from rest_framework.views import APIView
 from core.permissions import IsEmailVerified, IsInstructorUser, IsLearnerUser
 from courses.all_serializers.learner_serializers import (
     build_assignment_submission_result,
+    build_coding_run_result_payload,
     build_quiz_attempt_result,
 )
 from courses.models import (
     Assignment,
     AssignmentSubmission,
+    CodingExercise,
+    CodingSubmission,
     Enrollment,
     Lecture,
     NidusCourse,
@@ -39,7 +42,10 @@ from courses.models import (
 )
 from courses.serializers import (
     AssignmentSubmissionInputSerializer,
+    CodingRunSubmitSerializer,
     LearnerAssignmentDetailSerializer,
+    LearnerCodingExerciseDetailSerializer,
+    LearnerCodingSubmissionSerializer,
     LearnerLectureDetailSerializer,
     LearnerQuizDetailSerializer,
     QuizSubmissionSerializer,
@@ -47,14 +53,20 @@ from courses.serializers import (
 )
 from courses.services import (
     AssignmentSubmissionError,
+    CodingSubmissionError,
     get_assignment_for_consumption,
+    get_coding_exercise_for_consumption,
     get_consumption_lecture,
     get_learner_assignment_submission,
+    get_learner_coding_submission,
     get_quiz_for_consumption,
     load_learner_curriculum,
     resolve_course_access,
     retry_assignment_grading,
+    retry_coding_submission,
+    run_coding_exercise,
     submit_assignment,
+    submit_coding_exercise,
     submit_quiz_attempt,
     update_last_accessed,
     upsert_watch_progress,
@@ -515,6 +527,341 @@ class LearnerAssignmentSubmissionRetryView(APIView):
             {
                 'success': True,
                 'message': 'Grading re-enqueued.',
+                'data': {
+                    'submission_id': submission.id,
+                    'status': submission.status,
+                },
+            },
+            status=status.HTTP_202_ACCEPTED,
+        )
+
+
+# ===========================================================================
+# Coding exercise consumption (Phase 2)
+# ===========================================================================
+#
+# Six endpoints power the IDE round-trip:
+#
+#   GET  learn/coding-exercises/<id>/                    -> detail (starter + visible tests)
+#   POST learn/coding-exercises/<id>/run/                -> dispatch Run (visible tests only)
+#   POST learn/coding-exercises/<id>/submit/             -> persist + dispatch Submit
+#   GET  learn/coding-exercises/tasks/<task_id>/         -> poll Run result
+#   GET  learn/coding-exercises/submissions/<id>/        -> poll Submit result
+#   POST learn/coding-exercises/submissions/<id>/retry/  -> retry an errored submission
+#
+# Run and Submit both return HTTP 202; the frontend polls one of the two
+# GET endpoints. Run is cheap, transient, visible-tests-only; Submit is
+# persisted, runs every test case, can mark progress. See
+# docs/submission-flow.md for the full rationale.
+
+
+class LearnerCodingExerciseDetailView(APIView):
+    """
+    GET /api/v1/courses/learn/coding-exercises/{exercise_id}/
+
+    Learner-safe detail for a coding exercise. Returns starter code per
+    language (NOT solution_code), the visible test cases, and a summary
+    of the caller's latest submission (so the UI can light up "solved").
+    """
+
+    permission_classes = [IsAuthenticated, IsEmailVerified, IsLearnerUser | IsInstructorUser]
+
+    def get(self, request, exercise_id):
+        try:
+            exercise, _course, _is_instructor, latest = get_coding_exercise_for_consumption(
+                request.user, exercise_id,
+            )
+        except CodingExercise.DoesNotExist:
+            return Response(
+                {'success': False, 'message': 'Coding exercise not found.'},
+                status=status.HTTP_404_NOT_FOUND,
+            )
+
+        serializer = LearnerCodingExerciseDetailSerializer(
+            exercise,
+            context={'latest_submission': latest},
+        )
+        return Response(
+            {'success': True, 'data': serializer.data},
+            status=status.HTTP_200_OK,
+        )
+
+
+class LearnerCodingRunView(APIView):
+    """
+    POST /api/v1/courses/learn/coding-exercises/{exercise_id}/run/
+
+    Transient: dispatches a Celery task that runs only the visible test
+    cases, returning a task_id for the frontend to poll. No DB row is
+    created. Instructors are gated out so preview clicks can't pollute
+    history (Run history isn't persisted, but the contract is symmetric
+    with Submit).
+    """
+
+    permission_classes = [IsAuthenticated, IsEmailVerified, IsLearnerUser]
+
+    def post(self, request, exercise_id):
+        try:
+            exercise, _course, _is_instructor, _latest = get_coding_exercise_for_consumption(
+                request.user, exercise_id,
+            )
+        except CodingExercise.DoesNotExist:
+            return Response(
+                {'success': False, 'message': 'Coding exercise not found.'},
+                status=status.HTTP_404_NOT_FOUND,
+            )
+
+        input_serializer = CodingRunSubmitSerializer(data=request.data)
+        if not input_serializer.is_valid():
+            return Response(
+                {'success': False, 'message': 'Validation failed.', 'errors': input_serializer.errors},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        try:
+            task_id = run_coding_exercise(
+                request.user,
+                exercise,
+                input_serializer.validated_data['language'],
+                input_serializer.validated_data['code'],
+            )
+        except CodingSubmissionError as e:
+            return Response(
+                {'success': False, 'message': e.message},
+                status=e.http_status,
+            )
+        except Exception as e:
+            logger.error(
+                'Coding Run dispatch failed for user=%s exercise=%s: %s',
+                request.user.id, exercise_id, e,
+            )
+            return Response(
+                {'success': False, 'message': 'An unexpected error occurred. Please try again.'},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            )
+
+        return Response(
+            {
+                'success': True,
+                'message': 'Run dispatched.',
+                'data': {'task_id': task_id},
+            },
+            status=status.HTTP_202_ACCEPTED,
+        )
+
+
+class LearnerCodingSubmitView(APIView):
+    """
+    POST /api/v1/courses/learn/coding-exercises/{exercise_id}/submit/
+
+    Persisted: creates a CodingSubmission(queued) and enqueues the
+    evaluation task. Returns the submission row (with status='queued')
+    so the frontend immediately has an ID to poll on submissions/<id>/.
+    """
+
+    permission_classes = [IsAuthenticated, IsEmailVerified, IsLearnerUser]
+
+    def post(self, request, exercise_id):
+        try:
+            exercise, _course, _is_instructor, _latest = get_coding_exercise_for_consumption(
+                request.user, exercise_id,
+            )
+        except CodingExercise.DoesNotExist:
+            return Response(
+                {'success': False, 'message': 'Coding exercise not found.'},
+                status=status.HTTP_404_NOT_FOUND,
+            )
+
+        input_serializer = CodingRunSubmitSerializer(data=request.data)
+        if not input_serializer.is_valid():
+            return Response(
+                {'success': False, 'message': 'Validation failed.', 'errors': input_serializer.errors},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        # Pull the active enrollment so the task can recalc progress on PASS
+        # without an extra query. resolve_course_access already validated
+        # access inside the consumption loader; we re-fetch here because the
+        # learner role guarantees enrollment is the only valid path.
+        enrollment = Enrollment.objects.filter(
+            user=request.user, course=exercise.section.course, is_active=True,
+        ).first()
+
+        try:
+            submission = submit_coding_exercise(
+                request.user,
+                exercise,
+                input_serializer.validated_data['language'],
+                input_serializer.validated_data['code'],
+                enrollment=enrollment,
+            )
+        except CodingSubmissionError as e:
+            return Response(
+                {'success': False, 'message': e.message},
+                status=e.http_status,
+            )
+        except Exception as e:
+            logger.error(
+                'Coding Submit failed for user=%s exercise=%s: %s',
+                request.user.id, exercise_id, e,
+            )
+            return Response(
+                {'success': False, 'message': 'An unexpected error occurred. Please try again.'},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            )
+
+        return Response(
+            {
+                'success': True,
+                'message': 'Submission queued.',
+                'data': LearnerCodingSubmissionSerializer(submission).data,
+            },
+            status=status.HTTP_202_ACCEPTED,
+        )
+
+
+class LearnerCodingTaskStatusView(APIView):
+    """
+    GET /api/v1/courses/learn/coding-exercises/tasks/{task_id}/
+
+    Polls the Celery result backend for a Run-mode task. States:
+      PENDING / STARTED -> 200 {state}
+      SUCCESS           -> 200 {state, result}
+      FAILURE           -> 500 {state, error}
+
+    Task IDs are unguessable UUIDs and the result payload contains only
+    visible test data (the Run task filters at the source). We don't
+    re-validate user ownership of the task_id; coupled with the UUID this
+    matches the source standalone platform's contract.
+    """
+
+    permission_classes = [IsAuthenticated, IsEmailVerified]
+
+    def get(self, request, task_id):
+        # Local import to keep this module importable without celery in
+        # environments where the broker isn't reachable.
+        from celery.result import AsyncResult
+
+        async_result = AsyncResult(task_id)
+        state = async_result.state
+
+        if state == 'PENDING':
+            return Response(
+                {'success': True, 'data': {'state': 'PENDING'}},
+                status=status.HTTP_200_OK,
+            )
+        if state == 'STARTED':
+            return Response(
+                {'success': True, 'data': {'state': 'STARTED'}},
+                status=status.HTTP_200_OK,
+            )
+        if state == 'SUCCESS':
+            try:
+                result = async_result.get(timeout=1)
+            except Exception as e:
+                logger.error('Failed to read Run task result %s: %s', task_id, e)
+                return Response(
+                    {
+                        'success': False,
+                        'message': 'Run result unavailable.',
+                        'data': {'state': 'FAILURE', 'error': str(e)},
+                    },
+                    status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                )
+            return Response(
+                {
+                    'success': True,
+                    'data': {
+                        'state': 'SUCCESS',
+                        'result': build_coding_run_result_payload(result),
+                    },
+                },
+                status=status.HTTP_200_OK,
+            )
+        # FAILURE or REVOKED.
+        error_msg = ''
+        try:
+            error_msg = str(async_result.result) if async_result.result else 'Task failed.'
+        except Exception:
+            error_msg = 'Task failed.'
+        return Response(
+            {
+                'success': False,
+                'message': 'Run failed.',
+                'data': {'state': state, 'error': error_msg},
+            },
+            status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+        )
+
+
+class LearnerCodingSubmissionDetailView(APIView):
+    """
+    GET /api/v1/courses/learn/coding-exercises/submissions/{submission_id}/
+
+    Full Submit-mode submission for the calling learner. Per-test result
+    rows have input/expected/actual redacted to '' when is_hidden=True --
+    status + runtime_ms remain visible so the learner can see whether
+    their hidden tests passed.
+
+    Other learners' submissions return 404 (never 403) so existence
+    isn't leaked across IDs.
+    """
+
+    permission_classes = [IsAuthenticated, IsEmailVerified, IsLearnerUser]
+
+    def get(self, request, submission_id):
+        try:
+            submission = get_learner_coding_submission(request.user, submission_id)
+        except CodingSubmission.DoesNotExist:
+            return Response(
+                {'success': False, 'message': 'Submission not found.'},
+                status=status.HTTP_404_NOT_FOUND,
+            )
+
+        return Response(
+            {'success': True, 'data': LearnerCodingSubmissionSerializer(submission).data},
+            status=status.HTTP_200_OK,
+        )
+
+
+class LearnerCodingSubmissionRetryView(APIView):
+    """
+    POST /api/v1/courses/learn/coding-exercises/submissions/{submission_id}/retry/
+
+    Re-enqueue evaluation for a submission stuck in ERROR. Reuses the
+    same row so submitted_at and per-test history correlate. Any other
+    status -> 422; another learner's submission -> 404.
+    """
+
+    permission_classes = [IsAuthenticated, IsEmailVerified, IsLearnerUser]
+
+    def post(self, request, submission_id):
+        try:
+            submission = retry_coding_submission(request.user, submission_id)
+        except CodingSubmission.DoesNotExist:
+            return Response(
+                {'success': False, 'message': 'Submission not found.'},
+                status=status.HTTP_404_NOT_FOUND,
+            )
+        except CodingSubmissionError as e:
+            return Response(
+                {'success': False, 'message': e.message},
+                status=e.http_status,
+            )
+        except Exception as e:
+            logger.error(
+                'Coding retry failed for user=%s submission=%s: %s',
+                request.user.id, submission_id, e,
+            )
+            return Response(
+                {'success': False, 'message': 'An unexpected error occurred. Please try again.'},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            )
+
+        return Response(
+            {
+                'success': True,
+                'message': 'Submission re-enqueued.',
                 'data': {
                     'submission_id': submission.id,
                     'status': submission.status,

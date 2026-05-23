@@ -547,3 +547,138 @@ class AssignmentSubmissionAnswer(models.Model):
 
 
 # =============================================================================
+# Coding submissions — learner attempts at a CodingExercise.
+#
+# Two endpoints feed code into execution:
+#   - POST /learn/coding-exercises/<id>/run/   (transient; result lives in
+#     the Celery result backend; visible test cases only)
+#   - POST /learn/coding-exercises/<id>/submit/  (persisted as the rows below;
+#     every test case runs; hidden test data is redacted at the serializer)
+#
+# Submit flow:
+#   1. Service creates a CodingSubmission(status=queued) snapshotting
+#      total_tests, then dispatches evaluate_coding_submission_task via
+#      transaction.on_commit.
+#   2. Celery task transitions queued -> grading, calls the CodeRunner which
+#      executes EVERY test case inside a SINGLE Docker container (the "one
+#      container per submission" optimisation — see docs/comparison.md §17),
+#      writes one CodingSubmissionTestResult per test case, then transitions
+#      to passed | failed | error.
+#   3. recalculate_progress fires (via on_commit inside the task) only when
+#      the final status is passed.
+#
+# Test-row fields snapshot input_data / expected_output / actual_output AND
+# is_hidden so:
+#   - the redaction serializer never re-reads the underlying CodingTestCase
+#     (which may have been edited or deleted),
+#   - historical results survive test-case lifecycle changes.
+# =============================================================================
+
+
+class CodingSubmission(TimestampedModel):
+    """A single learner's submission of a CodingExercise."""
+
+    class Status(models.TextChoices):
+        QUEUED = 'queued', 'Queued'
+        GRADING = 'grading', 'Grading'
+        PASSED = 'passed', 'Passed'
+        FAILED = 'failed', 'Failed'
+        ERROR = 'error', 'Error'
+
+    TERMINAL_STATUSES = (Status.PASSED, Status.FAILED, Status.ERROR)
+    IN_FLIGHT_STATUSES = (Status.QUEUED, Status.GRADING)
+
+    user = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name='coding_submissions',
+    )
+    exercise = models.ForeignKey(
+        CodingExercise,
+        on_delete=models.CASCADE,
+        related_name='submissions',
+    )
+    language = models.CharField(max_length=20)
+    code = models.TextField()
+    status = models.CharField(
+        max_length=20,
+        choices=Status.choices,
+        default=Status.QUEUED,
+        db_index=True,
+    )
+    total_tests = models.PositiveIntegerField(default=0)
+    passed_tests = models.PositiveIntegerField(default=0)
+    score = models.DecimalField(max_digits=5, decimal_places=2, default=0)
+    runtime_ms = models.PositiveIntegerField(default=0)
+    error_message = models.TextField(blank=True, default='')
+    stdout = models.TextField(blank=True, default='')
+    stderr = models.TextField(blank=True, default='')
+    submitted_at = models.DateTimeField(auto_now_add=True)
+    completed_at = models.DateTimeField(null=True, blank=True)
+
+    class Meta:
+        db_table = 'coding_submissions'
+        verbose_name = 'Coding Submission'
+        verbose_name_plural = 'Coding Submissions'
+        ordering = ['-submitted_at']
+        indexes = [
+            models.Index(fields=['user', 'exercise', '-submitted_at'], name='idx_csub_user_ex_date'),
+            models.Index(fields=['status'], name='idx_csub_status'),
+            models.Index(fields=['submitted_at'], name='idx_csub_submitted_at'),
+        ]
+
+    def __str__(self):
+        return (
+            f'CodingSubmission {self.pk}: {self.user} on exercise {self.exercise_id} '
+            f'[{self.status} {self.passed_tests}/{self.total_tests}]'
+        )
+
+
+class CodingSubmissionTestResult(models.Model):
+    """One per-test execution record within a CodingSubmission."""
+
+    class Status(models.TextChoices):
+        PASSED = 'passed', 'Passed'
+        FAILED = 'failed', 'Failed'
+        ERROR = 'error', 'Error'
+
+    submission = models.ForeignKey(
+        CodingSubmission,
+        on_delete=models.CASCADE,
+        related_name='test_results',
+    )
+    # Nullable on delete so result rows survive when the test case is later
+    # removed -- the snapshot fields below carry the input/output anyway.
+    test_case = models.ForeignKey(
+        CodingTestCase,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='+',
+    )
+    status = models.CharField(
+        max_length=10,
+        choices=Status.choices,
+        db_index=True,
+    )
+    input_data = models.TextField(blank=True, default='')
+    expected_output = models.TextField(blank=True, default='')
+    actual_output = models.TextField(blank=True, default='')
+    stdout = models.TextField(blank=True, default='')
+    stderr = models.TextField(blank=True, default='')
+    runtime_ms = models.PositiveIntegerField(default=0)
+    exit_code = models.IntegerField(default=0)
+    is_hidden = models.BooleanField(default=False, db_index=True)
+    position = models.PositiveIntegerField(default=0)
+
+    class Meta:
+        db_table = 'coding_submission_test_results'
+        verbose_name = 'Coding Submission Test Result'
+        verbose_name_plural = 'Coding Submission Test Results'
+        ordering = ['submission_id', 'position', 'id']
+        indexes = [
+            models.Index(fields=['submission', 'position'], name='idx_csubres_sub_pos'),
+        ]
+
+    def __str__(self):
+        return f'TestResult sub={self.submission_id} pos={self.position} [{self.status}]'

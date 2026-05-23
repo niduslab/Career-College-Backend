@@ -36,6 +36,12 @@ from courses.views import (
     LearnerAssignmentSubmissionDetailView,
     LearnerAssignmentSubmissionRetryView,
     LearnerAssignmentSubmitView,
+    LearnerCodingExerciseDetailView,
+    LearnerCodingRunView,
+    LearnerCodingSubmissionDetailView,
+    LearnerCodingSubmissionRetryView,
+    LearnerCodingSubmitView,
+    LearnerCodingTaskStatusView,
     LearnerCurriculumView,
     LearnerLectureDetailView,
     LearnerLectureProgressView,
@@ -83,6 +89,15 @@ urlpatterns = [
     path('learn/assignments/<int:assignment_id>/submit/', LearnerAssignmentSubmitView.as_view(), name='learner-assignment-submit'),
     path('learn/assignments/submissions/<int:submission_id>/', LearnerAssignmentSubmissionDetailView.as_view(), name='learner-assignment-submission-detail'),
     path('learn/assignments/submissions/<int:submission_id>/retry/', LearnerAssignmentSubmissionRetryView.as_view(), name='learner-assignment-submission-retry'),
+    # Coding-exercise learner endpoints. Order matters: the `tasks/` and
+    # `submissions/` literals must precede the numeric-ID detail route so
+    # Django's URL resolver doesn't greedily match `<int:exercise_id>` for them.
+    path('learn/coding-exercises/tasks/<str:task_id>/', LearnerCodingTaskStatusView.as_view(), name='learner-coding-task-status'),
+    path('learn/coding-exercises/submissions/<int:submission_id>/', LearnerCodingSubmissionDetailView.as_view(), name='learner-coding-submission-detail'),
+    path('learn/coding-exercises/submissions/<int:submission_id>/retry/', LearnerCodingSubmissionRetryView.as_view(), name='learner-coding-submission-retry'),
+    path('learn/coding-exercises/<int:exercise_id>/', LearnerCodingExerciseDetailView.as_view(), name='learner-coding-exercise-detail'),
+    path('learn/coding-exercises/<int:exercise_id>/run/', LearnerCodingRunView.as_view(), name='learner-coding-run'),
+    path('learn/coding-exercises/<int:exercise_id>/submit/', LearnerCodingSubmitView.as_view(), name='learner-coding-submit'),
 
     # -------------------------------------------------------------------------
     # Instructor course management

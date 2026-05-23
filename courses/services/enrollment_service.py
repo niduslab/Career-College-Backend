@@ -9,6 +9,7 @@ from django.utils import timezone
 
 from courses.models import (
     AssignmentSubmission,
+    CodingSubmission,
     Enrollment,
     NidusCourse,
     QuizAttempt,
@@ -397,12 +398,11 @@ def recalculate_progress(enrollment: Enrollment) -> Enrollment:
     Completion rules:
     - lecture: WatchProgress.is_completed=True
     - quiz: at least one QuizAttempt exists for the learner
-    - assignment: reserved for AssignmentSubmission(status='passed')
-    - coding: reserved for CodingSubmission(status='accepted')
+    - assignment: AssignmentSubmission(status='passed')
+    - coding: CodingSubmission(status='passed') — distinct per exercise so
+      multiple PASSED attempts on the same exercise count once.
 
-    Notes:
-    - Uses grouped queries + set intersections to avoid N+1 behavior.
-    - Assignment/coding completion remains zero until learner submission models exist.
+    Uses grouped queries + set intersections to avoid N+1 behavior.
     """
     course = enrollment.course
 
@@ -468,8 +468,22 @@ def recalculate_progress(enrollment: Enrollment) -> Enrollment:
     else:
         completed_assignments = 0
 
-    # Coding completion still reserved — lands with CodingSubmission.
-    completed_coding = 0
+    coding_ids = {
+        object_id
+        for item_type, object_id in content_rows
+        if item_type == SectionContent.ItemType.CODING
+    }
+    if coding_ids:
+        completed_coding_ids = set(
+            CodingSubmission.objects.filter(
+                user=enrollment.user,
+                exercise_id__in=coding_ids,
+                status=CodingSubmission.Status.PASSED,
+            ).values_list('exercise_id', flat=True)
+        )
+        completed_coding = len(completed_coding_ids)
+    else:
+        completed_coding = 0
 
     completed_items = (
         completed_lectures

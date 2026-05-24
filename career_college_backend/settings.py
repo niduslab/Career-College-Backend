@@ -10,36 +10,35 @@ For the full list of settings and their values, see
 https://docs.djangoproject.com/en/5.2/ref/settings/
 """
 
-import os
+from datetime import timedelta
 from pathlib import Path
 
-from dotenv import load_dotenv
+import environ
 
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
 BASE_DIR = Path(__file__).resolve().parent.parent
 
-load_dotenv(BASE_DIR / '.env')
-
-
-def env_bool(name, default=False):
-    return os.getenv(name, str(default)).strip().lower() in {"1", "true", "t", "yes", "y", "on"}
-
-
-def env_list(name, default=""):
-    raw = os.getenv(name, default)
-    return [item.strip() for item in raw.split(",") if item.strip()]
+env = environ.Env(
+    DEBUG=(bool, False),
+    SITE_ID=(int, 1),
+    EMAIL_PORT=(int, 587),
+    EMAIL_USE_TLS=(bool, True),
+    CELERY_RESULT_EXPIRES=(int, 3600),
+    ALLOWED_HOSTS=(list, ['127.0.0.1', 'localhost']),
+)
+environ.Env.read_env(BASE_DIR / '.env')
 
 
 # Quick-start development settings - unsuitable for production
 # See https://docs.djangoproject.com/en/5.2/howto/deployment/checklist/
 
 # SECURITY WARNING: keep the secret key used in production secret!
-SECRET_KEY = os.getenv('SECRET_KEY')
+SECRET_KEY = env('SECRET_KEY')
 
 # SECURITY WARNING: don't run with debug turned on in production!
-DEBUG = env_bool('DEBUG')
+DEBUG = env('DEBUG')
 
-ALLOWED_HOSTS = env_list('ALLOWED_HOSTS', default='127.0.0.1,localhost')
+ALLOWED_HOSTS = env('ALLOWED_HOSTS')
 
 
 # Application definition
@@ -104,12 +103,12 @@ WSGI_APPLICATION = 'career_college_backend.wsgi.application'
 
 DATABASES = {
     'default': {
-        'ENGINE': os.getenv('DB_ENGINE'),
-        'NAME': os.getenv('DB_NAME'),
-        'USER': os.getenv('DB_USER'),
-        'PASSWORD': os.getenv('DB_PASSWORD'),
-        'HOST': os.getenv('DB_HOST', '127.0.0.1'),
-        'PORT': os.getenv('DB_PORT', '5432'),
+        'ENGINE': env('DB_ENGINE'),
+        'NAME': env('DB_NAME'),
+        'USER': env('DB_USER'),
+        'PASSWORD': env('DB_PASSWORD'),
+        'HOST': env('DB_HOST', default='127.0.0.1'),
+        'PORT': env('DB_PORT', default='5432'),
     }
 }
 
@@ -134,7 +133,7 @@ AUTH_PASSWORD_VALIDATORS = [
 
 
 AUTH_USER_MODEL = 'authentication.User'
-SITE_ID = int(os.getenv('SITE_ID', '1'))
+SITE_ID = env.int('SITE_ID')
 
 AUTHENTICATION_BACKENDS = (
     'django.contrib.auth.backends.ModelBackend',
@@ -149,8 +148,6 @@ REST_FRAMEWORK = {
 }
 
 # SimpleJWT
-from datetime import timedelta
-
 SIMPLE_JWT = {
     'ACCESS_TOKEN_LIFETIME': timedelta(hours=12),
     'REFRESH_TOKEN_LIFETIME': timedelta(days=7),
@@ -160,14 +157,14 @@ SIMPLE_JWT = {
 }
 
 # Google OAuth (authorization-code flow)
-GOOGLE_CLIENT_ID = os.getenv('GOOGLE_CLIENT_ID', os.getenv('GOOGLE_OAUTH_CLIENT_ID', ''))
-GOOGLE_CLIENT_SECRET = os.getenv('GOOGLE_CLIENT_SECRET', os.getenv('GOOGLE_OAUTH_CLIENT_SECRET', ''))
-GOOGLE_CALLBACK_URL = os.getenv('GOOGLE_CALLBACK_URL', 'http://localhost:8000/api/v1/auth/google/callback/')
+GOOGLE_CLIENT_ID = env('GOOGLE_CLIENT_ID', default='') or env('GOOGLE_OAUTH_CLIENT_ID', default='')
+GOOGLE_CLIENT_SECRET = env('GOOGLE_CLIENT_SECRET', default='') or env('GOOGLE_OAUTH_CLIENT_SECRET', default='')
+GOOGLE_CALLBACK_URL = env('GOOGLE_CALLBACK_URL', default='http://localhost:8000/api/v1/auth/google/callback/')
 
 # Frontend URLs for redirect after Google OAuth
-FRONTEND_URL = os.getenv('FRONTEND_URL', 'http://localhost:3000')
-FRONTEND_GOOGLE_CALLBACK = os.getenv('FRONTEND_GOOGLE_CALLBACK', '')
-FRONTEND_ERROR_URL = os.getenv('FRONTEND_ERROR_URL', '')
+FRONTEND_URL = env('FRONTEND_URL', default='http://localhost:3000')
+FRONTEND_GOOGLE_CALLBACK = env('FRONTEND_GOOGLE_CALLBACK', default='')
+FRONTEND_ERROR_URL = env('FRONTEND_ERROR_URL', default='')
 
 # Keep allauth wired for SocialAccount model only
 SOCIALACCOUNT_PROVIDERS = {
@@ -186,12 +183,12 @@ SOCIALACCOUNT_PROVIDERS = {
 }
 
 # JWT cookie settings (HttpOnly cookies for Google OAuth flow)
-JWT_COOKIE_SECURE = env_bool('JWT_COOKIE_SECURE', default=not DEBUG)
-JWT_COOKIE_SAMESITE = os.getenv('JWT_COOKIE_SAMESITE', 'Lax')
-JWT_COOKIE_DOMAIN = os.getenv('JWT_COOKIE_DOMAIN', None) or None
-JWT_COOKIE_PATH = os.getenv('JWT_COOKIE_PATH', '/')
-JWT_ACCESS_COOKIE_NAME = os.getenv('JWT_ACCESS_COOKIE_NAME', 'access_token')
-JWT_REFRESH_COOKIE_NAME = os.getenv('JWT_REFRESH_COOKIE_NAME', 'refresh_token')
+JWT_COOKIE_SECURE = env.bool('JWT_COOKIE_SECURE', default=not DEBUG)
+JWT_COOKIE_SAMESITE = env('JWT_COOKIE_SAMESITE', default='Lax')
+JWT_COOKIE_DOMAIN = env('JWT_COOKIE_DOMAIN', default='') or None
+JWT_COOKIE_PATH = env('JWT_COOKIE_PATH', default='/')
+JWT_ACCESS_COOKIE_NAME = env('JWT_ACCESS_COOKIE_NAME', default='access_token')
+JWT_REFRESH_COOKIE_NAME = env('JWT_REFRESH_COOKIE_NAME', default='refresh_token')
 ACCOUNT_UNIQUE_EMAIL = True
 ACCOUNT_EMAIL_VERIFICATION = 'none'
 ACCOUNT_LOGIN_METHODS = {'email'}
@@ -216,21 +213,21 @@ USE_TZ = True
 STATIC_URL = 'static/'
 
 # Media files (user uploads)
-MEDIA_URL = os.getenv('MEDIA_URL', '/media/')
-MEDIA_ROOT = Path(os.getenv('MEDIA_ROOT', str(BASE_DIR / 'media')))
-FFMPEG_BINARY_PATH = os.getenv('FFMPEG_BINARY_PATH', 'ffmpeg')
-FFPROBE_BINARY_PATH = os.getenv('FFPROBE_BINARY_PATH', 'ffprobe')
+MEDIA_URL = env('MEDIA_URL', default='/media/')
+MEDIA_ROOT = Path(env('MEDIA_ROOT', default=str(BASE_DIR / 'media')))
+FFMPEG_BINARY_PATH = env('FFMPEG_BINARY_PATH', default='ffmpeg')
+FFPROBE_BINARY_PATH = env('FFPROBE_BINARY_PATH', default='ffprobe')
 
 # Celery
-CELERY_BROKER_URL = os.getenv('CELERY_BROKER_URL', 'redis://127.0.0.1:6379/0')
-CELERY_RESULT_BACKEND = os.getenv('CELERY_RESULT_BACKEND', CELERY_BROKER_URL)
+CELERY_BROKER_URL = env('CELERY_BROKER_URL', default='redis://127.0.0.1:6379/0')
+CELERY_RESULT_BACKEND = env('CELERY_RESULT_BACKEND', default=CELERY_BROKER_URL)
 CELERY_ACCEPT_CONTENT = ['json']
 CELERY_TASK_SERIALIZER = 'json'
 CELERY_RESULT_SERIALIZER = 'json'
 CELERY_TIMEZONE = TIME_ZONE
 # Coding-exercise Run results live in the Celery result backend (Redis); they
 # expire after this many seconds and a polling task_id returns PENDING after.
-CELERY_RESULT_EXPIRES = int(os.getenv('CELERY_RESULT_EXPIRES', '3600'))
+CELERY_RESULT_EXPIRES = env.int('CELERY_RESULT_EXPIRES')
 # Required for the Run-mode poll endpoint to distinguish PENDING from STARTED.
 CELERY_TASK_TRACK_STARTED = True
 # Celery beat: reap CodingSubmissions stuck in queued/grading.
@@ -242,36 +239,33 @@ CELERY_BEAT_SCHEDULE = {
 }
 
 # Coding-exercise Docker runner image overrides. Defaults pull from Docker Hub,
-# which is rate-limited for unauthenticated pulls -- in production override to
-# a private registry. See courses/services/code_runner.py.
-RUNNER_IMAGE_PYTHON = os.getenv('RUNNER_IMAGE_PYTHON', 'python:3.12-slim')
-RUNNER_IMAGE_JAVASCRIPT = os.getenv('RUNNER_IMAGE_JAVASCRIPT', 'node:20-alpine')
-RUNNER_IMAGE_CPP = os.getenv('RUNNER_IMAGE_CPP', 'gcc:14')
-RUNNER_IMAGE_JAVA = os.getenv('RUNNER_IMAGE_JAVA', 'eclipse-temurin:21-jdk-alpine')
+RUNNER_IMAGE_PYTHON = env('RUNNER_IMAGE_PYTHON')
+RUNNER_IMAGE_JAVASCRIPT = env('RUNNER_IMAGE_JAVASCRIPT')
+RUNNER_IMAGE_CPP = env('RUNNER_IMAGE_CPP')
+RUNNER_IMAGE_JAVA = env('RUNNER_IMAGE_JAVA')
+RUNNER_RUNTIME = env('RUNNER_RUNTIME', default='runc' if DEBUG else 'runsc')
 
-# Default primary key field type
-# https://docs.djangoproject.com/en/5.2/ref/settings/#default-auto-field
 
 DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
 
 
 # Email settings
-EMAIL_BACKEND = os.getenv('EMAIL_BACKEND', 'django.core.mail.backends.smtp.EmailBackend')
-EMAIL_HOST = os.getenv('EMAIL_HOST', 'smtp.gmail.com')
-EMAIL_PORT = int(os.getenv('EMAIL_PORT', '587'))
-EMAIL_USE_TLS = env_bool('EMAIL_USE_TLS', default=True)
-EMAIL_HOST_USER = os.getenv('EMAIL_HOST_USER', '')
+EMAIL_BACKEND = env('EMAIL_BACKEND', default='django.core.mail.backends.smtp.EmailBackend')
+EMAIL_HOST = env('EMAIL_HOST', default='smtp.gmail.com')
+EMAIL_PORT = env.int('EMAIL_PORT')
+EMAIL_USE_TLS = env.bool('EMAIL_USE_TLS')
+EMAIL_HOST_USER = env('EMAIL_HOST_USER', default='')
 EMAIL_USE_SSL = False
-EMAIL_HOST_PASSWORD = os.getenv('EMAIL_HOST_PASSWORD', '')
-DEFAULT_FROM_EMAIL = os.getenv('DEFAULT_FROM_EMAIL', EMAIL_HOST_USER)
+EMAIL_HOST_PASSWORD = env('EMAIL_HOST_PASSWORD', default='')
+DEFAULT_FROM_EMAIL = env('DEFAULT_FROM_EMAIL', default=EMAIL_HOST_USER)
 
 
 # Rate Limiting
-OTP_RATE_LIMIT = os.getenv('OTP_RATE_LIMIT')
+OTP_RATE_LIMIT = env('OTP_RATE_LIMIT', default=None)
 
 
 # Logging
-LOG_DIR = Path(os.getenv('LOG_DIR', str(BASE_DIR / 'logs')))
+LOG_DIR = Path(env('LOG_DIR', default=str(BASE_DIR / 'logs')))
 LOG_DIR.mkdir(exist_ok=True)
 LOG_FILE_PATH = LOG_DIR / 'app.log'
 

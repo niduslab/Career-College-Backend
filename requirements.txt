@@ -13,6 +13,7 @@ django-cors-headers>=4.4,<5.0
 
 # Environment and config
 python-dotenv>=1.0,<2.0
+django-environ>=0.11,<1.0
 
 # Database and media
 psycopg2-binary>=2.9,<3.0

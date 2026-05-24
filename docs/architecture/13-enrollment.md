@@ -52,7 +52,7 @@ The enrollment system connects learners to published courses. It serves as the a
 | GET | `/api/v1/courses/my-courses/` | Paginated active enrollments with progress. |
 | GET | `/api/v1/courses/my-courses/{slug}/` | Slim course-header payload: course metadata (title, description, instructors, objectives, totals) + the caller's enrollment status (`progress_percent`, `last_accessed_at`, `completed_at`) + `is_instructor` flag for preview. **No curriculum tree** — fetch that from `/learn/{slug}/curriculum/`. Allowed for the course's own instructor too (preview mode; `enrollment` is `null`). |
 
-### Learner Consumption (Phase 1 + Phase 2 quiz + assignment)
+### Learner Consumption (Phase 1 + Phase 2)
 
 | Method | Path | Description |
 |--------|------|-------------|
@@ -65,8 +65,14 @@ The enrollment system connects learners to published courses. It serves as the a
 | POST | `/api/v1/courses/learn/assignments/{assignment_id}/submit/` | Creates an `AssignmentSubmission(status='submitted')` + one `AssignmentSubmissionAnswer` per question (`rubric_snapshot` + `max_score` frozen at submit time). Returns `202 Accepted`; the Celery task `grade_assignment_submission_task` runs the `RubricGrader` and transitions the row to `passed` / `failed` / `grading_failed`. `422` if an in-flight submission already exists. |
 | GET | `/api/v1/courses/learn/assignments/submissions/{submission_id}/` | Per-question score + `criterion_results` + `feedback`; `model_answer` revealed only when `status in (passed, failed)`. The polling target for the frontend. |
 | POST | `/api/v1/courses/learn/assignments/submissions/{submission_id}/retry/` | Re-enqueue grading for a `grading_failed` submission. Reuses the same row so `submitted_at` and historical correlation stay correct. `422` for any non-`grading_failed` status; `404` for another learner's submission. |
+| GET | `/api/v1/courses/learn/coding-exercises/{exercise_id}/` | Coding-exercise detail with starter code + visible test cases + latest submission summary. `solution_code` and hidden test cases are never present. |
+| POST | `/api/v1/courses/learn/coding-exercises/{exercise_id}/run/` | Transient Run: visible test cases only, no DB row. Returns `202 + {task_id}`. Result lives in Celery result backend with `CELERY_RESULT_EXPIRES = 3600` TTL. |
+| GET | `/api/v1/courses/learn/coding-exercises/tasks/{task_id}/` | Poll the Run task. States: `PENDING` / `STARTED` / `SUCCESS` (with `result` dict) / `FAILURE`. |
+| POST | `/api/v1/courses/learn/coding-exercises/{exercise_id}/submit/` | Persisted Submit: creates a `CodingSubmission(status='queued')` snapshotting `total_tests`, then dispatches `evaluate_coding_submission_task` via `transaction.on_commit`. Returns `202`. |
+| GET | `/api/v1/courses/learn/coding-exercises/submissions/{submission_id}/` | Polling target. Hidden test rows are omitted entirely from `test_results`; aggregate counts (`total_tests` / `passed_tests` / `score`) still include them. |
+| POST | `/api/v1/courses/learn/coding-exercises/submissions/{submission_id}/retry/` | Re-enqueue evaluation for a submission stuck in `error`. Reuses the row so `submitted_at` is preserved. Only `error` is retryable (use `/submit/` for fresh attempts after `failed`/`passed`). |
 
-Phase 2 still to build (coding-exercise consumption + runtime) — see `LEARNER_COURSE_CONSUMPTION_DESIGN.md` at the project root for the planned shape. Assignment manual-override / instructor moderation surface is parked for Phase 3.
+Assignment manual-override / instructor moderation surface is parked for Phase 3. The coding-exercise execution pipeline + sandbox model is documented in [`docs/submission-flow.md`](../submission-flow.md); see also [`docs/architecture/10-coding-exercises.md`](./10-coding-exercises.md) Part 2.
 
 ## Enrollment Flow
 
@@ -87,9 +93,9 @@ If a learner unenrolls and later re-enrolls, the existing `Enrollment` record is
 progress_percent = (completed_content_items / total_content_items) * 100
 ```
 
-Counts completed lectures (`WatchProgress.is_completed=True`), completed quizzes (≥1 `QuizAttempt` per quiz), and passed assignment submissions (`AssignmentSubmission.status='passed'`). Coding-exercise completion is still a stub (`completed_coding = 0`) and will join the numerator when `CodingSubmission` lands.
+Counts completed lectures (`WatchProgress.is_completed=True`), completed quizzes (≥1 `QuizAttempt` per quiz), passed assignment submissions (`AssignmentSubmission.status='passed'`), and passed coding submissions (`CodingSubmission.status='passed'`, **distinct per exercise** — multiple PASSED attempts on the same coding exercise count once).
 
-The `recalculate_progress()` service function is the single entry point for this calculation. Lectures trigger it via the `WatchProgress` `post_save` signal; `submit_quiz_attempt` calls it directly at the end of its transaction; `grade_assignment_submission_task` schedules it via `transaction.on_commit` only when the assignment grader's final verdict is `passed` (a recalc failure can't roll back a valid grade).
+The `recalculate_progress()` service function is the single entry point for this calculation. Lectures trigger it via the `WatchProgress` `post_save` signal; `submit_quiz_attempt` calls it directly at the end of its transaction; `grade_assignment_submission_task` schedules it via `transaction.on_commit` only when the grader's final verdict is `passed`; `evaluate_coding_submission_task` schedules it via `transaction.on_commit` only when the final verdict is `passed`. A recalc failure can't roll back a valid pass verdict because the rollup runs after commit.
 
 ## Permissions
 
@@ -131,10 +137,15 @@ Access-denied status codes follow the project-wide rule (see CLAUDE.md): slug-ba
 
 The "learner curriculum view", "learner lecture view", and "watch progress endpoint" originally listed here as future work have all been implemented under the `/learn/...` prefix rather than nested under `/my-courses/`. The URL choice keeps the consumption surface separate from the dashboard surface and makes per-item endpoints easier to extend in Phase 2. The previously monolithic `/my-courses/{slug}/` (which returned the full course tree) was slimmed to header metadata only at the same time. See `MY_COURSES_PERFORMANCE_AUDIT.md` for the pre/post-refactor query-count and payload-size comparison.
 
+### Done — Phase 2 consumption (assignment + coding)
+
+- **Assignment auto-grading** — `AssignmentSubmission` + `AssignmentSubmissionAnswer` models, `AssignmentQuestion.rubric` field, `RubricGrader`, `grade_assignment_submission_task`, and the four `/learn/assignments/...` endpoints. Full rationale in `LEARNER_ASSIGNMENT_CONSUMPTION_DESIGN.md`.
+- **Coding-exercise execution** — `CodingSubmission` + `CodingSubmissionTestResult` models, Docker sandbox runner (`courses/services/code_runner.py`, one container per submission), per-language batched harness, `evaluate_coding_run_task` + `evaluate_coding_submission_task` + `reap_stuck_coding_submissions_task` (Celery beat), and six `/learn/coding-exercises/...` endpoints. Full pipeline doc: [`docs/submission-flow.md`](../submission-flow.md). Optimisation rationale (one container per submission vs per test case): [`docs/comparison.md`](../comparison.md) §17. Implementation overview: [`docs/architecture/10-coding-exercises.md`](./10-coding-exercises.md) Part 2.
+
 ### Not yet built
 
-- **Phase 2 consumption — coding remainder** — learner-safe `/learn/coding-exercises/{id}/` + corresponding submission endpoints. Needs a new `CodingSubmission` model — see `LEARNER_COURSE_CONSUMPTION_DESIGN.md`. (The quiz half of Phase 2 landed alongside Phase 1; the assignment half — `AssignmentSubmission` + `AssignmentSubmissionAnswer` models, `AssignmentQuestion.rubric` field, `RubricGrader`, Celery-based grading, and the four `/learn/assignments/...` endpoints — landed in the assignment auto-grading change. Full rationale in `LEARNER_ASSIGNMENT_CONSUMPTION_DESIGN.md`.)
 - **Assignment manual override / moderation surface** — instructor-side endpoints to view, override, or comment on submissions. Phase-3 addition; not required for the auto-grading-only v1.
+- **Coding sandbox hardening** — Docker-out-of-Docker is demo-only. Replace with gVisor / Firecracker / remote workers for untrusted execution. See [`docs/comparison.md`](../comparison.md) §17 for migration paths.
 - **Caching on the consumption surface** — Redis or HTTP cache for the slim `/my-courses/{slug}/` and `/learn/{slug}/curriculum/` responses. Lower priority now that the response is small; revisit if traffic warrants.
 - **Payment integration** — A `payments` app that creates `enrollment_type='paid'` enrollments on checkout.
 - **Certificates** — PDF generation triggered when `completed_at` is set.

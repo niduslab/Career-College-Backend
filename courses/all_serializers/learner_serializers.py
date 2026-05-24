@@ -19,7 +19,12 @@ from courses.all_serializers.content_serializers import (
     _normalize_media_relative_path,
     _normalize_renditions_playlists,
 )
-from courses.models import AssignmentSubmission, QuizAnswer
+from courses.models import (
+    AssignmentSubmission,
+    CodingSubmission,
+    CodingSubmissionTestResult,
+    QuizAnswer,
+)
 
 
 class LearnerWatchProgressSerializer(serializers.Serializer):
@@ -429,3 +434,170 @@ def build_assignment_submission_result(submission) -> dict:
         'grading_error': submission.grading_error,
         'answers': answers_payload,
     }
+
+
+# ===========================================================================
+# Coding exercises (Phase 2)
+# ===========================================================================
+#
+# Sensitive instructor-only fields are NEVER declared on these serializers
+# (absence > conditional removal, per CLAUDE.md):
+#   - CodingExerciseLanguageConfig.solution_code is not declared on
+#     _LearnerCodingLanguageConfigSerializer.
+#   - Hidden CodingTestCases are filtered upstream in the service layer; the
+#     learner test-case serializer only ever sees visible rows.
+#
+# The redaction serializer for submission test result rows
+# (_LearnerCodingSubmissionTestResultSerializer) DOES inherit hidden rows --
+# it has to, since Submit runs every test case. It blanks input/expected/
+# actual when is_hidden=True while still surfacing status + runtime_ms so
+# the learner can see whether their hidden tests passed.
+
+
+class _LearnerCodingLanguageConfigSerializer(serializers.Serializer):
+    """Per-language starter code. solution_code is intentionally absent."""
+
+    id = serializers.IntegerField()
+    language = serializers.CharField()
+    starter_code = serializers.CharField()
+
+
+class _LearnerCodingTestCaseSerializer(serializers.Serializer):
+    """Visible test case (hidden rows are filtered upstream)."""
+
+    id = serializers.IntegerField()
+    input_data = serializers.CharField()
+    expected_output = serializers.CharField()
+    explanation = serializers.CharField()
+    position = serializers.IntegerField()
+
+
+class _LearnerCodingSubmissionSummarySerializer(serializers.Serializer):
+    """Compact submission summary attached to the exercise detail view."""
+
+    id = serializers.IntegerField()
+    status = serializers.CharField()
+    score = serializers.DecimalField(max_digits=5, decimal_places=2)
+    passed_tests = serializers.IntegerField()
+    total_tests = serializers.IntegerField()
+    runtime_ms = serializers.IntegerField()
+    submitted_at = serializers.DateTimeField()
+    completed_at = serializers.DateTimeField(allow_null=True)
+
+
+class LearnerCodingExerciseDetailSerializer(serializers.Serializer):
+    """Detail payload for /learn/coding-exercises/<id>/."""
+
+    id = serializers.IntegerField()
+    section_id = serializers.IntegerField()
+    title = serializers.CharField()
+    description = serializers.CharField()
+    problem_statement = serializers.CharField()
+    difficulty = serializers.CharField()
+    default_language = serializers.CharField()
+    supported_languages = serializers.ListField(child=serializers.CharField())
+    time_limit_ms = serializers.IntegerField()
+    language_configs = serializers.SerializerMethodField()
+    test_cases = serializers.SerializerMethodField()
+    latest_submission = serializers.SerializerMethodField()
+
+    def get_language_configs(self, exercise):
+        configs = getattr(exercise, '_prefetched_language_configs', None) or list(
+            exercise.language_configs.all().order_by('language')
+        )
+        return _LearnerCodingLanguageConfigSerializer(configs, many=True).data
+
+    def get_test_cases(self, exercise):
+        cases = getattr(exercise, '_prefetched_test_cases', None) or list(
+            exercise.test_cases.filter(is_hidden=False).order_by('position', 'id')
+        )
+        return _LearnerCodingTestCaseSerializer(cases, many=True).data
+
+    def get_latest_submission(self, exercise):
+        latest = self.context.get('latest_submission')
+        if latest is None:
+            return None
+        return _LearnerCodingSubmissionSummarySerializer(latest).data
+
+
+class _LearnerCodingSubmissionTestResultSerializer(serializers.Serializer):
+    """Per-test result row, redacted when is_hidden=True.
+
+    Hidden tests still surface status + runtime so the learner can SEE
+    whether they passed, just not what was in them.
+    """
+
+    id = serializers.IntegerField()
+    position = serializers.IntegerField()
+    status = serializers.CharField()
+    runtime_ms = serializers.IntegerField()
+    exit_code = serializers.IntegerField()
+    is_hidden = serializers.BooleanField()
+    input_data = serializers.CharField()
+    expected_output = serializers.CharField()
+    actual_output = serializers.CharField()
+    stdout = serializers.CharField()
+    stderr = serializers.CharField()
+
+    def to_representation(self, instance):
+        data = super().to_representation(instance)
+        if instance.is_hidden:
+            data['input_data'] = ''
+            data['expected_output'] = ''
+            data['actual_output'] = ''
+            data['stdout'] = ''
+            # stderr stays — a hidden test that errored still needs a
+            # message so the learner knows what went wrong. The grader
+            # shapes that string and it doesn't reveal expected output.
+        return data
+
+
+class LearnerCodingSubmissionSerializer(serializers.Serializer):
+    """Full Submit-mode submission shape with per-test results."""
+
+    id = serializers.IntegerField()
+    exercise_id = serializers.IntegerField()
+    language = serializers.CharField()
+    code = serializers.CharField()
+    status = serializers.CharField()
+    total_tests = serializers.IntegerField()
+    passed_tests = serializers.IntegerField()
+    score = serializers.DecimalField(max_digits=5, decimal_places=2)
+    runtime_ms = serializers.IntegerField()
+    error_message = serializers.CharField()
+    stdout = serializers.CharField()
+    stderr = serializers.CharField()
+    submitted_at = serializers.DateTimeField()
+    completed_at = serializers.DateTimeField(allow_null=True)
+    test_results = serializers.SerializerMethodField()
+
+    def get_test_results(self, submission):
+        # Hidden test rows are excluded entirely from the learner response.
+        # Learner still sees aggregate counts (total_tests / passed_tests /
+        # score) which include hidden tests, so they can infer hidden
+        # verdict from the mismatch between len(test_results) and total_tests.
+        rows = list(
+            submission.test_results
+            .filter(is_hidden=False)
+            .order_by('position', 'id')
+        )
+        return _LearnerCodingSubmissionTestResultSerializer(rows, many=True).data
+
+
+class CodingRunSubmitSerializer(serializers.Serializer):
+    """Input validator for POST /run/ and POST /submit/."""
+
+    language = serializers.CharField(max_length=20)
+    code = serializers.CharField(allow_blank=False)
+
+
+def build_coding_run_result_payload(task_result: dict | None) -> dict | None:
+    """Wrap the dict returned by evaluate_coding_run_task into the polling
+    endpoint's response shape. Returns None if `task_result` is None
+    (PENDING / STARTED branches).
+    """
+    if task_result is None:
+        return None
+    # The task already produces a learner-safe shape (visible tests only).
+    # No further redaction required at this layer.
+    return task_result

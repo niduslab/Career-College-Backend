@@ -1,4 +1,5 @@
 import logging
+from datetime import timedelta
 
 from celery import shared_task
 from django.db import transaction
@@ -7,16 +8,28 @@ from django.utils import timezone
 from courses.models import (
     AssignmentSubmission,
     AssignmentSubmissionAnswer,
+    CodingExercise,
+    CodingSubmission,
+    CodingSubmissionTestResult,
     Enrollment,
     Lecture,
     VideoAsset,
     VideoProcessingJob,
 )
 from courses.services.assignment_grading import RubricGrader
+from courses.services.code_runner import (
+    CodeRunner,
+    DockerTransientError,
+    DockerUnavailableError,
+    SingleTestResult,
+)
 from courses.services.enrollment_service import recalculate_progress
 from courses.transcoding import transcode_video_asset
 
 logger = logging.getLogger(__name__)
+
+# Per-submission stdout/stderr/error_message cap (rolled up from per-test rows).
+_SUBMISSION_OUTPUT_CAP = 5000
 
 
 @shared_task(bind=True, autoretry_for=(Exception,), retry_backoff=True, retry_jitter=True, max_retries=3)
@@ -177,3 +190,315 @@ def grade_assignment_submission_task(self, submission_id: int):
                 )
             return {'submission_id': submission_id, 'status': 'grading_failed'}
         raise
+
+
+# ===========================================================================
+# Coding exercise execution
+# ===========================================================================
+#
+# Two tasks, mirroring the standalone-platform model described in
+# docs/submission-flow.md:
+#
+#   - evaluate_coding_run_task: transient. Visible test cases only. Returns a
+#     plain dict; the Run dispatcher polls AsyncResult and renders it. No DB
+#     row, no retries (Run is cheap to re-run from the UI).
+#
+#   - evaluate_coding_submission_task: persisted. Loads CodingSubmission,
+#     runs every test case in ONE container via CodeRunner, persists
+#     CodingSubmissionTestResult rows, updates aggregates, schedules
+#     recalculate_progress on PASS.
+#
+# acks_late + autoretry_for=DockerTransientError gives us idempotency under
+# worker death AND auto-retry of transient daemon hiccups. Learner-code
+# failures and image-missing errors are NOT retried — they're terminal
+# already and shouldn't burn worker capacity.
+
+def _build_run_result_payload(
+    exercise_id: int,
+    language: str,
+    results: list[SingleTestResult],
+    test_cases: list,
+    error_message: str = '',
+) -> dict:
+    """Shape the Run-task return value into the dict the polling endpoint
+    serializes back to the learner. Lives here (not in serializers) because
+    Run never touches the DB — the dict IS the payload.
+    """
+    passed = sum(1 for r in results if r.status == 'passed')
+    total = len(results)
+    score = round((passed / total) * 100, 2) if total else 0
+    if any(r.status == 'error' for r in results):
+        status = 'error'
+    elif passed == total and total > 0:
+        status = 'passed'
+    else:
+        status = 'failed'
+    return {
+        'exercise_id': exercise_id,
+        'language': language,
+        'status': status,
+        'total_tests': total,
+        'passed_tests': passed,
+        'score': score,
+        'runtime_ms': sum(r.runtime_ms for r in results),
+        'error_message': error_message,
+        'test_results': [
+            {
+                'position': tc.position,
+                'input_data': tc.input_data,
+                'expected_output': tc.expected_output,
+                'actual_output': r.actual_output,
+                'stdout': r.stdout,
+                'stderr': r.stderr,
+                'status': r.status,
+                'runtime_ms': r.runtime_ms,
+                'exit_code': r.exit_code,
+            }
+            for tc, r in zip(test_cases, results)
+        ],
+    }
+
+
+@shared_task
+def evaluate_coding_run_task(
+    exercise_id: int,
+    language: str,
+    code: str,
+    time_limit_ms: int,
+):
+    """Run-mode evaluation: visible test cases only, no persistence.
+
+    Returns a dict (the Celery result is stored in Redis and expires after
+    CELERY_RESULT_EXPIRES). Never raises into Celery FAILURE for a learner
+    code error -- those are recorded inside the result dict.
+    """
+    try:
+        exercise = CodingExercise.objects.get(pk=exercise_id)
+    except CodingExercise.DoesNotExist:
+        return {
+            'exercise_id': exercise_id,
+            'language': language,
+            'status': 'error',
+            'error_message': 'Exercise not found.',
+            'total_tests': 0, 'passed_tests': 0, 'score': 0, 'runtime_ms': 0,
+            'test_results': [],
+        }
+
+    test_cases = list(
+        exercise.test_cases.filter(is_hidden=False).order_by('position', 'id')
+    )
+    if not test_cases:
+        return {
+            'exercise_id': exercise_id,
+            'language': language,
+            'status': 'error',
+            'error_message': 'No visible test cases to run.',
+            'total_tests': 0, 'passed_tests': 0, 'score': 0, 'runtime_ms': 0,
+            'test_results': [],
+        }
+
+    try:
+        results = CodeRunner().run_submission(
+            code=code,
+            test_cases=test_cases,
+            time_limit_ms=time_limit_ms,
+            language=language,
+        )
+    except DockerUnavailableError as exc:
+        logger.error('Run failed (docker unavailable) for exercise=%s: %s', exercise_id, exc)
+        return {
+            'exercise_id': exercise_id,
+            'language': language,
+            'status': 'error',
+            'error_message': 'Code execution service unavailable. Please try again.',
+            'total_tests': len(test_cases), 'passed_tests': 0, 'score': 0, 'runtime_ms': 0,
+            'test_results': [],
+        }
+    except DockerTransientError as exc:
+        logger.warning('Run hit transient docker error for exercise=%s: %s', exercise_id, exc)
+        return {
+            'exercise_id': exercise_id,
+            'language': language,
+            'status': 'error',
+            'error_message': 'Transient runner error. Please try again.',
+            'total_tests': len(test_cases), 'passed_tests': 0, 'score': 0, 'runtime_ms': 0,
+            'test_results': [],
+        }
+
+    return _build_run_result_payload(exercise_id, language, results, test_cases)
+
+
+@shared_task(
+    bind=True,
+    acks_late=True,
+    autoretry_for=(DockerTransientError,),
+    retry_backoff=True,
+    retry_jitter=True,
+    max_retries=3,
+)
+def evaluate_coding_submission_task(self, submission_id: int):
+    """Submit-mode evaluation: all test cases, persisted, progress on pass.
+
+    Idempotent under acks_late redelivery: short-circuits when the row is
+    already terminal. Mirrors grade_assignment_submission_task structurally.
+    """
+    logger.info('Starting coding submission task for submission=%s', submission_id)
+
+    submission = CodingSubmission.objects.select_related(
+        'exercise__section__course',
+    ).get(pk=submission_id)
+
+    if submission.status in CodingSubmission.TERMINAL_STATUSES:
+        logger.info(
+            'CodingSubmission %s already terminal (%s); skipping.',
+            submission_id, submission.status,
+        )
+        return {'submission_id': submission_id, 'status': submission.status, 'skipped': True}
+
+    submission.status = CodingSubmission.Status.GRADING
+    submission.save(update_fields=['status', 'updated_at'])
+
+    exercise = submission.exercise
+    test_cases = list(exercise.test_cases.order_by('position', 'id'))
+
+    try:
+        try:
+            results = CodeRunner().run_submission(
+                code=submission.code,
+                test_cases=test_cases,
+                time_limit_ms=exercise.time_limit_ms,
+                language=submission.language,
+            )
+        except DockerUnavailableError as exc:
+            # Daemon-down is operator action; mark error and DO NOT retry.
+            _finalize_with_error(submission, f'Code execution service unavailable: {exc}')
+            return {'submission_id': submission_id, 'status': 'error'}
+
+        with transaction.atomic():
+            # Bulk-insert per-test result rows. Snapshot input/expected so the
+            # row survives later test-case edits; copy is_hidden for the
+            # redaction serializer.
+            result_rows = [
+                CodingSubmissionTestResult(
+                    submission=submission,
+                    test_case=tc,
+                    status=r.status,
+                    input_data=tc.input_data or '',
+                    expected_output=tc.expected_output or '',
+                    actual_output=r.actual_output,
+                    stdout=r.stdout,
+                    stderr=r.stderr,
+                    runtime_ms=r.runtime_ms,
+                    exit_code=r.exit_code,
+                    is_hidden=tc.is_hidden,
+                    position=tc.position,
+                )
+                for tc, r in zip(test_cases, results)
+            ]
+            CodingSubmissionTestResult.objects.bulk_create(result_rows)
+
+            passed = sum(1 for r in results if r.status == 'passed')
+            total = len(results)
+            score = round((passed / total) * 100, 2) if total else 0
+            # Status precedence: ERROR > FAILED > PASSED.
+            if any(r.status == 'error' for r in results):
+                final_status = CodingSubmission.Status.ERROR
+                error_msg = '\n'.join(
+                    r.stderr for r in results if r.status == 'error' and r.stderr
+                )[:_SUBMISSION_OUTPUT_CAP]
+            elif passed == total and total > 0:
+                final_status = CodingSubmission.Status.PASSED
+                error_msg = ''
+            else:
+                final_status = CodingSubmission.Status.FAILED
+                error_msg = ''
+
+            stdout_concat = '\n'.join(r.stdout for r in results if r.stdout)[:_SUBMISSION_OUTPUT_CAP]
+            stderr_concat = '\n'.join(r.stderr for r in results if r.stderr)[:_SUBMISSION_OUTPUT_CAP]
+
+            submission.passed_tests = passed
+            submission.total_tests = total
+            submission.score = score
+            submission.runtime_ms = sum(r.runtime_ms for r in results)
+            submission.status = final_status
+            submission.error_message = error_msg
+            submission.stdout = stdout_concat
+            submission.stderr = stderr_concat
+            submission.completed_at = timezone.now()
+            submission.save(update_fields=[
+                'passed_tests', 'total_tests', 'score', 'runtime_ms',
+                'status', 'error_message', 'stdout', 'stderr',
+                'completed_at', 'updated_at',
+            ])
+
+            if final_status == CodingSubmission.Status.PASSED:
+                course = exercise.section.course
+                enrollment = Enrollment.objects.filter(
+                    user=submission.user, course=course, is_active=True,
+                ).first()
+                if enrollment is not None:
+                    transaction.on_commit(lambda: recalculate_progress(enrollment))
+
+        logger.info(
+            'Coding submission %s done: status=%s passed=%s/%s',
+            submission_id, submission.status, passed, total,
+        )
+        return {
+            'submission_id': submission_id,
+            'status': submission.status,
+            'passed_tests': passed,
+            'total_tests': total,
+        }
+
+    except DockerTransientError:
+        # Re-raised so autoretry_for picks it up. On final exhaustion the
+        # except block below catches and marks error.
+        raise
+    except Exception as exc:
+        logger.exception('Coding submission %s raised', submission_id)
+        if self.request.retries >= self.max_retries:
+            _finalize_with_error(submission, str(exc))
+            return {'submission_id': submission_id, 'status': 'error'}
+        raise
+
+
+def _finalize_with_error(submission: CodingSubmission, message: str):
+    """Set ERROR + error_message on a submission, guarding against a row
+    that's already terminal (e.g. a concurrent reaper run)."""
+    try:
+        submission.refresh_from_db(fields=['status'])
+        if submission.status in CodingSubmission.TERMINAL_STATUSES:
+            return
+        submission.status = CodingSubmission.Status.ERROR
+        submission.error_message = (message or '')[:_SUBMISSION_OUTPUT_CAP]
+        submission.completed_at = timezone.now()
+        submission.save(update_fields=[
+            'status', 'error_message', 'completed_at', 'updated_at',
+        ])
+    except Exception:
+        logger.exception('Failed to finalize submission=%s as error', submission.pk)
+
+
+@shared_task
+def reap_stuck_coding_submissions_task(stale_minutes: int = 5):
+    """Periodically flip CodingSubmissions stuck in queued/grading to error.
+
+    The architecture has no zombie-job recovery otherwise: a worker SIGKILL
+    between row creation and the task finishing leaves the submission
+    in_flight forever. Polling UIs would hang on it.
+
+    Scheduled via CELERY_BEAT_SCHEDULE in settings.py.
+    """
+    cutoff = timezone.now() - timedelta(minutes=stale_minutes)
+    stuck = CodingSubmission.objects.filter(
+        status__in=CodingSubmission.IN_FLIGHT_STATUSES,
+        submitted_at__lt=cutoff,
+    )
+    count = stuck.update(
+        status=CodingSubmission.Status.ERROR,
+        error_message='Reaped: worker crashed or runner stalled.',
+        completed_at=timezone.now(),
+    )
+    if count:
+        logger.warning('Reaped %d stuck coding submission(s).', count)
+    return {'reaped': count}

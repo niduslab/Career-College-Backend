@@ -69,6 +69,7 @@ INSTALLED_APPS = [
 
 MIDDLEWARE = [
     'django.middleware.security.SecurityMiddleware',
+    'corsheaders.middleware.CorsMiddleware',
     'django.contrib.sessions.middleware.SessionMiddleware',
     'django.middleware.common.CommonMiddleware',
     'django.middleware.csrf.CsrfViewMiddleware',
@@ -166,6 +167,10 @@ FRONTEND_URL = env('FRONTEND_URL', default='http://localhost:3000')
 FRONTEND_GOOGLE_CALLBACK = env('FRONTEND_GOOGLE_CALLBACK', default='')
 FRONTEND_ERROR_URL = env('FRONTEND_ERROR_URL', default='')
 
+# CORS — must match the frontend origin exactly (protocol + host + port)
+CORS_ALLOWED_ORIGINS = env.list('CORS_ALLOWED_ORIGINS', default=[FRONTEND_URL])
+CORS_ALLOW_CREDENTIALS = True
+
 # Keep allauth wired for SocialAccount model only
 SOCIALACCOUNT_PROVIDERS = {
     'google': {
@@ -243,7 +248,7 @@ RUNNER_IMAGE_PYTHON = env('RUNNER_IMAGE_PYTHON')
 RUNNER_IMAGE_JAVASCRIPT = env('RUNNER_IMAGE_JAVASCRIPT')
 RUNNER_IMAGE_CPP = env('RUNNER_IMAGE_CPP')
 RUNNER_IMAGE_JAVA = env('RUNNER_IMAGE_JAVA')
-RUNNER_RUNTIME = env('RUNNER_RUNTIME', default='runc' if DEBUG else 'runsc')
+RUNNER_RUNTIME = env('RUNNER_RUNTIME_DEV') if DEBUG else env('RUNNER_RUNTIME_PROD')
 
 
 DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
@@ -261,7 +266,8 @@ DEFAULT_FROM_EMAIL = env('DEFAULT_FROM_EMAIL', default=EMAIL_HOST_USER)
 
 
 # Rate Limiting
-OTP_RATE_LIMIT = env('OTP_RATE_LIMIT', default=None)
+OTP_RATE_LIMIT = env('OTP_RATE_LIMIT', default='20/min')
+LOGIN_RATE_LIMIT = env('LOGIN_RATE_LIMIT', default='10/min')
 
 
 # Logging

@@ -4,19 +4,18 @@ This folder is a quick-start map for new backend developers.
 
 ## Read in this order
 
-1. `01-system-overview.md`
-2. `02-auth-and-accounts.md`
-3. `03-profiles.md`
-4. `04-courses-and-curriculum.md`
-5. `05-lectures-and-video-pipeline.md`
-6. `06-quizzes.md`
-7. `07-id-verification.md`
-8. `08-core-infrastructure.md`
-9. `09-workflows-and-architecture-why.md`
-10. `10-coding-exercises.md` (Part 1 authoring + Part 2 Run/Submit execution)
-11. `11-assignments-crud.md`
-12. `12-course-lifecycle.md`
-13. `13-enrollment.md` (also covers Phase-1 + Phase-2 learner consumption endpoints)
+1. `01-system-overview.md` — architecture diagram, project layout, request lifecycle, design patterns
+2. `02-auth-and-accounts.md` — registration, OTP, JWT, OAuth flows
+3. `03-profiles.md` — profile models, auto-creation signal, public/private endpoints
+4. `04-courses-and-curriculum.md` — course models, SectionContent ordering, reorder algorithm
+5. `05-lectures-and-video-pipeline.md` — video upload, FFmpeg transcoding, HLS pipeline, WatchProgress
+6. `06-quizzes.md` — quiz authoring, attempt models, learner submission flow
+7. `07-id-verification.md` — identity verification state machine, admin review
+8. `08-core-infrastructure.md` — permissions, pagination, Celery tasks, JWT config, logging
+9. `09-coding-exercises.md` — coding exercise authoring + Run/Submit execution + Docker sandbox
+10. `10-assignments-crud.md` — assignment CRUD + async auto-grading + RubricGrader
+11. `11-course-lifecycle.md` — course status state machine, completeness checks, admin review
+12. `12-enrollment.md` — enrollment, progress calculation, learner consumption endpoints
 
 ## Cross-cutting design docs (outside this folder)
 

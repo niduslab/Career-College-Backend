@@ -72,7 +72,7 @@ The enrollment system connects learners to published courses. It serves as the a
 | GET | `/api/v1/courses/learn/coding-exercises/submissions/{submission_id}/` | Polling target. Hidden test rows are omitted entirely from `test_results`; aggregate counts (`total_tests` / `passed_tests` / `score`) still include them. |
 | POST | `/api/v1/courses/learn/coding-exercises/submissions/{submission_id}/retry/` | Re-enqueue evaluation for a submission stuck in `error`. Reuses the row so `submitted_at` is preserved. Only `error` is retryable (use `/submit/` for fresh attempts after `failed`/`passed`). |
 
-Assignment manual-override / instructor moderation surface is parked for Phase 3. The coding-exercise execution pipeline + sandbox model is documented in [`docs/submission-flow.md`](../submission-flow.md); see also [`docs/architecture/10-coding-exercises.md`](./10-coding-exercises.md) Part 2.
+Assignment manual-override / instructor moderation surface is parked for Phase 3. The coding-exercise execution pipeline + sandbox model is documented in [`docs/submission-flow.md`](../submission-flow.md); see also [`docs/architecture/09-coding-exercises.md`](./09-coding-exercises.md) Part 2.
 
 ## Enrollment Flow
 
@@ -90,12 +90,32 @@ If a learner unenrolls and later re-enrolls, the existing `Enrollment` record is
 ## Progress Calculation
 
 ```
-progress_percent = (completed_content_items / total_content_items) * 100
+progress_percent = min(int((completed_content_items / total_content_items) * 100), 100)
 ```
 
-Counts completed lectures (`WatchProgress.is_completed=True`), completed quizzes (≥1 `QuizAttempt` per quiz), passed assignment submissions (`AssignmentSubmission.status='passed'`), and passed coding submissions (`CodingSubmission.status='passed'`, **distinct per exercise** — multiple PASSED attempts on the same coding exercise count once).
+**Completion rules per content type:**
 
-The `recalculate_progress()` service function is the single entry point for this calculation. Lectures trigger it via the `WatchProgress` `post_save` signal; `submit_quiz_attempt` calls it directly at the end of its transaction; `grade_assignment_submission_task` schedules it via `transaction.on_commit` only when the grader's final verdict is `passed`; `evaluate_coding_submission_task` schedules it via `transaction.on_commit` only when the final verdict is `passed`. A recalc failure can't roll back a valid pass verdict because the rollup runs after commit.
+| Content type | Counted as complete when | Trigger |
+|---|---|---|
+| Lecture (video/article) | `WatchProgress.is_completed = True` | `WatchProgress` `post_save` signal (fires only when `is_completed` changes) |
+| Quiz | ≥1 `QuizAttempt` exists for `(user, quiz)` (any score) | `submit_quiz_attempt()` calls `recalculate_progress()` directly at end of transaction |
+| Assignment | `AssignmentSubmission.status = 'passed'` | `grade_assignment_submission_task` schedules via `transaction.on_commit` only when verdict is `passed` |
+| Coding exercise | `CodingSubmission.status = 'passed'` — **distinct per exercise** (multiple passed attempts count once) | `evaluate_coding_submission_task` schedules via `transaction.on_commit` only when verdict is `passed` |
+
+**`recalculate_progress(enrollment)`** in `courses/services/enrollment_service.py` is the single
+entry point. It avoids N+1 by:
+1. Querying all `SectionContent` rows for the course in one query
+2. Grouping them by `item_type` → sets of object IDs
+3. For each type, running one query to find the completed subset
+4. Computing score from the intersection counts
+
+**Side effects:**
+- If `progress_percent == 100` and `enrollment.completed_at is None` → sets `completed_at = now()`
+- If `progress_percent < 100` and `enrollment.completed_at is not None` → clears `completed_at`
+  (handles edge case where an instructor removes content after a learner has "completed" the course)
+
+A recalculation failure can't roll back a valid pass verdict because the rollup runs after commit
+(`transaction.on_commit`).
 
 ## Permissions
 
@@ -140,7 +160,7 @@ The "learner curriculum view", "learner lecture view", and "watch progress endpo
 ### Done — Phase 2 consumption (assignment + coding)
 
 - **Assignment auto-grading** — `AssignmentSubmission` + `AssignmentSubmissionAnswer` models, `AssignmentQuestion.rubric` field, `RubricGrader`, `grade_assignment_submission_task`, and the four `/learn/assignments/...` endpoints. Full rationale in `LEARNER_ASSIGNMENT_CONSUMPTION_DESIGN.md`.
-- **Coding-exercise execution** — `CodingSubmission` + `CodingSubmissionTestResult` models, Docker sandbox runner (`courses/services/code_runner.py`, one container per submission), per-language batched harness, `evaluate_coding_run_task` + `evaluate_coding_submission_task` + `reap_stuck_coding_submissions_task` (Celery beat), and six `/learn/coding-exercises/...` endpoints. Full pipeline doc: [`docs/submission-flow.md`](../submission-flow.md). Optimisation rationale (one container per submission vs per test case): [`docs/comparison.md`](../comparison.md) §17. Implementation overview: [`docs/architecture/10-coding-exercises.md`](./10-coding-exercises.md) Part 2.
+- **Coding-exercise execution** — `CodingSubmission` + `CodingSubmissionTestResult` models, Docker sandbox runner (`courses/services/code_runner.py`, one container per submission), per-language batched harness, `evaluate_coding_run_task` + `evaluate_coding_submission_task` + `reap_stuck_coding_submissions_task` (Celery beat), and six `/learn/coding-exercises/...` endpoints. Full pipeline doc: [`docs/submission-flow.md`](../submission-flow.md). Optimisation rationale (one container per submission vs per test case): [`docs/comparison.md`](../comparison.md) §17. Implementation overview: [`docs/architecture/09-coding-exercises.md`](./09-coding-exercises.md) Part 2.
 
 ### Not yet built
 

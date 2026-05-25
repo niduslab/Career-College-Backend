@@ -4,6 +4,33 @@ Coding exercises are interactive programming problems instructors author as curr
 
 For the end-to-end Run/Submit pipeline, Docker sandbox limits, harness contract, and failure modes, see [`docs/submission-flow.md`](../submission-flow.md). For the architectural rationale behind the **one container per submission** optimisation see [`docs/comparison.md`](../comparison.md).
 
+## Run vs. Submit — at a glance
+
+```
+                    RUN                          SUBMIT
+                ─────────────────────────────────────────────
+Endpoint        POST /learn/coding-exercises      POST /learn/coding-exercises
+                      /{id}/run/                        /{id}/submit/
+Test cases      Visible only (is_hidden=False)   All (visible + hidden)
+DB row          No — result in Celery backend     Yes — CodingSubmission row
+                (1-hour TTL)
+Returns         202 + { task_id }                202 + queued CodingSubmission
+Poll via        GET /learn/coding-exercises/      GET /learn/coding-exercises/
+                      /tasks/{task_id}/                  /submissions/{id}/
+Learner intent  "Try it" / IDE feedback           Graded attempt
+Retryable?      No (just re-run)                  Yes — /retry/ if status=error
+Progress        Never                             Yes — on status=passed
+─────────────────────────────────────────────────────────────
+
+Status flow (Submit):
+  queued ──► grading ──► passed
+                    └──► failed
+                    └──► error  (retryable via /retry/)
+
+Status precedence: error > failed > passed
+  (if any test errors → error; else if any fail → failed; else passed)
+```
+
 ## Key files
 
 ### Part 1 — Authoring (instructor)

@@ -209,3 +209,136 @@ Internal sequence:
 - "Questions" are ordered items inside that task.
 - Creating/deleting assignment also manages curriculum placement automatically.
 - Question positions are automatically maintained so numbering stays clean.
+
+---
+
+## Assignment auto-grading (learner side)
+
+Assignment grading is asynchronous. The submission endpoint returns `202 Accepted` immediately;
+a Celery task performs the actual grading and updates the row.
+
+### Key files (learner side)
+
+| File | Purpose |
+|------|---------|
+| `courses/all_models/assessment_models.py` | `AssignmentSubmission`, `AssignmentSubmissionAnswer` |
+| `courses/services/learner_service.py` | `submit_assignment()`, `get_learner_assignment_submission()`, `retry_assignment_grading()` |
+| `courses/services/assignment_grading.py` | `RubricGrader` — deterministic per-criterion scoring |
+| `courses/tasks.py` | `grade_assignment_submission_task` |
+| `courses/all_serializers/learner_serializers.py` | `build_assignment_submission_result()` |
+
+### Submission and grading flow
+
+```
+POST /api/v1/courses/learn/assignments/{id}/submit/
+  Permission: IsLearnerUser
+  body: { "answers": [{ "question_id": 1, "answer_text": "..." }, ...] }
+         │
+         ▼
+submit_assignment(user, assignment, answers_payload, enrollment)
+  [courses/services/learner_service.py]
+         │
+         ├─ Check for in-flight submission: status in (submitted, grading) for (user, assignment)
+         │   → 422 if one exists (prevents parallel double-submissions)
+         │
+         ├─ Atomic transaction:
+         │   AssignmentSubmission(status='submitted',
+         │     max_score=assignment.total_score)  ← snapshotted
+         │   For each question:
+         │     AssignmentSubmissionAnswer(
+         │       answer_text=...,
+         │       rubric_snapshot=question.rubric,  ← frozen at submit time
+         │       max_score=question.points          ← frozen at submit time
+         │     )
+         │
+         └─ transaction.on_commit:
+              grade_assignment_submission_task.delay(submission.id)
+         │
+         ▼
+202 Accepted — { submission_id, status: "submitted" }
+
+──────────────────────────────────────────────────────────
+Celery worker: grade_assignment_submission_task
+  Decorator: @shared_task(bind=True, acks_late=True,
+               autoretry_for=(Exception,), max_retries=3)
+──────────────────────────────────────────────────────────
+         │
+         ├─ Early return if status already terminal (idempotent under acks_late redelivery)
+         │
+         ├─ status → 'grading'
+         │
+         ├─ For each AssignmentSubmissionAnswer:
+         │   RubricGrader.grade(answer_text, rubric_snapshot, max_score)
+         │   → returns (score, criterion_results, feedback)
+         │
+         ├─ total_score = sum of answer scores
+         │
+         ├─ if total_score >= assignment.passing_score:
+         │     submission.status = 'passed'
+         │     → transaction.on_commit: recalculate_progress(enrollment)
+         │   else:
+         │     submission.status = 'failed'
+         │
+         ▼
+Learner polls: GET /learn/assignments/submissions/{id}/
+  → Returns status, per-answer score/feedback
+  → model_answer per question revealed ONLY when status in (passed, failed)
+  → Hidden during: submitted, grading, grading_failed
+```
+
+### `RubricGrader` — deterministic criterion matchers
+
+The grader lives in `courses/services/assignment_grading.py`. Each question's `rubric` is a JSON
+object defining one or more criteria:
+
+```json
+{
+  "criteria": [
+    { "type": "keyword", "value": "HTTP", "weight": 1.0 },
+    { "type": "regex", "value": "REST.*stateless", "weight": 0.5 },
+    { "type": "min_length", "value": 50, "weight": 0.3 },
+    { "type": "any_of", "value": ["REST", "RESTful"], "weight": 0.5 }
+  ]
+}
+```
+
+**Supported criterion types:**
+
+| Type | Value | Passes when |
+|------|-------|-------------|
+| `keyword` | string | Answer contains the keyword (case-insensitive) |
+| `regex` | pattern | Answer matches the regex pattern |
+| `min_length` | int | `len(answer_text) >= value` |
+| `max_length` | int | `len(answer_text) <= value` |
+| `any_of` | list of strings | Answer contains at least one item from the list |
+| `all_of` | list of strings | Answer contains all items from the list |
+
+Score formula:
+```
+score = sum(criterion.weight for each passing criterion)
+        / sum(all criterion weights)
+        * max_score
+```
+
+The grader is **defensive**: an unknown criterion type or a matcher that raises an exception
+is recorded as a miss, not a crash. Grading completes even if one criterion is malformed.
+
+### Retry for grading_failed
+
+```
+POST /api/v1/courses/learn/assignments/submissions/{id}/retry/
+  Permission: IsLearnerUser (own submission only)
+  → Only allowed when status == 'grading_failed'
+  → Resets status to 'grading', clears grading_error
+  → Re-dispatches grade_assignment_submission_task on commit
+  → submitted_at preserved (historical correlation intact)
+  → 422 for any non-grading_failed status
+  → 404 for another learner's submission
+```
+
+### Adding a new rubric criterion type
+
+`_MATCHERS` dict in `assignment_grading.py` maps type string → matcher function.
+`_RUBRIC_CRITERION_VALUE_VALIDATORS` in the authoring serializer validates the criterion's `value`
+at save time. Adding a new type is additive: register a matcher in the grader and a validator in
+the serializer — no other code changes needed.

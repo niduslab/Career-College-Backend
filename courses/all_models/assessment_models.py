@@ -8,9 +8,9 @@ from courses.all_models.content_models import SectionContent
 from courses.all_models.course_models import CourseSection, TimestampedModel
 
 
-# =============================================================================
-# Coding exercises — instructor-authored programming problems (Part 1: CRUD only)
-# =============================================================================
+# ============================================================
+# Coding exercises — instructor-authored programming problems 
+# ============================================================
 
 class CodingExercise(TimestampedModel):
     """Coding problem attached to a section; ordered via SectionContent."""

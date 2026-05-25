@@ -7,6 +7,7 @@ from django.db import IntegrityError
 from django.utils import timezone
 from datetime import timedelta
 from rest_framework import serializers
+from rest_framework_simplejwt.token_blacklist.models import BlacklistedToken, OutstandingToken
 from rest_framework_simplejwt.tokens import RefreshToken
 
 from authentication.utils import validate_custom_password_strength
@@ -19,6 +20,22 @@ from authentication.models import (
 )
 
 User = get_user_model()
+
+
+def _blacklist_all_tokens(user):
+    """Blacklist every outstanding refresh token for the user.
+
+    Called after password change/reset so stolen refresh tokens cannot
+    be used to issue new access tokens after the password is updated.
+    Errors are swallowed — a blacklist failure must not roll back a
+    successful password change.
+    """
+    try:
+        for token in OutstandingToken.objects.filter(user=user):
+            BlacklistedToken.objects.get_or_create(token=token)
+    except Exception:
+        pass
+
 
 # Generic email domains that are not allowed for partner institution registration
 GENERIC_EMAIL_DOMAINS = {
@@ -386,26 +403,24 @@ class ForgotPasswordSerializer(serializers.Serializer):
         try:
             email = attrs['email']
             user = User.objects.all_with_deleted().filter(email__iexact=email).first()
-            if not user:
-                raise serializers.ValidationError({'email': 'No account found with this email.'})
-            if user.is_deleted:
-                raise serializers.ValidationError({'email': 'This account has been deleted.'})
-            if not user.is_active:
-                raise serializers.ValidationError({'email': 'This account is inactive.'})
-            if user.is_restricted_by_admin:
-                raise serializers.ValidationError({'email': 'This account is restricted by admin.'})
-            if not user.is_email_verified:
-                raise serializers.ValidationError({'email': 'Email must be verified before password reset.'})
 
-            # Prevent rapid OTP spam for password reset.
-            if (
-                user.otp_created_at
-                and user.otp_purpose == 'password_reset'
-                and timezone.now() - user.otp_created_at < timedelta(seconds=30)
-            ):
-                raise serializers.ValidationError({'email': 'Please wait before requesting another OTP.'})
-
-            attrs['user'] = user
+            # Silently discard ineligible accounts — never reveal existence or state
+            # to the caller. attrs['user'] is absent when no OTP should be sent;
+            # save() treats that as a no-op and the view always returns the same 200.
+            eligible = (
+                user is not None
+                and not user.is_deleted
+                and user.is_active
+                and not user.is_restricted_by_admin
+                and user.is_email_verified
+                and not (
+                    user.otp_created_at
+                    and user.otp_purpose == 'password_reset'
+                    and timezone.now() - user.otp_created_at < timedelta(seconds=30)
+                )
+            )
+            if eligible:
+                attrs['user'] = user
             return attrs
         except serializers.ValidationError:
             raise
@@ -414,9 +429,10 @@ class ForgotPasswordSerializer(serializers.Serializer):
 
     def save(self, **kwargs):
         try:
-            user = self.validated_data['user']
-            user.generate_otp(purpose='password_reset')
-            return user
+            user = self.validated_data.get('user')
+            if user:
+                user.generate_otp(purpose='password_reset')
+            return user  # None when ineligible; caller must handle
         except serializers.ValidationError:
             raise
         except Exception:
@@ -487,6 +503,7 @@ class ResetPasswordSerializer(serializers.Serializer):
             user = self.validated_data['user']
             new_password = self.validated_data['new_password']
             user.update_password(new_password)
+            _blacklist_all_tokens(user)
             return user
         except serializers.ValidationError:
             raise
@@ -541,6 +558,7 @@ class ChangePasswordSerializer(serializers.Serializer):
             new_password = self.validated_data['new_password']
             user.set_password(new_password)
             user.save(update_fields=['password', 'updated_at'])
+            _blacklist_all_tokens(user)
             return user
         except serializers.ValidationError:
             raise

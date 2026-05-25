@@ -5,6 +5,7 @@ from django.core.exceptions import ValidationError
 from django.db import models
 from django.utils import timezone
 
+from core.validators import validate_image_file, validate_pdf_file
 from id_verification.utils import (
     id_document_front_path,
     id_document_back_path,
@@ -71,24 +72,28 @@ class IdentityVerification(models.Model):
     document_front = models.ImageField(
         upload_to=id_document_front_path,
         blank=True,
+        validators=[validate_image_file],
         help_text='Front side of the identity document',
     )
     document_back = models.ImageField(
         upload_to=id_document_back_path,
         blank=True,
         null=True,
+        validators=[validate_image_file],
         help_text='Back side of the identity document (if applicable)',
     )
     selfie = models.ImageField(
         upload_to=selfie_path,
         blank=True,
+        validators=[validate_image_file],
         help_text='Selfie holding the identity document',
     )
     resume = models.FileField(
         upload_to=resume_path,
         blank=True,
         null=True,
-        help_text='Resume / CV document (PDF recommended)',
+        validators=[validate_pdf_file],
+        help_text='Resume / CV document (PDF only)',
     )
 
     # ── Status lifecycle ──

@@ -7,7 +7,7 @@ items keep full detail until they ship.
 ## Audit Passes
 
 1. [Catalog Filtering & Sorting (opened 2026-05-21)](#1-catalog-filtering--sorting) — 9 of 10 actionable items closed; 1 blocked + 1 informational open.
-2. [System-Wide Security Sweep (opened 2026-05-21)](#2-system-wide-security-sweep) — 18 findings; all open. Three are critical and should be fixed before any non-local deployment.
+2. [System-Wide Security Sweep (opened 2026-05-21)](#2-system-wide-security-sweep) — 18 findings; 9 closed, 9 open.
 
 ---
 
@@ -134,7 +134,7 @@ explode row count and confuse pagination.
 # 2. System-Wide Security Sweep
 
 **Date opened:** 2026-05-21
-**Last updated:** 2026-05-21
+**Last updated:** 2026-05-25
 **Scope:** project settings, middleware stack, URL routing, permission
 classes, cookie helpers, auth/OTP/password views, and file upload
 handling. Not in scope: dependency CVEs (run `pip-audit` separately),
@@ -143,387 +143,85 @@ separately).
 
 ## TL;DR
 
-**18 findings.** Two are **critical** and should block any non-local
-deployment until fixed — most worryingly, CORS is silently broken (the
-middleware isn't in the stack), and OTPs leak to stdout via debug
-`print()` statements in three different views. A third issue (the
-`OTP_RATE_LIMIT` config footgun, SEC-H7) is High rather than Critical
-— it only manifests if the env var is missing, which `.env.example`
-documents correctly today. The rest are a mix of production-hardening
-gaps (HSTS, CSRF, cookie secure flags) and small hardening wins
-(file-upload validation, login throttling, email enumeration).
+18 findings. **9 closed** (2026-05-25 pass). **9 open**: 1 critical,
+5 medium, 2 low. All blockers for non-local deployment are resolved
+except SEC-C2 (3 commented-out `print()` lines that should be deleted).
 
-| ID | Severity | One-liner |
-|---|---|---|
-| [SEC-C1](#sec-c1-corsmiddleware-missing-from-the-middleware-stack) | Critical | `CorsMiddleware` not registered → CORS headers never emitted |
-| [SEC-C2](#sec-c2-otps-leaked-to-stdout-via-debug-print-statements) | Critical | `print(f"Generated OTP for {user.email}: {otp_code}")` in three views |
-| [SEC-H1](#sec-h1-no-cors-configuration-at-all) | High | No `CORS_ALLOWED_ORIGINS` / `CORS_ALLOW_CREDENTIALS` etc. defined anywhere |
-| [SEC-H2](#sec-h2-secret_key-has-an-unsafe-dev-fallback) | High | Missing env var → app runs with `'unsafe-dev-secret-key'` |
-| [SEC-H3](#sec-h3-debug-defaults-to-true) | High | Missing env var → `DEBUG=True` in production |
-| [SEC-H4](#sec-h4-no-throttling-on-login) | High | Password brute-force is wide open |
-| [SEC-H5](#sec-h5-forgot-password-confirms-account-existence) | High | Email enumeration via `/auth/password/forgot/` |
-| [SEC-H6](#sec-h6-no-file-type-validation-on-uploads) | High | XSS via `.html` masquerading as ID-doc / profile photo |
-| [SEC-H7](#sec-h7-otp_rate_limit-is-a-footgun-when-the-env-var-is-missing) | High | Missing `OTP_RATE_LIMIT` env var silently disables throttling (env is set today, but the default is unsafe) |
-| [SEC-M1](#sec-m1-otp-throttle-is-ip-based-not-email-based) | Medium | `AnonRateThrottle` lets attacker rotate IPs to brute one email |
-| [SEC-M2](#sec-m2-otp-throttle-default-is-very-permissive) | Medium | `20/min` against a 6-digit code |
-| [SEC-M3](#sec-m3-no-production-hardening-settings) | Medium | Missing HSTS / CSRF_COOKIE_SECURE / SECURE_PROXY_SSL_HEADER / CSRF_TRUSTED_ORIGINS |
-| [SEC-M4](#sec-m4-access-token-lifetime-is-12-hours) | Medium | Industry norm is 5–15 minutes; stolen access tokens valid for 12h |
-| [SEC-M5](#sec-m5-no-global-file-upload-size-limit) | Medium | Disk-fill DoS via large uploads |
-| [SEC-M6](#sec-m6-admin-served-at-default-admin-path) | Medium | Easily discoverable by automated scanners |
-| [SEC-M7](#sec-m7-changing-password-does-not-rotate-refresh-tokens) | Medium | Stolen refresh tokens survive a password change |
-| [SEC-L1](#sec-l1-requestloggingmiddleware-is-a-no-op-placeholder) | Low | Dead code; delete or implement |
-| [SEC-L2](#sec-l2-isadminorreadonly-permission-class-appears-unused) | Low | Dead permission class; delete or document |
+| ID | Severity | Status | One-liner |
+|---|---|---|---|
+| SEC-C1 | Critical | ✅ Closed | `CorsMiddleware` not registered → CORS headers never emitted |
+| SEC-C2 | Critical | ❌ Open | `print(OTP)` in 3 views — commented out but not deleted |
+| SEC-H1 | High | ✅ Closed | No `CORS_ALLOWED_ORIGINS` / `CORS_ALLOW_CREDENTIALS` defined |
+| SEC-H2 | High | ✅ Closed | `SECRET_KEY` unsafe dev fallback |
+| SEC-H3 | High | ✅ Closed | `DEBUG` defaulted to `True` |
+| SEC-H4 | High | ✅ Closed | No throttling on login endpoint |
+| SEC-H5 | High | ✅ Closed | Forgot-password confirmed account existence |
+| SEC-H6 | High | ✅ Closed | No file-type validation on uploads |
+| SEC-H7 | High | ✅ Closed | `OTP_RATE_LIMIT=None` default silently disabled throttling |
+| SEC-M1 | Medium | ❌ Open | OTP throttle is IP-based only — email-rotation bypass |
+| SEC-M2 | Medium | ❌ Open | OTP rate `20/min` too permissive |
+| SEC-M3 | Medium | ❌ Open | No HSTS / `CSRF_COOKIE_SECURE` / `SECURE_SSL_REDIRECT` / `CSRF_TRUSTED_ORIGINS` |
+| SEC-M4 | Medium | ❌ Open | Access token lifetime 12 hours |
+| SEC-M5 | Medium | ❌ Open | No global file upload size cap |
+| SEC-M6 | Medium | ❌ Open | Django admin at default `/admin/` path |
+| SEC-M7 | Medium | ✅ Closed | Password change/reset doesn't blacklist refresh tokens |
+| SEC-L1 | Low | ❌ Open | `RequestLoggingMiddleware` is a no-op placeholder |
+| SEC-L2 | Low | ❌ Open | `IsAdminOrReadOnly` permission class is unused dead code |
 
 ---
 
-## Critical
+## Closed issues
 
-### SEC-C1. `CorsMiddleware` missing from the middleware stack
-
-**Status: OPEN.**
-
-`corsheaders` is in `INSTALLED_APPS`
-([`settings.py:59`](career_college_backend/settings.py#L59)) but its
-middleware is **not** in `MIDDLEWARE`
-([`settings.py:71-80`](career_college_backend/settings.py#L71-L80)):
-
-```python
-MIDDLEWARE = [
-    'django.middleware.security.SecurityMiddleware',
-    'django.contrib.sessions.middleware.SessionMiddleware',
-    'django.middleware.common.CommonMiddleware',
-    'django.middleware.csrf.CsrfViewMiddleware',
-    'django.contrib.auth.middleware.AuthenticationMiddleware',
-    'allauth.account.middleware.AccountMiddleware',
-    'django.contrib.messages.middleware.MessageMiddleware',
-    'django.middleware.clickjacking.XFrameOptionsMiddleware',
-]
-```
-
-Without `corsheaders.middleware.CorsMiddleware` (and registered as the
-**top** middleware), no `Access-Control-Allow-*` headers are emitted on
-any response. Any browser-based frontend running on a different origin
-(localhost:3000, the production frontend, etc.) will hit a CORS error
-on every API call.
-
-**Impact:** the entire API is effectively unusable from any browser
-frontend on a different origin. The fact that an integration is shipping
-with this missing suggests either (a) the frontend is on the same origin
-as the API today, or (b) someone disabled CORS at the reverse-proxy
-layer — both are fragile.
-
-**Fix:**
-
-```python
-MIDDLEWARE = [
-    'corsheaders.middleware.CorsMiddleware',  # MUST be first
-    'django.middleware.security.SecurityMiddleware',
-    ...
-]
-```
-
-Pair with the SEC-H1 fix (define an allowlist).
+| ID | Severity | What was wrong | What shipped (2026-05-25) |
+|---|---|---|---|
+| SEC-C1 | Critical | `CorsMiddleware` missing from `MIDDLEWARE` | Added at position 2 in `MIDDLEWARE` (after `SecurityMiddleware`). [`settings.py:72`](career_college_backend/settings.py#L72) |
+| SEC-H1 | High | No CORS config — every preflight failed | `CORS_ALLOWED_ORIGINS = env.list(...)` defaulting to `FRONTEND_URL`; `CORS_ALLOW_CREDENTIALS = True`. [`settings.py:171-172`](career_college_backend/settings.py#L171-L172) |
+| SEC-H2 | High | `SECRET_KEY = os.getenv('SECRET_KEY', 'unsafe-dev-secret-key')` | `SECRET_KEY = env('SECRET_KEY')` — raises `ImproperlyConfigured` when missing. |
+| SEC-H3 | High | `DEBUG` defaulted to `True` | `environ.Env(DEBUG=(bool, False))` — requires opt-in via `.env`. |
+| SEC-H4 | High | No throttle on `UserLoginView` | `LoginThrottle(AnonRateThrottle)` added; rate from `LOGIN_RATE_LIMIT` env (default `10/min`). [`auth_views.py:15-17`](authentication/all_views/auth_views.py#L15-L17) |
+| SEC-H5 | High | `ForgotPasswordView` returned distinct 400 errors per account state — email enumeration | `ForgotPasswordSerializer.validate()` silently swallows all ineligible states; view always returns same 200 regardless. [`serializers.py:385`](authentication/serializers.py#L385), [`password_views.py:30`](authentication/all_views/password_views.py#L30) |
+| SEC-H6 | High | No `FileExtensionValidator` on any upload field | `core/validators.py` — `validate_image_file`, `validate_video_file`, `validate_pdf_file` (extension + magic bytes). Applied to all `ImageField`/`FileField` fields. Migrations `courses/0009`, `id_verification/0002`. |
+| SEC-H7 | High | `OTP_RATE_LIMIT = env('OTP_RATE_LIMIT', default=None)` — `getattr` trap silently disabled throttling | Changed to `default='20/min'` in `settings.py`. [`settings.py:269`](career_college_backend/settings.py#L269) |
+| SEC-M7 | Medium | Password change/reset didn't blacklist outstanding refresh tokens — stolen token survives password change | `_blacklist_all_tokens(user)` helper added; called in both `ResetPasswordSerializer.save()` and `ChangePasswordSerializer.save()`. [`serializers.py:24`](authentication/serializers.py#L24) |
 
 ---
+
+## Open issues
 
 ### SEC-C2. OTPs leaked to stdout via debug `print()` statements
 
-**Status: OPEN.**
+**Status: OPEN.** Statements are commented out but not deleted — delete them.
 
-Three different views print the generated OTP to stdout:
+Three views contain commented `print()` lines that should be removed entirely:
 
-- [`auth_views.py:50`](authentication/all_views/auth_views.py#L50) — registration
+- [`auth_views.py:59`](authentication/all_views/auth_views.py#L59) — registration
 - [`otp_views.py:98`](authentication/all_views/otp_views.py#L98) — resend OTP
-- [`password_views.py:45`](authentication/all_views/password_views.py#L45) — forgot password
+- [`password_views.py`](authentication/all_views/password_views.py) — forgot password (removed in H5 fix, verify)
 
 ```python
-print(f"Generated OTP for {user.email}: {otp_code}")  # Debugging log
+#print(f"Generated OTP for {user.email}: {otp_code}")  # Debugging log
 ```
 
-**Impact:** in any environment where `stdout` is captured (most
-production setups: systemd journal, Docker logs, Kubernetes logs, CI),
-this writes every registration, resend, and password-reset OTP — paired
-with the target email — into a log stream that's typically queryable by
-anyone with deploy access. OTPs are short-lived (2 minutes) but the
-window is long enough for an attacker with log access to take over an
-account during the verification window. And operationally, OTPs in logs
-violate any reasonable data-handling policy.
+**Why not closed:** commented code is not deleted code. A future dev uncommenting
+for debugging re-opens the leak. The lines should not exist.
 
-**Fix:** delete the three `print` statements. The OTP is already
-delivered via `send_otp_email`; logging it server-side serves no
-production purpose. For local development, `EMAIL_BACKEND=django.core.
-mail.backends.console.EmailBackend` already prints the full email
-(including OTP) to the console.
+**Fix:** delete all three lines. For local dev, `EMAIL_BACKEND=django.core.mail.backends.console.EmailBackend`
+already prints the full email (including OTP) to the console — no server-side print needed.
 
 ---
-
-## High
-
-### SEC-H1. No CORS configuration at all
-
-**Status: OPEN.** Pairs with SEC-C1.
-
-Even after adding `CorsMiddleware`, no allowlist is defined anywhere:
-
-- No `CORS_ALLOWED_ORIGINS`
-- No `CORS_ALLOW_ALL_ORIGINS`
-- No `CORS_ALLOW_CREDENTIALS`
-- No `CORS_ALLOWED_ORIGIN_REGEXES`
-
-Default behavior of `django-cors-headers` with no config: no origins are
-allowlisted, meaning even after fixing SEC-C1, every preflight will
-still fail.
-
-**Fix:** define an explicit allowlist driven by env:
-
-```python
-CORS_ALLOWED_ORIGINS = env_list('CORS_ALLOWED_ORIGINS', default='http://localhost:3000')
-CORS_ALLOW_CREDENTIALS = True  # needed because JWT is in HttpOnly cookies
-```
-
-Do not use `CORS_ALLOW_ALL_ORIGINS = True` — it is incompatible with
-`CORS_ALLOW_CREDENTIALS = True`, and even alone it's a bad default
-because the API serves authenticated user data.
-
----
-
-### SEC-H2. `SECRET_KEY` has an unsafe dev fallback
-
-**Status: OPEN.**
-
-[`settings.py:37`](career_college_backend/settings.py#L37):
-
-```python
-SECRET_KEY = os.getenv('SECRET_KEY', 'unsafe-dev-secret-key')
-```
-
-If the env var is missing in production, the app runs with a hardcoded,
-publicly-known secret. Any attacker can forge session cookies,
-password-reset tokens (which include `password_reset_token` random
-string but the JWT signing key is `SECRET_KEY`), and JWTs.
-
-**Impact:** total auth bypass if the fallback ever activates in prod —
-and the failure is silent (Django doesn't warn about a fallback that
-looks like a real secret).
-
-**Fix:** fail-loud when missing.
-
-```python
-SECRET_KEY = os.environ['SECRET_KEY']  # KeyError if missing
-```
-
-Or a more friendly variant:
-
-```python
-SECRET_KEY = os.getenv('SECRET_KEY')
-if not SECRET_KEY:
-    raise ImproperlyConfigured('SECRET_KEY env var is required.')
-```
-
-Same shape: better to crash on boot than to silently run insecurely.
-
----
-
-### SEC-H3. `DEBUG` defaults to `True`
-
-**Status: OPEN.**
-
-[`settings.py:40`](career_college_backend/settings.py#L40):
-
-```python
-DEBUG = env_bool('DEBUG', default=True)
-```
-
-`DEBUG=True` in production:
-
-- exposes full stack traces (with local variables) on every 500
-- exposes the SQL of failing queries
-- enables the `/admin/` debug toolbar features
-- skips `ALLOWED_HOSTS` enforcement
-- serves `MEDIA_URL` via the dev URL config ([`urls.py:29-30`](career_college_backend/urls.py#L29-L30))
-
-**Fix:** flip the default and let env opt-in:
-
-```python
-DEBUG = env_bool('DEBUG', default=False)
-```
-
----
-
-### SEC-H4. No throttling on login
-
-**Status: OPEN.**
-
-`UserLoginView` ([`auth_views.py:91`](authentication/all_views/auth_views.py#L91))
-has `permission_classes = [AllowAny]` and no `throttle_classes`. DRF's
-global `DEFAULT_THROTTLE_RATES` is also not set in `REST_FRAMEWORK`
-settings.
-
-**Impact:** an attacker can brute-force passwords at unlimited rate
-against any known email. There is no account-lockout, no captcha, no
-rate limit. With the existing default password validator (which accepts
-8-character passwords, common-password list excluded), an online dictionary
-attack is trivially feasible.
-
-**Fix:** add a per-IP + per-email throttle:
-
-```python
-class LoginRateThrottle(AnonRateThrottle):
-    scope = 'login'
-    rate = '5/min'  # per IP
-
-# In settings:
-REST_FRAMEWORK = {
-    ...
-    'DEFAULT_THROTTLE_RATES': {
-        'login': '5/min',
-        'otp': '5/min',
-        ...
-    },
-}
-```
-
-Belt-and-braces: also add a per-email key (custom throttle that hashes
-the email and stores attempts in cache) to prevent IP-rotation from
-bypassing the IP cap.
-
----
-
-### SEC-H5. Forgot-password confirms account existence
-
-**Status: OPEN.**
-
-Per the Postman testing guide and serializer behaviour, `ForgotPasswordView`
-returns `400` with `email - No account found with this email.` when the
-email isn't registered. That's account-existence enumeration.
-
-**Impact:** anyone can probe `/auth/password/forgot/` with a list of
-candidate emails to learn which addresses have accounts. Useful for
-credential-stuffing attacks (focus password lists on real accounts) and
-for confirming whether a target person uses your platform.
-
-**Fix:** return the same `200` "OTP sent" envelope regardless of
-whether the email exists. Internally, no-op when the user doesn't
-exist (or also no-op when the user exists but `is_email_verified=False`,
-matching the existing constraint). Do not change the response shape based
-on account existence.
-
----
-
-### SEC-H6. No file-type validation on uploads
-
-**Status: OPEN.**
-
-The codebase has at least four FileField/ImageField surfaces:
-
-- ID verification: `document_front`, `document_back`, `selfie`, `resume` (any file accepted)
-- Profile photo: `LearnerProfile.profile_photo`, `InstructorProfile.profile_photo`
-- Partner institution: `logo`, `cover_image`
-- Course: `thumbnail`, video lectures (raw video upload)
-
-Grep'd the project for `FileExtensionValidator`, `validate_image`, or
-content-type allowlist checks — **none exist** outside of the test
-fixtures and `mime_type` field population.
-
-**Impact:**
-
-1. **XSS via DEBUG mode media serving.** While `DEBUG=True` (default —
-   see SEC-H3), `urls.py:29-30` serves uploaded files through Django's
-   static helper with no `Content-Disposition`. An attacker uploading
-   `.html` with embedded JS as `document_front` and then sharing the
-   media URL with an admin reviewer (or a course-page viewer in case
-   of `thumbnail`) can XSS them.
-2. **Content-type spoofing.** A `.exe` named `selfie.jpg` can be
-   uploaded — `mime_type` is recorded from the client-supplied header,
-   not verified against the bytes.
-3. **Disk fill from arbitrary file types** (pairs with SEC-M5).
-
-**Fix:** add `FileExtensionValidator` to every `FileField`/`ImageField`
-and, for image fields, use `ImageField` (which validates the magic
-bytes via Pillow) rather than `FileField`. For videos and resumes,
-validate extension *and* run a magic-bytes sniff (e.g. `python-magic`)
-on save. For HTML/SVG protection in particular, never accept `.html`,
-`.svg`, `.htm` extensions on any user-content field.
-
----
-
-### SEC-H7. `OTP_RATE_LIMIT` is a footgun when the env var is missing
-
-**Status: OPEN.** (Not active in the current deployment — `.env` and
-`.env.example` both set `OTP_RATE_LIMIT=20/min`. Flagged because the
-code's behavior on missing config is silently insecure.)
-
-[`settings.py:250`](career_college_backend/settings.py#L250):
-
-```python
-OTP_RATE_LIMIT = os.getenv('OTP_RATE_LIMIT')
-```
-
-No default. If the env var is unset, `os.getenv` returns `None`, so
-`settings.OTP_RATE_LIMIT = None`.
-
-The throttle classes do:
-
-```python
-# otp_views.py:14 and password_views.py:19
-OTP_RATE_LIMIT = getattr(settings, 'OTP_RATE_LIMIT', '20/min')
-
-class OTPGenerateThrottle(AnonRateThrottle):
-    rate = OTP_RATE_LIMIT
-```
-
-The `'20/min'` default in `getattr` looks like a safe fallback but
-**does not fire** when the env var is missing — the settings attribute
-exists (as `None`), so `getattr` returns `None`. DRF's
-`SimpleRateThrottle.allow_request` treats `rate=None` as "no limit."
-Result: all three throttle classes (`OTPGenerateThrottle`,
-`OTPVerifyThrottle`, `ForgotPasswordThrottle`) silently become no-ops.
-
-**Why it's not Critical today:** your active `.env` has
-`OTP_RATE_LIMIT=20/min`, so throttling works. `.env.example` documents
-the same value, so a fresh clone that copies `.env.example` to `.env`
-is also safe.
-
-**Why it's still High:** anyone who builds their own `.env` from
-memory, or any commit that drops the line from `.env.example`, removes
-brute-force protection for OTP and forgot-password — with zero log
-output, zero startup warning, and zero response-surface indication.
-"Silent on misconfig" + "removes a security control" + "easy to miss
-in code review" is the textbook High-severity shape.
-
-**Fix:** put the default in `settings.py` itself, not in the view
-modules where it's a no-op trap. Make the floor `5/min` (per SEC-M2)
-and let env override.
-
-```python
-# settings.py
-OTP_RATE_LIMIT = os.getenv('OTP_RATE_LIMIT', '5/min')
-```
-
-Then the `getattr(..., '20/min')` lines in the view modules can be
-simplified to `settings.OTP_RATE_LIMIT` — no fallback needed, since
-settings is the single source of truth.
-
----
-
-## Medium
 
 ### SEC-M1. OTP throttle is IP-based, not email-based
 
 **Status: OPEN.**
 
-`OTPVerifyThrottle` extends `AnonRateThrottle`, which keys on client IP
-([DRF docs](https://www.django-rest-framework.org/api-guide/throttling/#anonratethrottle)).
-An attacker who controls multiple IPs (rotating proxies, datacenter
-egress pool) is not slowed by the per-IP limit.
+`OTPVerifyThrottle` extends `AnonRateThrottle`, which keys on client IP.
+An attacker rotating IPs bypasses the per-IP cap entirely.
 
-**Impact:** the OTP space is 10⁶ (6-digit numeric). With a 2-minute
-expiry and IP-rotation, an attacker can attempt many more codes than
-the rate limit suggests. The OTP is short-lived enough that this is
-mitigation-grade, not catastrophic — but the throttle should be keyed
-per-email instead.
+**Impact:** OTP space is 10⁶ (6-digit numeric). With IP rotation and a
+2-minute expiry window, an attacker can attempt far more codes than the
+rate limit implies.
 
-**Fix:** custom throttle keyed on the request payload's `email` field:
+**Fix:** custom throttle keyed on the `email` field from the request body:
 
 ```python
 class OTPEmailThrottle(SimpleRateThrottle):
@@ -541,15 +239,13 @@ class OTPEmailThrottle(SimpleRateThrottle):
 
 **Status: OPEN.**
 
-`20/min` against a 6-digit OTP gives 1,200 attempts/hour from a single
-IP. The OTP space is 1,000,000. With perfect IP rotation, the
-brute-force horizon is ~14 hours of sustained attempts to expect a hit.
-The 2-minute OTP expiry partially mitigates this (need to land within
-two minutes of OTP generation), but the math is tight.
+`20/min` against a 6-digit OTP = 1,200 attempts/hour per IP. OTP space
+is 1,000,000. With IP rotation the brute-force window is ~14 hours of
+sustained attempts. The 2-minute OTP expiry is the main mitigation — the
+throttle is not adding much at 20/min.
 
-**Fix:** tighten the default to `5/min` per IP, layered on top of the
-per-email throttle from SEC-M1. A legitimate user mistyping their OTP
-a handful of times in a row doesn't need more.
+**Fix:** tighten to `5/min` in settings, layered on top of the per-email
+throttle from SEC-M1.
 
 ---
 
@@ -559,19 +255,14 @@ a handful of times in a row doesn't need more.
 
 `settings.py` is missing all of:
 
-- `SECURE_HSTS_SECONDS` — no HSTS header
+- `SECURE_HSTS_SECONDS`
 - `SECURE_HSTS_INCLUDE_SUBDOMAINS`
 - `SECURE_HSTS_PRELOAD`
-- `SECURE_SSL_REDIRECT` — no automatic HTTP→HTTPS redirect at the Django layer
-- `SECURE_PROXY_SSL_HEADER` — Django won't know it's behind HTTPS termination, so `request.is_secure()` returns False and the `Secure` cookie attribute logic gets confused
+- `SECURE_SSL_REDIRECT`
+- `SECURE_PROXY_SSL_HEADER` — `request.is_secure()` returns False behind a reverse proxy
 - `SESSION_COOKIE_SECURE`
 - `CSRF_COOKIE_SECURE`
-- `CSRF_TRUSTED_ORIGINS` — required for cross-origin POST requests in Django 4.0+
-
-**Impact:** in a production HTTPS deployment behind a reverse proxy
-(standard architecture), `request.is_secure()` returns False, so any
-cookie/redirect logic relying on it misbehaves. Browsers also won't
-upgrade the next visit to HTTPS via HSTS.
+- `CSRF_TRUSTED_ORIGINS` — required for cross-origin POSTs in Django 4.0+
 
 **Fix:** add an environment-gated block:
 
@@ -581,14 +272,13 @@ if not DEBUG:
     SECURE_SSL_REDIRECT = True
     SESSION_COOKIE_SECURE = True
     CSRF_COOKIE_SECURE = True
-    SECURE_HSTS_SECONDS = 31_536_000   # 1 year
+    SECURE_HSTS_SECONDS = 31_536_000
     SECURE_HSTS_INCLUDE_SUBDOMAINS = True
     SECURE_HSTS_PRELOAD = True
-    CSRF_TRUSTED_ORIGINS = env_list('CSRF_TRUSTED_ORIGINS', default='')
+    CSRF_TRUSTED_ORIGINS = env.list('CSRF_TRUSTED_ORIGINS', default=[])
 ```
 
-Run `python manage.py check --deploy` to confirm all warnings are
-addressed.
+Run `python manage.py check --deploy` to confirm all warnings clear.
 
 ---
 
@@ -596,29 +286,23 @@ addressed.
 
 **Status: OPEN.**
 
-[`settings.py:155`](career_college_backend/settings.py#L155):
+[`settings.py:153`](career_college_backend/settings.py#L153):
 
 ```python
 'ACCESS_TOKEN_LIFETIME': timedelta(hours=12),
 ```
 
-Industry norm for JWT access tokens is **5–15 minutes**, paired with
-longer-lived refresh tokens. The reason: access tokens are bearer
-credentials sent on every request; they get captured by proxy logs,
-analytics tools, browser dev-tools screenshots, and so on. A 12-hour
-window of validity for any single leak is large.
+Industry norm is 5–15 minutes. Access tokens are bearer credentials on
+every request — captured by proxy logs, analytics, browser screenshots.
+12-hour validity window for any single leak is large.
 
-**Fix:** drop to 15 minutes. Refresh tokens already exist
-(7 days, with rotation + blacklist) — the frontend silently refreshes
-when the access token expires.
+**Fix:** drop to 15 minutes. Refresh tokens already exist (7 days, rotation
++ blacklist). Frontend must handle 401 → refresh → retry, which the
+cookie-helpers setup is already wired for.
 
 ```python
 'ACCESS_TOKEN_LIFETIME': timedelta(minutes=15),
 ```
-
-Note that this also requires the frontend to handle 401 retries via the
-refresh endpoint, which the current cookie-helpers setup is already
-wired for.
 
 ---
 
@@ -626,31 +310,23 @@ wired for.
 
 **Status: OPEN.**
 
-Django's `DATA_UPLOAD_MAX_MEMORY_SIZE` defaults to 2.5 MB (in-memory
-threshold), but the **disk-spill ceiling** (`DATA_UPLOAD_MAX_NUMBER_FIELDS`
-and `FILE_UPLOAD_MAX_MEMORY_SIZE` aside) is uncapped — anything larger
-streams to a temp file on disk. There is no application-level cap on
-how big a `video_file` (or any other upload) can be.
+No `DATA_UPLOAD_MAX_MEMORY_SIZE` or `FILE_UPLOAD_MAX_MEMORY_SIZE` cap.
+Django defaults allow files of any size to stream to disk as temp files.
 
-**Impact:** a malicious user can upload a 50 GB file to a video lecture
-endpoint, filling the disk and DoSing the service. Or upload many large
-files in parallel.
+**Impact:** malicious user uploads a 50 GB video → disk fills → DoS.
 
 **Fix:**
 
 ```python
-# settings.py
-DATA_UPLOAD_MAX_MEMORY_SIZE = 10 * 1024 * 1024     # 10 MB JSON/form bodies
+DATA_UPLOAD_MAX_MEMORY_SIZE = 10 * 1024 * 1024   # 10 MB
 FILE_UPLOAD_MAX_MEMORY_SIZE = 10 * 1024 * 1024
-# Per-field caps in serializers — videos can be larger:
 MAX_VIDEO_UPLOAD_MB = 500
 MAX_IMAGE_UPLOAD_MB = 5
 MAX_DOCUMENT_UPLOAD_MB = 10
 ```
 
-Validate per-field size in the upload serializers. Combine with
-nginx-level `client_max_body_size` at the reverse-proxy layer for
-defence in depth.
+Add per-field size validators in upload serializers. Combine with
+nginx `client_max_body_size` at the reverse-proxy layer.
 
 ---
 
@@ -664,117 +340,51 @@ defence in depth.
 path('admin/', admin.site.urls),
 ```
 
-Default path; trivially discoverable by automated scanners (every
-hour, every Django project gets probed at `/admin/`).
+Default path is probed by automated scanners constantly. Combined with
+brute-force attempts against admin credentials, it's the highest-value
+target on the deployment.
 
-**Impact:** doesn't make the admin vulnerable per se (admin login still
-requires valid credentials + CSRF), but it concentrates brute-force
-attempts there and makes for noisy logs. Combined with SEC-H4 (no login
-throttling), this is the highest-value brute-force target on the
-deployment.
+**Fix (defence in depth — all three, not just rename):**
 
-**Fix (defence in depth):**
-
-1. Rename: `path('back-office-x7k/', admin.site.urls)` (any non-obvious slug).
-2. Restrict by IP at the reverse-proxy layer (nginx `allow`/`deny`).
-3. Require staff users to use a separate admin domain (e.g. `admin.example.com`) with VPN-only access.
-
-Don't rely on rename alone — it's security through obscurity. Combine
-with throttling + IP allowlist for real protection.
+1. Rename to a non-obvious slug: `path('back-office-x7k/', admin.site.urls)`
+2. Restrict by IP at the reverse-proxy layer (nginx `allow`/`deny`)
+3. Require VPN-only access or a separate admin subdomain
 
 ---
-
-### SEC-M7. Changing password does not rotate refresh tokens
-
-**Status: OPEN.**
-
-`ChangePasswordView` ([`password_views.py:108`](authentication/all_views/password_views.py#L108))
-updates the password but does not blacklist existing refresh tokens for
-the user. The same applies to `ResetPasswordView`.
-
-**Impact:** if an attacker has stolen a refresh token, the legitimate
-user changing their password does **not** revoke the attacker's
-session. The attacker keeps issuing fresh access tokens via the refresh
-endpoint until the refresh token itself expires (7 days).
-
-**Fix:** in both `ChangePasswordSerializer.save()` and
-`ResetPasswordSerializer.save()`, blacklist all outstanding refresh
-tokens for the user:
-
-```python
-from rest_framework_simplejwt.token_blacklist.models import OutstandingToken, BlacklistedToken
-
-for outstanding in OutstandingToken.objects.filter(user=user):
-    BlacklistedToken.objects.get_or_create(token=outstanding)
-```
-
-Document this in the API testing guide ("changing your password logs
-you out of all other devices") so the UX is intentional.
-
----
-
-## Low
 
 ### SEC-L1. `RequestLoggingMiddleware` is a no-op placeholder
 
 **Status: OPEN (dead code).**
 
-[`core/middleware.py:4`](core/middleware.py#L4):
+[`core/middleware.py`](core/middleware.py) — class body calls
+`self.get_response(request)` and nothing else. Not registered in
+`MIDDLEWARE`.
 
-```python
-class RequestLoggingMiddleware:
-    """Simple request logger placeholder for future project-wide logging."""
-    def __init__(self, get_response):
-        self.get_response = get_response
-    def __call__(self, request):
-        response = self.get_response(request)
-        return response
-```
-
-The class does nothing. It's also not actually registered in
-`MIDDLEWARE`. Either implement it or delete the file.
+**Fix:** delete the file, or implement actual request logging.
 
 ---
 
-### SEC-L2. `IsAdminOrReadOnly` permission class appears unused
+### SEC-L2. `IsAdminOrReadOnly` permission class is unused
 
 **Status: OPEN (dead code).**
 
 [`core/permissions.py:20`](core/permissions.py#L20) declares
-`IsAdminOrReadOnly`, but a grep of the project finds no view importing
-or using it. Dead code in the security-critical permissions module is
-a smell — readers may assume it's in use somewhere and not audit
-removals.
+`IsAdminOrReadOnly`. No view imports or uses it.
 
-**Fix:** delete it, or if a planned-future use exists, add a comment
-naming the intended consumer.
+**Fix:** delete it. Dead code in the permissions module misleads readers
+into thinking it guards something.
 
 ---
 
 ## Out-of-scope follow-ups noticed during the sweep
 
-These don't merit a full finding but are worth surfacing:
-
-- **`ACCOUNT_EMAIL_VERIFICATION = 'none'`** ([`settings.py:196`](career_college_backend/settings.py#L196))
-  — allauth's email verification is disabled because the project rolls
-  its own OTP flow. Confirm that no allauth-driven login path exists
-  that bypasses the OTP check (a brief view audit of any allauth-mounted
-  URL should suffice — none appear in `urls.py` currently, so this is
-  likely fine).
-- **`EMAIL_USE_SSL = False`** is hardcoded ([`settings.py:244`](career_college_backend/settings.py#L244))
-  rather than env-driven, while `EMAIL_USE_TLS` is. Some mail providers
-  require SSL on port 465; promote to env-driven.
-- **`AUTHENTICATION_BACKENDS`** includes `ModelBackend` even though all
-  user-facing auth is JWT. ModelBackend is needed by the Django admin
-  and by allauth's social account flow. Confirm — and if you ever
-  remove admin or social, audit what depends on it.
-- **`OTP_RATE_LIMIT` is read at view-import time** (module-level
-  `getattr` in the throttle classes). Changing the env var requires a
-  process restart — fine, but document it.
-- **Dependency CVEs are out of scope here.** Run `pip-audit` (or
-  `safety check`) against the lock file as a separate pass.
-- **Static analysis is out of scope here.** Run `bandit -r .` for
-  Python-level security smell scanning as a separate pass.
-- **Secret scanning is out of scope here.** Run `git-secrets` or
-  `trufflehog` against the repo history; this audit only confirms
-  there's no `.env` checked into the working tree.
+- **`ACCOUNT_EMAIL_VERIFICATION = 'none'`** — allauth email verification
+  disabled because the project rolls its own OTP flow. Confirm no allauth
+  login path bypasses the OTP check (none visible in `urls.py` currently).
+- **`EMAIL_USE_SSL = False`** hardcoded rather than env-driven. Some mail
+  providers require SSL on port 465; promote to env-driven.
+- **`OTP_RATE_LIMIT` read at view-import time** — changing the env var
+  requires a process restart. Fine, but worth documenting.
+- **Dependency CVEs:** run `pip-audit` against the lock file separately.
+- **Static analysis:** run `bandit -r .` separately.
+- **Secret scanning:** run `git-secrets` or `trufflehog` against repo history.

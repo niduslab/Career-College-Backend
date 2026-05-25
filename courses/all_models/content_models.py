@@ -7,6 +7,7 @@ from django.contrib.contenttypes.models import ContentType as DjContentType
 from django.core.exceptions import ValidationError
 from django.db import models
 
+from core.validators import validate_video_file
 from courses.all_models.course_models import CourseSection, TimestampedModel
 
 
@@ -195,7 +196,7 @@ class VideoAsset(TimestampedModel):
         on_delete=models.CASCADE,
         related_name='video_assets',
     )
-    video_file = models.FileField(upload_to=video_asset_upload_path)
+    video_file = models.FileField(upload_to=video_asset_upload_path, validators=[validate_video_file])
     original_filename = models.CharField(max_length=255, blank=True, default='')
     mime_type = models.CharField(max_length=100, blank=True, default='')
     file_size = models.BigIntegerField(default=0)

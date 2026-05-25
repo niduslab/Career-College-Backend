@@ -1,8 +1,10 @@
 import logging
 
+from django.conf import settings
 from rest_framework import serializers, status
 from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.response import Response
+from rest_framework.throttling import AnonRateThrottle
 from rest_framework.views import APIView
 from rest_framework_simplejwt.exceptions import TokenError
 from rest_framework_simplejwt.serializers import TokenRefreshSerializer
@@ -16,6 +18,13 @@ from authentication.utils import send_otp_email
 from authentication.utils.cookie_helpers import delete_jwt_cookies, set_jwt_cookies
 
 logger = logging.getLogger(__name__)
+
+_LOGIN_RATE_LIMIT = getattr(settings, 'LOGIN_RATE_LIMIT', '10/min')
+
+
+class LoginThrottle(AnonRateThrottle):
+    scope = 'login'
+    rate = _LOGIN_RATE_LIMIT
 
 
 class UserRegistrationView(APIView):
@@ -47,7 +56,6 @@ class UserRegistrationView(APIView):
 
         # OTP is already generated in serializer.create(); only send it here.
         otp_code = user.otp_code
-        print(f"Generated OTP for {user.email}: {otp_code}")  # Debugging log
 
         try:
             email_sent = send_otp_email(user, otp_code, purpose='registration')
@@ -90,6 +98,7 @@ class UserRegistrationView(APIView):
 
 class UserLoginView(APIView):
     permission_classes = [AllowAny]
+    throttle_classes = [LoginThrottle]
 
     def post(self, request):
         serializer = UserLoginSerializer(data=request.data)

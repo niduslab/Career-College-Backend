@@ -95,7 +95,6 @@ class ResendOTPView(APIView):
             user = serializer.validated_data['user']
             purpose = serializer.validated_data.get('purpose', 'registration')
             otp_code = user.otp_code
-            print(f"Generated OTP for {user.email} (purpose={purpose}): {otp_code}")
 
             email_sent = send_otp_email(user, otp_code, purpose=purpose)
             if not email_sent:

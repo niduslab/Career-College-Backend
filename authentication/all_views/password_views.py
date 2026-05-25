@@ -39,36 +39,24 @@ class ForgotPasswordView(APIView):
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
+        _GENERIC_RESPONSE = Response(
+            {
+                'success': True,
+                'message': 'A password reset code has been sent to your email.',
+            },
+            status=status.HTTP_200_OK,
+        )
+
         try:
             user = serializer.save()
-            otp_code = user.otp_code
-            print(f"Generated OTP for password reset for {user.email}: {otp_code}")  # Debugging log
-            email_sent = send_otp_email(user, otp_code, purpose='password_reset')
-
-            if not email_sent:
-                logger.error(f'Password reset OTP email failed for {user.email}')
-                return Response(
-                    {
-                        'success': False,
-                        'message': 'OTP generated but failed to send email. Please try again later.',
-                    },
-                    status=status.HTTP_503_SERVICE_UNAVAILABLE,
-                )
-
-            return Response(
-                {
-                    'success': True,
-                    'message': 'Password reset OTP sent successfully.',
-                    'data': {
-                        'email': user.email,
-                        'purpose': 'password_reset',
-                        'note': 'OTP will expire in 2 minutes.',
-                    },
-                },
-                status=status.HTTP_200_OK,
-            )
+            if user:
+                email_sent = send_otp_email(user, user.otp_code, purpose='password_reset')
+                if not email_sent:
+                    logger.error(f'Password reset OTP email failed for user {user.id}')
         except serializers.ValidationError as exc:
             return Response({'success': False, 'errors': exc.detail}, status=status.HTTP_400_BAD_REQUEST)
+
+        return _GENERIC_RESPONSE
 
 
 class ResetPasswordView(APIView):

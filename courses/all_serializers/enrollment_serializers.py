@@ -130,7 +130,7 @@ class CatalogCourseDetailSerializer(serializers.ModelSerializer):
     """
 
     instructors = InstructorBriefSerializer(read_only=True, many=True)
-    partner_institutions = PartnerInstitutionBriefSerializer(read_only=True, many=True)
+    partner_institution = PartnerInstitutionBriefSerializer(read_only=True, allow_null=True)
     category = CourseCategoryBriefSerializer(read_only=True)
     learning_objectives = CourseLearningObjectiveSerializer(read_only=True, many=True)
     prerequisites = CoursePreRequisiteSerializer(read_only=True, many=True)
@@ -144,7 +144,7 @@ class CatalogCourseDetailSerializer(serializers.ModelSerializer):
         fields = [
             'id', 'title', 'slug', 'description', 'thumbnail', 'price',
             'language', 'level', 'duration_minutes',
-            'instructors', 'partner_institutions', 'category',
+            'instructors', 'partner_institution', 'category',
             'learning_objectives', 'prerequisites', 'audiences',
             'total_sections', 'total_content_items', 'sections',
             'published_at',
@@ -215,7 +215,7 @@ class _MyCourseMetaSerializer(serializers.ModelSerializer):
     """Course metadata block: identity, instructors, objectives, totals."""
 
     instructors = InstructorBriefSerializer(read_only=True, many=True)
-    partner_institutions = PartnerInstitutionBriefSerializer(read_only=True, many=True)
+    partner_institution = PartnerInstitutionBriefSerializer(read_only=True, allow_null=True)
     category = CourseCategoryBriefSerializer(read_only=True)
     learning_objectives = CourseLearningObjectiveSerializer(read_only=True, many=True)
     prerequisites = CoursePreRequisiteSerializer(read_only=True, many=True)
@@ -228,7 +228,7 @@ class _MyCourseMetaSerializer(serializers.ModelSerializer):
         fields = [
             'id', 'title', 'slug', 'description', 'thumbnail', 'price',
             'language', 'level', 'duration_minutes', 'status', 'is_published',
-            'published_at', 'instructors', 'partner_institutions', 'category',
+            'published_at', 'instructors', 'partner_institution', 'category',
             'learning_objectives', 'prerequisites', 'audiences',
             'total_sections', 'total_content_items',
         ]

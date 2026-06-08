@@ -96,7 +96,7 @@ class NidusCourse(models.Model):
         settings.AUTH_USER_MODEL,
         on_delete=models.CASCADE,
         related_name='created_nidus_courses',
-        help_text='Instructor who initiated the course.',
+        help_text='User who initiated the course (instructor or partner institution).',
     )
     instructors = models.ManyToManyField(
         settings.AUTH_USER_MODEL,
@@ -104,11 +104,13 @@ class NidusCourse(models.Model):
         blank=True,
         help_text='One course can have one or many instructors.',
     )
-    partner_institutions = models.ManyToManyField(
+    partner_institution = models.ForeignKey(
         PartnerInstitutionProfile,
+        on_delete=models.SET_NULL,
         related_name='nidus_courses',
         blank=True,
-        help_text='Partner institutions associated with this course.',
+        null=True,
+        help_text='Partner institution that owns this course. Set automatically when a partner institution creates the course.',
     )
     category = models.ForeignKey(
         CourseCategory,

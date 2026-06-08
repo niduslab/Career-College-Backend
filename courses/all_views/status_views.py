@@ -1,6 +1,7 @@
 import logging
 
 from django.core.exceptions import ValidationError
+from django.db.models import Q
 from django.shortcuts import get_object_or_404
 from rest_framework import status
 from rest_framework.parsers import FormParser, JSONParser, MultiPartParser
@@ -8,7 +9,7 @@ from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
-from core.permissions import IsPlatformAdmin, IsEmailVerified, IsVerifiedInstructor
+from core.permissions import IsPlatformAdmin, IsEmailVerified, IsVerifiedCourseCreator
 from courses.models import NidusCourse
 from courses.serializers import NidusCourseSerializer
 
@@ -19,15 +20,20 @@ class CourseSubmitForReviewView(APIView):
     """
     POST /api/v1/courses/{pk}/submit/
 
-    Instructor submits a draft course for admin review.
+    Instructor or partner institution submits a draft course for admin review.
     Validates course completeness before allowing the transition.
     """
 
-    permission_classes = [IsAuthenticated, IsEmailVerified, IsVerifiedInstructor]
+    permission_classes = [IsAuthenticated, IsEmailVerified, IsVerifiedCourseCreator]
     parser_classes = [JSONParser, FormParser, MultiPartParser]
 
     def post(self, request, pk):
-        course = get_object_or_404(NidusCourse, pk=pk, instructors=request.user)
+        course = get_object_or_404(
+            NidusCourse.objects.filter(
+                Q(instructors=request.user) | Q(created_by=request.user)
+            ).distinct(),
+            pk=pk,
+        )
 
         try:
             course.transition_to('under_review')
@@ -112,14 +118,19 @@ class CourseReworkView(APIView):
     """
     POST /api/v1/courses/{pk}/rework/
 
-    Instructor moves a rejected course back to draft for reworking.
+    Instructor or partner institution moves a rejected course back to draft for reworking.
     """
 
-    permission_classes = [IsAuthenticated, IsEmailVerified, IsVerifiedInstructor]
+    permission_classes = [IsAuthenticated, IsEmailVerified, IsVerifiedCourseCreator]
     parser_classes = [JSONParser, FormParser, MultiPartParser]
 
     def post(self, request, pk):
-        course = get_object_or_404(NidusCourse, pk=pk, instructors=request.user)
+        course = get_object_or_404(
+            NidusCourse.objects.filter(
+                Q(instructors=request.user) | Q(created_by=request.user)
+            ).distinct(),
+            pk=pk,
+        )
 
         try:
             course.transition_to('draft')
@@ -158,7 +169,12 @@ class CourseArchiveView(APIView):
         if request.user.is_staff or request.user.user_type == 'admin':
             course = get_object_or_404(NidusCourse, pk=pk)
         else:
-            course = get_object_or_404(NidusCourse, pk=pk, instructors=request.user)
+            course = get_object_or_404(
+                NidusCourse.objects.filter(
+                    Q(instructors=request.user) | Q(created_by=request.user)
+                ).distinct(),
+                pk=pk,
+            )
 
         try:
             course.transition_to('archived')
@@ -197,7 +213,12 @@ class CourseRestoreView(APIView):
         if request.user.is_staff or request.user.user_type == 'admin':
             course = get_object_or_404(NidusCourse, pk=pk)
         else:
-            course = get_object_or_404(NidusCourse, pk=pk, instructors=request.user)
+            course = get_object_or_404(
+                NidusCourse.objects.filter(
+                    Q(instructors=request.user) | Q(created_by=request.user)
+                ).distinct(),
+                pk=pk,
+            )
 
         try:
             course.transition_to('draft')

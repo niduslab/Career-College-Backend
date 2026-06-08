@@ -6,7 +6,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-A Django REST Framework backend for a course marketplace platform (Coursera-like). Users can be learners, instructors, partner institutions, or admins. Instructors create courses with mixed content (lectures, quizzes, coding exercises), upload videos that are async-transcoded to HLS, and must pass identity verification before publishing.
+A Django REST Framework backend for a course marketplace platform (Coursera-like). Users can be learners, instructors, partner institutions, or admins. Instructors **and verified partner institutions** create courses with mixed content (lectures, quizzes, coding exercises), upload videos that are async-transcoded to HLS, and must pass identity verification before publishing. Partner institutions own the course (`created_by`) and add instructors; instructors can edit content but not the roster.
 
 ## Development Setup
 
@@ -70,7 +70,7 @@ Four distinct course detail surfaces, split by audience and concern. Do not coll
 | `GET /catalog/<slug>/` (`CatalogCourseDetailView`, `AllowAny`) | Guests / unenrolled | Marketing page — course metadata + full curriculum outline (titles, durations) + preview lecture HLS URLs only for `Lecture.is_preview=True`. Stays as a one-shot tree because catalog browsing is a guest workflow and SEO benefits from a single page render. |
 | `GET /my-courses/<slug>/` (`MyCoursesDetailView`, `IsEmailVerified`) | Enrolled learner OR course's own instructor | **Slim metadata only**: title, description, instructors, learning objectives/prerequisites/audiences, totals, plus the caller's enrollment block (progress %, completed_at, last_accessed_at) and `is_instructor` flag. Curriculum tree and per-item content **do not** live here — fetch them from `/learn/<slug>/curriculum/` and `/learn/<thing>/<id>/`. |
 | `GET /learn/<slug>/curriculum/` (`LearnerCurriculumView`) | Same as above | Sidebar curriculum outline (sections + items, lightweight). See *Learner Consumption Endpoints* below. |
-| `GET /<int:pk>/` (`CourseDetailView`, `IsVerifiedInstructor`) | Course's own instructor | Authoring/edit surface (GET + PATCH metadata). Curriculum edits flow through `/sections/`, `/lectures/`, `/contents/`. |
+| `GET /<int:pk>/` (`CourseDetailView`, `IsVerifiedCourseCreator`) | Course's own instructor OR partner institution owner | Authoring/edit surface (GET + PATCH metadata). Curriculum edits flow through `/sections/`, `/lectures/`, `/contents/`. |
 
 The Udemy-style course-player page is composed on the frontend from `/my-courses/<slug>/` (header card) + `/learn/<slug>/curriculum/` (sidebar) + `/learn/<thing>/<id>/` (per-item content). Do not bring back the one-shot consumption tree on `/my-courses/<slug>/` — it scales poorly for large courses and duplicates the curriculum endpoint's job.
 
@@ -157,6 +157,8 @@ Custom DRF permission classes used across views:
 - `IsEmailVerified` — gates most authenticated endpoints
 - `IsInstructorUser` — `user_type == instructor`
 - `IsVerifiedInstructor` — instructor with approved `IdentityVerification`
+- `IsVerifiedPartnerInstitution` — partner institution with `is_verified=True` and `is_active=True` on their profile
+- `IsVerifiedCourseCreator` — passes for either `IsVerifiedInstructor` OR `IsVerifiedPartnerInstitution`; used on all course authoring endpoints
 - `IsCourseInstructor` — object-level: user is in `course.instructors.all()`
 
 **All permission classes must live in `core/permissions.py`.** Do not define permissions inside individual app directories. If a permission is specific to one app today but could plausibly guard another resource tomorrow, it still belongs in `core/`.

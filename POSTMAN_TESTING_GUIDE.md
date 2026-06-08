@@ -1492,7 +1492,7 @@ python manage.py createsuperuser
 
 # Course Authoring (Instructor)
 
-> All endpoints in Sections 26–34 require a **verified-instructor** JWT. Non-owners get `404` (not `403`) so the existence of the course is not leaked.
+> All endpoints in Sections 26–34 require a **verified-instructor or verified-partner-institution** JWT (`IsVerifiedCourseCreator`). Non-owners get `404` (not `403`) so the existence of the course is not leaked. Partner institution users can create, list, and edit their own courses; co-instructors can read and edit content but cannot modify the instructor roster.
 
 ## 26. Courses
 
@@ -1539,7 +1539,7 @@ Save `data.id` as `{{course_id}}`.
 { "title": "Python Backend Bootcamp (Updated)", "price": "89.99" }
 ```
 
-> `status` and `rejection_reason` are not writable via PATCH. Use the dedicated transition endpoints in Section 34.
+> `status`, `rejection_reason`, and `partner_institution` are not writable via POST or PATCH. `partner_institution` is auto-set from the creating user's profile when a partner institution account creates a course. Use the dedicated transition endpoints in Section 34 for status changes.
 
 ---
 
@@ -2016,7 +2016,7 @@ Positions are reassigned to match the order of `ordered_ids`.
 ### 32.9 Auth & Ownership Error Cases
 
 - Unauthenticated create → 401.
-- Unverified instructor → 403: `"Only verified instructors can perform this action."`
+- Unverified instructor → 403: `"Only verified instructors or verified partner institutions can perform this action."`
 - Learner trying to create → 403.
 - Verified instructor not on the course → 404 (existence not leaked).
 - Cross-instructor read → 404.
@@ -2120,7 +2120,7 @@ Repeating POST with `"position": 1` → 400: `"A test case already exists at tha
 **POST** `{{base_url}}/courses/{{course_id}}/submit/`
 
 **Body:** *(empty)*
-**Headers:** verified instructor JWT.
+**Headers:** verified instructor **or** verified partner institution JWT.
 
 **Expected 200:**
 ```json
@@ -2170,7 +2170,7 @@ Returns 400 with an `errors` dict if completeness checks fail (missing title/des
 **POST** `{{base_url}}/courses/{{course_id}}/rework/`
 
 **Body:** *(empty)*
-**Headers:** verified instructor JWT (must be on the course).
+**Headers:** verified instructor **or** verified partner institution JWT (must be owner or assigned instructor).
 
 **Expected 200:**
 ```json
@@ -2188,7 +2188,7 @@ Only works when current status is `rejected`. Any other status → 400.
 **POST** `{{base_url}}/courses/{{course_id}}/archive/`
 
 **Body:** *(empty)*
-**Headers:** instructor or admin JWT.
+**Headers:** verified instructor, verified partner institution, or admin JWT.
 
 **Expected 200:**
 ```json
@@ -2400,7 +2400,7 @@ No Authorization header needed.
         "instructors": [
             { "id": 2, "full_name": "Jane Smith", "email": "jane@example.com" }
         ],
-        "partner_institutions": [],
+        "partner_institution": null,
         "category": { "id": 1, "name": "Backend Development", "slug": "backend" },
         "learning_objectives": [
             { "id": 1, "text": "Build REST APIs with Django REST Framework." }
@@ -2592,7 +2592,7 @@ Ordered by `last_accessed_at` (most recent first), then `created_at`. Only the c
             "is_published": true,
             "published_at": "2026-04-22T11:00:00Z",
             "instructors": [],
-            "partner_institutions": [],
+            "partner_institution": null,
             "category": {},
             "learning_objectives": [],
             "prerequisites": [],

@@ -427,3 +427,97 @@ class CourseEditLockTests(CourseLifecycleTestBase):
         self._set_status('under_review')
         response = self.client.get(self._detail_url())
         self.assertNotEqual(response.status_code, status.HTTP_422_UNPROCESSABLE_ENTITY)
+
+
+# ---------------------------------------------------------------------------
+# CourseOwnerProtectionTests
+# ---------------------------------------------------------------------------
+
+class CourseOwnerProtectionTests(CourseLifecycleTestBase):
+    """Owner-only guards: only created_by can modify roster or partner institutions."""
+
+    @classmethod
+    def setUpTestData(cls):
+        super().setUpTestData()
+        cls.third_instructor = cls._make_instructor(
+            email='lc_carol@example.com', full_name='Carol Third', verified=True
+        )
+
+    def setUp(self):
+        super().setUp()
+        # give other_instructor access to the course so _get_course resolves for them
+        self.course.instructors.add(self.other_instructor)
+
+    # ---- co-instructor roster restrictions ----------------------------------
+
+    def test_coinstructor_cannot_remove_owner_from_roster(self):
+        self.client.force_authenticate(user=self.other_instructor)
+        response = self.client.patch(
+            self._detail_url(),
+            {'instructors': [self.other_instructor.pk]},
+            format='json',
+        )
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertTrue(response.data['success'])
+        instructor_ids = {i['id'] for i in response.data['data']['instructors']}
+        self.assertIn(self.instructor.pk, instructor_ids)
+
+    def test_coinstructor_cannot_add_third_instructor_to_roster(self):
+        self.client.force_authenticate(user=self.other_instructor)
+        response = self.client.patch(
+            self._detail_url(),
+            {'instructors': [self.instructor.pk, self.other_instructor.pk, self.third_instructor.pk]},
+            format='json',
+        )
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        instructor_ids = {i['id'] for i in response.data['data']['instructors']}
+        self.assertNotIn(self.third_instructor.pk, instructor_ids)
+
+    def test_coinstructor_title_update_succeeds_despite_instructors_field(self):
+        """Co-instructor can edit content fields even when instructor list is in the payload."""
+        self.client.force_authenticate(user=self.other_instructor)
+        response = self.client.patch(
+            self._detail_url(),
+            {'title': 'Co-instructor Title Update', 'instructors': [self.other_instructor.pk]},
+            format='json',
+        )
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data['data']['title'], 'Co-instructor Title Update')
+        instructor_ids = {i['id'] for i in response.data['data']['instructors']}
+        self.assertIn(self.instructor.pk, instructor_ids)
+
+    # ---- owner roster operations --------------------------------------------
+
+    def test_owner_can_add_instructor_to_roster(self):
+        response = self.client.patch(
+            self._detail_url(),
+            {'instructors': [self.instructor.pk, self.third_instructor.pk]},
+            format='json',
+        )
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        instructor_ids = {i['id'] for i in response.data['data']['instructors']}
+        self.assertIn(self.third_instructor.pk, instructor_ids)
+
+    def test_owner_always_re_added_if_omitted_from_patch(self):
+        """Owner cannot accidentally remove themselves from the roster."""
+        response = self.client.patch(
+            self._detail_url(),
+            {'instructors': [self.other_instructor.pk]},
+            format='json',
+        )
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        instructor_ids = {i['id'] for i in response.data['data']['instructors']}
+        self.assertIn(self.instructor.pk, instructor_ids)
+
+    # ---- created_by immutability --------------------------------------------
+
+    def test_created_by_is_immutable_via_patch(self):
+        original_owner_id = self.course.created_by_id
+        response = self.client.patch(
+            self._detail_url(),
+            {'created_by': self.other_instructor.pk},
+            format='json',
+        )
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.course.refresh_from_db()
+        self.assertEqual(self.course.created_by_id, original_owner_id)

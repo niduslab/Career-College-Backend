@@ -19,7 +19,7 @@ def get_publishable_courses() -> QuerySet[NidusCourse]:
     return NidusCourse.objects.filter(
         status=NidusCourse.CourseStatus.PUBLISHED,
         is_published=True,
-    ).prefetch_related('instructors', 'partner_institutions')
+    ).select_related('partner_institution').prefetch_related('instructors')
 
 
 def get_course_sections(course: NidusCourse) -> QuerySet[CourseSection]:

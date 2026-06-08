@@ -1,4 +1,5 @@
 from django.db import IntegrityError
+from django.db.models import Q
 from django.shortcuts import get_object_or_404
 from rest_framework import status
 from rest_framework.permissions import IsAuthenticated
@@ -6,9 +7,8 @@ from rest_framework.response import Response
 from rest_framework.views import APIView
 
 from core.pagination import StandardResultsSetPagination
-from core.permissions import IsEmailVerified, IsVerifiedInstructor
+from core.permissions import IsEmailVerified, IsVerifiedCourseCreator
 from courses.models import NidusCourse
-from courses.selectors import get_instructor_courses
 from courses.serializers import (
     NidusCourseCreateUpdateSerializer,
     NidusCourseSerializer,
@@ -17,12 +17,19 @@ from courses.utils import guard_editable
 
 
 class CourseListAPIView(APIView):
-    """GET list authenticated instructor courses."""
+    """GET list courses where authenticated user is owner or assigned instructor."""
 
-    permission_classes = [IsAuthenticated, IsEmailVerified, IsVerifiedInstructor]
+    permission_classes = [IsAuthenticated, IsEmailVerified, IsVerifiedCourseCreator]
 
     def get(self, request):
-        queryset = get_instructor_courses(request.user)
+        queryset = (
+            NidusCourse.objects
+            .select_related('created_by', 'category', 'partner_institution')
+            .prefetch_related('instructors', 'learning_objectives', 'prerequisites', 'audiences')
+            .filter(Q(instructors=request.user) | Q(created_by=request.user))
+            .distinct()
+            .order_by('-created_at')
+        )
         paginator = StandardResultsSetPagination()
         page = paginator.paginate_queryset(queryset, request)
         serializer = NidusCourseSerializer(page, many=True)
@@ -34,7 +41,7 @@ class CourseListAPIView(APIView):
 class CourseCreateAPIView(APIView):
     """POST create a new Nidus course."""
 
-    permission_classes = [IsAuthenticated, IsEmailVerified, IsVerifiedInstructor]
+    permission_classes = [IsAuthenticated, IsEmailVerified, IsVerifiedCourseCreator]
 
     def post(self, request):
         serializer = NidusCourseCreateUpdateSerializer(data=request.data, context={'request': request})
@@ -63,22 +70,19 @@ class CourseCreateAPIView(APIView):
 
 
 class CourseDetailView(APIView):
-    """Retrieve and partially update a course where user is an instructor."""
+    """Retrieve and partially update a course where user is owner or assigned instructor."""
 
-    permission_classes = [IsAuthenticated, IsEmailVerified, IsVerifiedInstructor]
+    permission_classes = [IsAuthenticated, IsEmailVerified, IsVerifiedCourseCreator]
 
     def _get_course(self, request, pk):
-        return get_object_or_404(
-            NidusCourse.objects.select_related('category').prefetch_related(
-                'instructors',
-                'partner_institutions',
-                'learning_objectives',
-                'prerequisites',
-                'audiences',
-            ),
-            pk=pk,
-            instructors=request.user,
+        qs = (
+            NidusCourse.objects
+            .select_related('category', 'partner_institution')
+            .prefetch_related('instructors', 'learning_objectives', 'prerequisites', 'audiences')
+            .filter(Q(instructors=request.user) | Q(created_by=request.user))
+            .distinct()
         )
+        return get_object_or_404(qs, pk=pk)
 
     def get(self, request, pk):
         course = self._get_course(request, pk)

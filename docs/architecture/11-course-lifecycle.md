@@ -418,6 +418,19 @@ All `ValidationError` exceptions bubble up to the view, which converts them to `
 | Rework | `IsAuthenticated`, `IsEmailVerified`, `IsVerifiedInstructor` | `instructors=request.user` |
 | Archive | `IsAuthenticated`, `IsEmailVerified` | admin: any course; instructor: own course |
 
+### Owner vs co-instructor distinction
+
+All instructors in `course.instructors` share the same permission classes and query-level access. The distinction between the **owner** (`created_by`) and **co-instructors** is enforced inside the serializer, not at the permission layer:
+
+| Sub-action | Owner | Co-instructor |
+|------------|-------|---------------|
+| Edit title, description, price, sections, lectures, quizzes, etc. | Yes | Yes |
+| Modify instructor roster (`instructors` field in PATCH) | Yes | Silently ignored |
+| Change partner institutions (`partner_institutions` field in PATCH) | Yes | Silently ignored |
+| Submit for review, rework, archive, restore | Yes | Yes |
+
+See `13-multi-instructor-collaboration.md` for the full enforcement details.
+
 ---
 
 ## Full end-to-end request sequence

@@ -73,8 +73,8 @@ class NidusCourseAdmin(admin.ModelAdmin):
     list_filter = ('status', 'is_published', 'level', 'language', 'category')
     search_fields = ('title', 'slug', 'created_by__email', 'created_by__full_name')
     readonly_fields = ('created_at', 'updated_at', 'published_at')
-    raw_id_fields = ('created_by',)
-    filter_horizontal = ('instructors', 'partner_institutions')
+    raw_id_fields = ('created_by', 'partner_institution')
+    filter_horizontal = ('instructors',)
     inlines = (CourseLearningObjectiveInline, CoursePreRequisiteInline, CourseAudienceInline)
 
 

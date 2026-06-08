@@ -75,9 +75,8 @@ class CatalogCourseDetailView(APIView):
 
     def get(self, request, slug):
         course = get_object_or_404(
-            NidusCourse.objects.select_related('created_by', 'category').prefetch_related(
+            NidusCourse.objects.select_related('created_by', 'category', 'partner_institution').prefetch_related(
                 'instructors',
-                'partner_institutions',
                 'learning_objectives',
                 'prerequisites',
                 'audiences',
@@ -210,9 +209,8 @@ class MyCoursesDetailView(APIView):
 
     def get(self, request, slug):
         course = get_object_or_404(
-            NidusCourse.objects.select_related('created_by', 'category').prefetch_related(
+            NidusCourse.objects.select_related('created_by', 'category', 'partner_institution').prefetch_related(
                 'instructors',
-                'partner_institutions',
                 'learning_objectives',
                 'prerequisites',
                 'audiences',

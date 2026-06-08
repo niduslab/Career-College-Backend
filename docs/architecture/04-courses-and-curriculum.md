@@ -50,6 +50,17 @@ The top-level course entity.
 **IMPORTANT:** Never set `status` directly. Always call `NidusCourse.transition_to(new_status)`.
 See `11-course-lifecycle.md` for the full state machine and completeness checks.
 
+### Multi-instructor support
+
+A course has two instructor-related fields with different semantics:
+
+- `created_by` — the **owner**. Set once at creation, immutable via the API. Only the owner can modify the instructor list or partner institutions.
+- `instructors` — **all co-authors** (M2M). Any instructor in this set can read and edit course content (sections, lectures, quizzes, assignments, videos). The owner is always a member of this set.
+
+Roster changes (adding/removing co-instructors, changing partner institutions) are restricted to the owner inside `NidusCourseCreateUpdateSerializer.update()`. A co-instructor PATCH that includes these fields has them silently ignored — the other fields in the payload still apply.
+
+See `13-multi-instructor-collaboration.md` for the full role table, enforcement details, and future extensions.
+
 ### Supporting text tables
 
 Normalized 1-to-many off `NidusCourse`. Support independent autosave from a course builder UI:

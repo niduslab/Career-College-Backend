@@ -16,3 +16,16 @@ def guard_editable(course):
             status=status.HTTP_422_UNPROCESSABLE_ENTITY,
         )
     return None
+
+
+def guard_owner(course, user):
+    """Return a 403 Response if user is not the course owner, else None."""
+    if course.created_by != user:
+        return Response(
+            {
+                'success': False,
+                'message': 'Only the course owner can perform this action.',
+            },
+            status=status.HTTP_403_FORBIDDEN,
+        )
+    return None

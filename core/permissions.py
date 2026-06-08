@@ -1,6 +1,6 @@
 """Reusable DRF permission classes used across apps."""
 
-from authentication.models import InstructorProfile
+from authentication.models import InstructorProfile, PartnerInstitutionProfile
 from rest_framework.permissions import BasePermission
 
 
@@ -91,3 +91,29 @@ class IsLearnerUser(BasePermission):
     def has_permission(self, request, view):
         user = request.user
         return bool(user and user.is_authenticated and user.user_type == 'learner')
+
+
+class IsVerifiedPartnerInstitution(BasePermission):
+    """Allow access only to partner institutions approved by an admin."""
+
+    message = 'Only verified partner institutions can perform this action.'
+
+    def has_permission(self, request, view):
+        user = request.user
+        if not user or not user.is_authenticated or user.user_type != 'partner_institution':
+            return False
+        return PartnerInstitutionProfile.objects.filter(
+            user_id=user.id, is_verified=True, is_active=True
+        ).exists()
+
+
+class IsVerifiedCourseCreator(BasePermission):
+    """Passes if user is a verified instructor OR a verified partner institution."""
+
+    message = 'Only verified instructors or verified partner institutions can perform this action.'
+
+    def has_permission(self, request, view):
+        return (
+            IsVerifiedInstructor().has_permission(request, view)
+            or IsVerifiedPartnerInstitution().has_permission(request, view)
+        )

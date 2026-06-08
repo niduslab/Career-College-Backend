@@ -16,6 +16,7 @@ This folder is a quick-start map for new backend developers.
 10. `10-assignments-crud.md` — assignment CRUD + async auto-grading + RubricGrader
 11. `11-course-lifecycle.md` — course status state machine, completeness checks, admin review
 12. `12-enrollment.md` — enrollment, progress calculation, learner consumption endpoints
+13. `13-multi-instructor-collaboration.md` — owner vs co-instructor roles, roster protection, guard_owner utility
 
 ## Cross-cutting design docs (outside this folder)
 

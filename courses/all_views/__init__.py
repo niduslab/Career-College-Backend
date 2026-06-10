@@ -57,6 +57,11 @@ from courses.all_views.invite_views import (
     InviteDeclineView,
     MyInviteListView,
 )
+from courses.all_views.certificate_views import (
+    CertificateDownloadView,
+    CertificateVerifyView,
+    LearnerCertificateView,
+)
 from courses.all_views.content_views import (
     CourseAudienceDetailAPIView,
     CourseAudienceListCreateAPIView,
@@ -142,4 +147,7 @@ __all__ = [
     'LearnerCodingTaskStatusView',
     'LearnerCodingSubmissionDetailView',
     'LearnerCodingSubmissionRetryView',
+    'LearnerCertificateView',
+    'CertificateVerifyView',
+    'CertificateDownloadView',
 ]

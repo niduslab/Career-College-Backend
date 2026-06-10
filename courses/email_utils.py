@@ -7,6 +7,56 @@ from django.template.loader import render_to_string
 logger = logging.getLogger(__name__)
 
 
+def _certificate_urls(certificate_uid):
+    base = getattr(settings, 'FRONTEND_URL', 'http://localhost:3000').rstrip('/')
+    return {
+        'view_url': f'{base}/certificates/{certificate_uid}',
+        'download_url': f'{base}/api/v1/courses/certificates/{certificate_uid}/download/',
+    }
+
+
+def send_certificate_email(certificate):
+    """Send a course-completion congratulations email with the certificate link."""
+    user = certificate.enrollment.user
+    urls = _certificate_urls(certificate.certificate_uid)
+
+    html_message = render_to_string(
+        'emails/certificate.html',
+        {
+            'learner_name': user.full_name,
+            'course_title': certificate.course_title,
+            'issued_at': certificate.issued_at.strftime('%B %d, %Y'),
+            'certificate_uid': str(certificate.certificate_uid),
+            **urls,
+        },
+    )
+    plain_message = (
+        f"Congratulations, {user.full_name}!\n\n"
+        f'You have successfully completed "{certificate.course_title}" on Career College.\n\n'
+        f"View your certificate: {urls['view_url']}\n\n"
+        f"Career College Team"
+    )
+    try:
+        send_mail(
+            subject=f'Congratulations! You completed "{certificate.course_title}"',
+            message=plain_message,
+            from_email=settings.DEFAULT_FROM_EMAIL,
+            recipient_list=[user.email],
+            html_message=html_message,
+            fail_silently=False,
+        )
+        print(f"Sent certificate email to {user.email} for certificate {certificate.pk}")
+    except Exception as exc:
+        logger.error(
+            'send_certificate_email: failed to send to %s (certificate=%s): %s',
+            user.email,
+            certificate.pk,
+            exc,
+            exc_info=True,
+        )
+        raise
+
+
 def _invite_urls(token):
     base = getattr(settings, 'FRONTEND_URL', 'http://localhost:3000').rstrip('/')
     return {'view_url': f'{base}/invites/{str(token)}'}

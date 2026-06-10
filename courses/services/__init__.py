@@ -55,6 +55,11 @@ from courses.services.learner_service import (
     submit_quiz_attempt,
     upsert_watch_progress,
 )
+from courses.services.certificate_service import (
+    get_certificate_by_uid,
+    get_certificate_for_learner,
+    issue_certificate,
+)
 
 __all__ = [
     'InviteError',
@@ -102,4 +107,7 @@ __all__ = [
     'retry_coding_submission',
     'run_coding_exercise',
     'submit_coding_exercise',
+    'get_certificate_by_uid',
+    'get_certificate_for_learner',
+    'issue_certificate',
 ]

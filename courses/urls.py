@@ -1,6 +1,9 @@
 from django.urls import path
 
 from courses.views import (
+    CertificateDownloadView,
+    CertificateVerifyView,
+    LearnerCertificateView,
     CourseInstructorInviteCreateView,
     CourseInstructorInviteListView,
     CourseInstructorInviteRevokeView,
@@ -82,6 +85,13 @@ urlpatterns = [
     path('<slug:slug>/unenroll/', CourseUnenrollView.as_view(), name='course-unenroll'),
     path('my-courses/', MyCoursesListView.as_view(), name='my-courses-list'),
     path('my-courses/<slug:slug>/', MyCoursesDetailView.as_view(), name='my-courses-detail'),
+    path('my-courses/<slug:slug>/certificate/', LearnerCertificateView.as_view(), name='my-courses-certificate'),
+
+    # -------------------------------------------------------------------------
+    # Certificate verification and download (public)
+    # -------------------------------------------------------------------------
+    path('certificates/<uuid:certificate_uid>/verify/', CertificateVerifyView.as_view(), name='certificate-verify'),
+    path('certificates/<uuid:certificate_uid>/download/', CertificateDownloadView.as_view(), name='certificate-download'),
 
     # -------------------------------------------------------------------------
     # Learner consumption (Phase 1 — curriculum outline, lecture detail, progress)

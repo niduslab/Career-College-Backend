@@ -49,6 +49,14 @@ from courses.all_views.learner_views import (
     LearnerQuizDetailView,
     LearnerQuizSubmitView,
 )
+from courses.all_views.invite_views import (
+    CourseInstructorInviteCreateView,
+    CourseInstructorInviteListView,
+    CourseInstructorInviteRevokeView,
+    InviteAcceptView,
+    InviteDeclineView,
+    MyInviteListView,
+)
 from courses.all_views.content_views import (
     CourseAudienceDetailAPIView,
     CourseAudienceListCreateAPIView,
@@ -71,6 +79,12 @@ from courses.all_views.content_views import (
 )
 
 __all__ = [
+    'CourseInstructorInviteCreateView',
+    'CourseInstructorInviteListView',
+    'CourseInstructorInviteRevokeView',
+    'InviteAcceptView',
+    'InviteDeclineView',
+    'MyInviteListView',
     'AssignmentListAPIView',
     'AssignmentDetailAPIView',
     'AssignmentQuestionListCreateAPIView',

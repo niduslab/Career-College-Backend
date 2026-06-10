@@ -57,6 +57,14 @@ Learner Consumption endpoints.
 - [33. Coding Exercises (language configs + test cases)](#33-coding-exercises)
 - [34. Course Status Transitions](#34-course-status-transitions)
 
+### Co-instructor Invitations
+- [34A. Send Invite](#34a-send-invite)
+- [34B. List Invites for a Course](#34b-list-invites-for-a-course)
+- [34C. Revoke an Invite](#34c-revoke-an-invite)
+- [34D. My Received Invites](#34d-my-received-invites)
+- [34E. Accept an Invite](#34e-accept-an-invite)
+- [34F. Decline an Invite](#34f-decline-an-invite)
+
 ### Public Catalog (No Auth)
 - [35. Browse, Filter, and Sort the Catalog](#35-public-catalog)
 
@@ -1539,7 +1547,7 @@ Save `data.id` as `{{course_id}}`.
 { "title": "Python Backend Bootcamp (Updated)", "price": "89.99" }
 ```
 
-> `status`, `rejection_reason`, and `partner_institution` are not writable via POST or PATCH. `partner_institution` is auto-set from the creating user's profile when a partner institution account creates a course. Use the dedicated transition endpoints in Section 34 for status changes.
+> `status`, `rejection_reason`, `partner_institution`, and `instructors` are not writable via POST or PATCH. `partner_institution` is auto-set from the creating user's profile when a partner institution account creates a course. Co-instructors can only be added via the invitation flow (Section 34A). Use the dedicated transition endpoints in Section 34 for status changes.
 
 ---
 
@@ -2206,6 +2214,186 @@ Only works when current status is `published`.
 `POST /courses/{{course_id}}/submit/` on a course already `under_review`:
 
 **Expected 400:** `"Cannot transition from \"under_review\" to \"under_review\". Allowed: published, rejected."`
+
+---
+
+# Co-instructor Invitations
+
+> Sections 34A–34F cover the invitation flow. Owner endpoints require a **verified-instructor or verified-partner-institution** JWT where the caller is the course owner. Invitee endpoints require a **verified-instructor** JWT.
+
+## 34A. Send Invite
+
+**POST** `{{base_url}}/courses/{{course_id}}/instructors/invite/`
+
+**Headers:** owner JWT.
+
+```json
+{ "email": "co.instructor@example.com" }
+```
+
+**Expected 201:**
+```json
+{
+    "success": true,
+    "message": "Invite sent successfully.",
+    "data": {
+        "id": 1,
+        "course": 101,
+        "course_title": "Python Backend Bootcamp",
+        "invited_by": 2,
+        "invited_by_name": "Sarah Williams",
+        "invited_user": 5,
+        "invited_user_name": "Alex Chen",
+        "invited_user_email": "co.instructor@example.com",
+        "token": "550e8400-e29b-41d4-a716-446655440000",
+        "status": "pending",
+        "expires_at": "2026-06-15T10:00:00Z",
+        "responded_at": null,
+        "created_at": "2026-06-08T10:00:00Z",
+        "updated_at": "2026-06-08T10:00:00Z"
+    }
+}
+```
+
+The invitee receives an email with a **View Invitation** link pointing to `{FRONTEND_URL}/invites/{token}`.
+
+### Error cases
+
+| Scenario | Status | Message |
+|---|---|---|
+| Caller is not course owner | 403 | `"Only the course owner can send invites."` |
+| Email not a verified instructor on the platform | 400 | `"No verified instructor found with this email."` |
+| Inviting yourself | 400 | `"You cannot invite yourself."` |
+| Already an instructor on the course | 400 | `"This user is already an instructor on this course."` |
+| Pending invite already exists for this user | 400 | `"A pending invite already exists for this user."` |
+| Course is not editable (published / under_review / archived) | 422 | `"This course is ... and cannot be edited."` |
+
+---
+
+## 34B. List Invites for a Course
+
+**GET** `{{base_url}}/courses/{{course_id}}/instructors/invites/`
+
+**Headers:** owner JWT.
+
+Optional filter: `?status=pending` (accepted, declined, expired, revoked).
+
+**Expected 200:**
+```json
+{
+    "success": true,
+    "data": [ { "...invite object..." } ]
+}
+```
+
+### Error cases
+
+| Scenario | Status | Message |
+|---|---|---|
+| Caller is not owner (co-instructor) | 403 | `"Only the course owner can view invites."` |
+| Invalid `?status=` value | 400 | `"Invalid status. Choices: accepted, declined, expired, pending, revoked."` |
+
+---
+
+## 34C. Revoke an Invite
+
+**DELETE** `{{base_url}}/courses/{{course_id}}/instructors/invites/{{invite_id}}/`
+
+**Headers:** owner JWT.
+
+**Body:** *(empty)*
+
+**Expected 200:**
+```json
+{ "success": true, "message": "Invite revoked." }
+```
+
+### Error cases
+
+| Scenario | Status | Message |
+|---|---|---|
+| Caller is not owner | 403 | `"Only the course owner can revoke invites."` |
+| Invite not in pending status | 422 | `"Only pending invites can be revoked."` |
+
+---
+
+## 34D. My Received Invites
+
+**GET** `{{base_url}}/courses/invites/my/`
+
+**Headers:** instructor JWT (the invitee).
+
+Defaults to `?status=pending`. Pass `?status=accepted` / `declined` / `expired` / `revoked` for history.
+
+**Expected 200:**
+```json
+{
+    "success": true,
+    "data": [
+        {
+            "id": 1,
+            "course": 101,
+            "course_title": "Python Backend Bootcamp",
+            "invited_by": 2,
+            "invited_by_name": "Sarah Williams",
+            "token": "550e8400-e29b-41d4-a716-446655440000",
+            "status": "pending",
+            "expires_at": "2026-06-15T10:00:00Z",
+            "...": "..."
+        }
+    ]
+}
+```
+
+---
+
+## 34E. Accept an Invite
+
+**POST** `{{base_url}}/courses/invites/{{token}}/accept/`
+
+**Headers:** invitee instructor JWT.
+
+**Body:** *(empty)*
+
+**Expected 200:**
+```json
+{
+    "success": true,
+    "message": "You have joined \"Python Backend Bootcamp\" as a co-instructor.",
+    "data": { "...invite object with status: accepted..." }
+}
+```
+
+On success the caller is atomically added to `course.instructors`. The course is now accessible via `GET /courses/{{course_id}}/` for the new co-instructor.
+
+### Error cases
+
+| Scenario | Status | Message |
+|---|---|---|
+| Token not found or belongs to another user | 404 | `"Invite not found."` |
+| Invite already accepted / declined / revoked / expired | 410 | `"This invite is no longer valid."` |
+| Invite past `expires_at` (not yet swept by Celery) | 410 | `"This invite has expired."` |
+
+---
+
+## 34F. Decline an Invite
+
+**POST** `{{base_url}}/courses/invites/{{token}}/decline/`
+
+**Headers:** invitee instructor JWT.
+
+**Body:** *(empty)*
+
+**Expected 200:**
+```json
+{
+    "success": true,
+    "message": "You have declined the invitation to \"Python Backend Bootcamp\".",
+    "data": { "...invite object with status: declined..." }
+}
+```
+
+The record is kept (visible to owner via Section 34B with `?status=declined`). The owner can send a new invite to the same user after a decline.
 
 ---
 

@@ -446,3 +446,66 @@ class CourseSection(models.Model):
 
     def __str__(self):
         return f'{self.course.title} - {self.title}'
+
+
+class CourseInstructorInvite(TimestampedModel):
+    """Tracks an owner's invitation to a verified instructor to co-author a course."""
+
+    STATUS_PENDING = 'pending'
+    STATUS_ACCEPTED = 'accepted'
+    STATUS_DECLINED = 'declined'
+    STATUS_EXPIRED = 'expired'
+    STATUS_REVOKED = 'revoked'
+
+    STATUS_CHOICES = [
+        (STATUS_PENDING, 'Pending'),
+        (STATUS_ACCEPTED, 'Accepted'),
+        (STATUS_DECLINED, 'Declined'),
+        (STATUS_EXPIRED, 'Expired'),
+        (STATUS_REVOKED, 'Revoked'),
+    ]
+
+    course = models.ForeignKey(
+        NidusCourse,
+        on_delete=models.CASCADE,
+        related_name='instructor_invites',
+    )
+    invited_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name='sent_instructor_invites',
+    )
+    invited_user = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name='received_instructor_invites',
+    )
+    token = models.UUIDField(default=uuid.uuid4, unique=True, editable=False, db_index=True)
+    status = models.CharField(
+        max_length=10,
+        choices=STATUS_CHOICES,
+        default=STATUS_PENDING,
+        db_index=True,
+    )
+    expires_at = models.DateTimeField()
+    responded_at = models.DateTimeField(null=True, blank=True)
+
+    class Meta:
+        db_table = 'course_instructor_invites'
+        verbose_name = 'Course Instructor Invite'
+        verbose_name_plural = 'Course Instructor Invites'
+        ordering = ['-created_at']
+        constraints = [
+            models.UniqueConstraint(
+                fields=['course', 'invited_user'],
+                condition=models.Q(status='pending'),
+                name='unique_pending_invite_per_course',
+            )
+        ]
+        indexes = [
+            models.Index(fields=['course', 'status'], name='idx_invite_course_status'),
+            models.Index(fields=['invited_user', 'status'], name='idx_invite_user_status'),
+        ]
+
+    def __str__(self):
+        return f'Invite: {self.invited_user.email} → {self.course.title} [{self.status}]'

@@ -96,11 +96,6 @@ class NidusCourseSerializer(serializers.ModelSerializer):
 
 
 class NidusCourseCreateUpdateSerializer(serializers.ModelSerializer):
-    instructors = serializers.PrimaryKeyRelatedField(
-        many=True,
-        queryset=User.objects.filter(user_type='instructor', is_deleted=False),
-        required=False,
-    )
     category = serializers.PrimaryKeyRelatedField(
         queryset=CourseCategory.objects.filter(is_active=True),
         required=False,
@@ -114,7 +109,7 @@ class NidusCourseCreateUpdateSerializer(serializers.ModelSerializer):
         model = NidusCourse
         fields = [
             'title', 'description', 'thumbnail', 'price', 'language', 'level',
-            'duration_minutes', 'instructors', 'category', 'learning_objectives',
+            'duration_minutes', 'category', 'learning_objectives',
             'prerequisites', 'audiences',
         ]
         read_only_fields = ['created_by']
@@ -144,24 +139,17 @@ class NidusCourseCreateUpdateSerializer(serializers.ModelSerializer):
             learning_objectives = validated_data.pop('learning_objectives', [])
             prerequisites = validated_data.pop('prerequisites', [])
             audiences = validated_data.pop('audiences', [])
-            instructors = validated_data.pop('instructors', [])
 
             request_user = self.context['request'].user
             course = NidusCourse.objects.create(created_by=request_user, **validated_data)
 
             if request_user.user_type == 'partner_institution':
-                # auto-set FK; partner institution user is not added to the instructors M2M
                 partner_profile = PartnerInstitutionProfile.objects.get(user=request_user)
                 course.partner_institution = partner_profile
                 course.save(update_fields=['partner_institution'])
             else:
-                # instructor: ensure the creator is always in the M2M
-                if not instructors:
-                    instructors = [request_user]
-                elif request_user not in instructors:
-                    instructors.append(request_user)
+                course.instructors.set([request_user])
 
-            course.instructors.set(instructors)
             self._replace_items(CourseLearningObjective, course, learning_objectives)
             self._replace_items(CoursePreRequisite, course, prerequisites)
             self._replace_items(CourseAudience, course, audiences)
@@ -172,22 +160,10 @@ class NidusCourseCreateUpdateSerializer(serializers.ModelSerializer):
             learning_objectives = validated_data.pop('learning_objectives', None)
             prerequisites = validated_data.pop('prerequisites', None)
             audiences = validated_data.pop('audiences', None)
-            instructors = validated_data.pop('instructors', None)
 
             for attr, value in validated_data.items():
                 setattr(instance, attr, value)
             instance.save()
-
-            request_user = self.context['request'].user
-
-            if instructors is not None:
-                if request_user == instance.created_by:
-                    # instructor owner: keep themselves in the M2M
-                    # partner institution owner: not in instructors M2M, don't add them
-                    if request_user.user_type == 'instructor' and request_user not in instructors:
-                        instructors.append(request_user)
-                    instance.instructors.set(instructors)
-                # co-instructors: silently ignore — roster is owner-only
 
             if learning_objectives is not None:
                 self._replace_items(CourseLearningObjective, instance, learning_objectives)

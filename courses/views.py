@@ -1,4 +1,10 @@
 from courses.all_views import (
+    CourseInstructorInviteCreateView,
+    CourseInstructorInviteListView,
+    CourseInstructorInviteRevokeView,
+    InviteAcceptView,
+    InviteDeclineView,
+    MyInviteListView,
     AssignmentDetailAPIView,
     AssignmentListAPIView,
     AssignmentQuestionDetailAPIView,
@@ -59,6 +65,12 @@ from courses.all_views import (
 )
 
 __all__ = [
+    'CourseInstructorInviteCreateView',
+    'CourseInstructorInviteListView',
+    'CourseInstructorInviteRevokeView',
+    'InviteAcceptView',
+    'InviteDeclineView',
+    'MyInviteListView',
     'AssignmentListAPIView',
     'AssignmentDetailAPIView',
     'AssignmentQuestionListCreateAPIView',

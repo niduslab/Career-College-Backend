@@ -434,7 +434,7 @@ class CourseEditLockTests(CourseLifecycleTestBase):
 # ---------------------------------------------------------------------------
 
 class CourseOwnerProtectionTests(CourseLifecycleTestBase):
-    """Owner-only guards: only created_by can modify roster or partner institutions."""
+    """Roster is immutable via PATCH. Only the invitation flow can add co-instructors."""
 
     @classmethod
     def setUpTestData(cls):
@@ -448,9 +448,10 @@ class CourseOwnerProtectionTests(CourseLifecycleTestBase):
         # give other_instructor access to the course so _get_course resolves for them
         self.course.instructors.add(self.other_instructor)
 
-    # ---- co-instructor roster restrictions ----------------------------------
+    # ---- instructors field ignored in PATCH (all callers) -------------------
 
-    def test_coinstructor_cannot_remove_owner_from_roster(self):
+    def test_patch_instructors_field_ignored_for_coinstructor(self):
+        """Roster unchanged when co-instructor passes instructors in body."""
         self.client.force_authenticate(user=self.other_instructor)
         response = self.client.patch(
             self._detail_url(),
@@ -461,20 +462,21 @@ class CourseOwnerProtectionTests(CourseLifecycleTestBase):
         self.assertTrue(response.data['success'])
         instructor_ids = {i['id'] for i in response.data['data']['instructors']}
         self.assertIn(self.instructor.pk, instructor_ids)
+        self.assertIn(self.other_instructor.pk, instructor_ids)
 
-    def test_coinstructor_cannot_add_third_instructor_to_roster(self):
-        self.client.force_authenticate(user=self.other_instructor)
+    def test_patch_instructors_field_ignored_for_owner(self):
+        """Roster unchanged when owner passes instructors in body."""
         response = self.client.patch(
             self._detail_url(),
-            {'instructors': [self.instructor.pk, self.other_instructor.pk, self.third_instructor.pk]},
+            {'instructors': [self.instructor.pk, self.third_instructor.pk]},
             format='json',
         )
         self.assertEqual(response.status_code, status.HTTP_200_OK)
         instructor_ids = {i['id'] for i in response.data['data']['instructors']}
         self.assertNotIn(self.third_instructor.pk, instructor_ids)
 
-    def test_coinstructor_title_update_succeeds_despite_instructors_field(self):
-        """Co-instructor can edit content fields even when instructor list is in the payload."""
+    def test_coinstructor_title_update_with_instructors_field_in_body(self):
+        """Co-instructor can edit content fields; instructors field in payload is silently dropped."""
         self.client.force_authenticate(user=self.other_instructor)
         response = self.client.patch(
             self._detail_url(),
@@ -486,28 +488,15 @@ class CourseOwnerProtectionTests(CourseLifecycleTestBase):
         instructor_ids = {i['id'] for i in response.data['data']['instructors']}
         self.assertIn(self.instructor.pk, instructor_ids)
 
-    # ---- owner roster operations --------------------------------------------
-
-    def test_owner_can_add_instructor_to_roster(self):
+    def test_patch_with_unknown_fields_does_not_raise(self):
+        """Unrecognised fields like instructors are silently dropped, patch succeeds."""
         response = self.client.patch(
             self._detail_url(),
-            {'instructors': [self.instructor.pk, self.third_instructor.pk]},
+            {'title': 'New Title', 'instructors': [self.third_instructor.pk]},
             format='json',
         )
         self.assertEqual(response.status_code, status.HTTP_200_OK)
-        instructor_ids = {i['id'] for i in response.data['data']['instructors']}
-        self.assertIn(self.third_instructor.pk, instructor_ids)
-
-    def test_owner_always_re_added_if_omitted_from_patch(self):
-        """Owner cannot accidentally remove themselves from the roster."""
-        response = self.client.patch(
-            self._detail_url(),
-            {'instructors': [self.other_instructor.pk]},
-            format='json',
-        )
-        self.assertEqual(response.status_code, status.HTTP_200_OK)
-        instructor_ids = {i['id'] for i in response.data['data']['instructors']}
-        self.assertIn(self.instructor.pk, instructor_ids)
+        self.assertEqual(response.data['data']['title'], 'New Title')
 
     # ---- created_by immutability --------------------------------------------
 

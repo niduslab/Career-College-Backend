@@ -1,6 +1,12 @@
 from django.urls import path
 
 from courses.views import (
+    CourseInstructorInviteCreateView,
+    CourseInstructorInviteListView,
+    CourseInstructorInviteRevokeView,
+    InviteAcceptView,
+    InviteDeclineView,
+    MyInviteListView,
     AssignmentDetailAPIView,
     AssignmentListAPIView,
     AssignmentQuestionDetailAPIView,
@@ -105,6 +111,16 @@ urlpatterns = [
     path('', CourseListAPIView.as_view(), name='course-list'),
     path('create/', CourseCreateAPIView.as_view(), name='course-create'),
     path('<int:pk>/', CourseDetailView.as_view(), name='course-detail'),
+
+    # -------------------------------------------------------------------------
+    # Co-instructor invitations
+    # -------------------------------------------------------------------------
+    path('<int:pk>/instructors/invite/', CourseInstructorInviteCreateView.as_view(), name='course-instructor-invite-create'),
+    path('<int:pk>/instructors/invites/', CourseInstructorInviteListView.as_view(), name='course-instructor-invite-list'),
+    path('<int:pk>/instructors/invites/<int:invite_id>/', CourseInstructorInviteRevokeView.as_view(), name='course-instructor-invite-revoke'),
+    path('invites/my/', MyInviteListView.as_view(), name='my-invite-list'),
+    path('invites/<uuid:token>/accept/', InviteAcceptView.as_view(), name='invite-accept'),
+    path('invites/<uuid:token>/decline/', InviteDeclineView.as_view(), name='invite-decline'),
 
     # -------------------------------------------------------------------------
     # Course status transitions

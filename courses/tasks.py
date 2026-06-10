@@ -502,3 +502,43 @@ def reap_stuck_coding_submissions_task(stale_minutes: int = 5):
     if count:
         logger.warning('Reaped %d stuck coding submission(s).', count)
     return {'reaped': count}
+
+
+# ---------------------------------------------------------------------------
+# Instructor invite tasks
+# ---------------------------------------------------------------------------
+
+@shared_task(bind=True, autoretry_for=(Exception,), retry_backoff=True, retry_jitter=True, max_retries=3, acks_late=True)
+def send_instructor_invite_email_task(self, invite_id: int):
+    """Send the co-instructor invitation email for a given invite PK."""
+    from courses.models import CourseInstructorInvite
+    from courses.email_utils import send_instructor_invite_email
+
+    try:
+        invite = CourseInstructorInvite.objects.select_related(
+            'course', 'invited_by', 'invited_user'
+        ).get(pk=invite_id)
+    except CourseInstructorInvite.DoesNotExist:
+        logger.warning('send_instructor_invite_email_task: invite %s not found, skipping.', invite_id)
+        return
+
+    send_instructor_invite_email(invite)
+    logger.info('send_instructor_invite_email_task: sent invite %s to %s.', invite_id, invite.invited_user.email)
+
+
+@shared_task
+def expire_instructor_invites_task():
+    """
+    Mark pending invites past their expiry date as expired.
+    Scheduled via CELERY_BEAT_SCHEDULE in settings.py.
+    """
+    from courses.models import CourseInstructorInvite
+
+    count = CourseInstructorInvite.objects.filter(
+        status=CourseInstructorInvite.STATUS_PENDING,
+        expires_at__lt=timezone.now(),
+    ).update(status=CourseInstructorInvite.STATUS_EXPIRED)
+
+    if count:
+        logger.info('expire_instructor_invites_task: expired %d invite(s).', count)
+    return {'expired': count}

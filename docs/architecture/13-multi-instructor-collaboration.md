@@ -42,27 +42,15 @@ NidusCourse
 
 ## Enforcement Points
 
-### 1. Serializer — `NidusCourseCreateUpdateSerializer.update()`
+### 1. Serializer — `NidusCourseCreateUpdateSerializer`
 
 **File:** `courses/all_serializers/course_serializers.py`
 
-This is the primary enforcement point. A co-instructor PATCHing the course will have their `instructors` and `partner_institutions` fields **silently ignored**.
+`instructors` is not a writable field on this serializer. Any `instructors` key in a POST or PATCH body is silently ignored by DRF — the field does not exist in `Meta.fields`. The roster can only change via the invitation flow.
 
-```python
-if instructors is not None:
-    if request_user == instance.created_by:
-        if request_user not in instructors:
-            instructors.append(request_user)
-        instance.instructors.set(instructors)
-    # co-instructors: silently ignore — roster is owner-only
-
-if partner_institutions is not None:
-    if request_user == instance.created_by:
-        instance.partner_institutions.set(partner_institutions)
-    # co-instructors: silently ignore
-```
-
-**Why silent ignore, not 403?** PATCH accepts many fields at once. A co-instructor updating the course title might pass the current instructor list in the same payload (typical frontend behaviour). A 403 would block the legitimate title update. Silently ignoring the restricted fields lets content edits succeed while keeping the roster frozen.
+On `create()`, the creator is automatically added:
+- **Instructor creator**: `course.instructors.set([request_user])` — owner seeded into M2M.
+- **Partner institution creator**: `partner_institution` FK set; M2M left empty (partner institution users are never in `instructors`).
 
 ### 2. Utility guard — `guard_owner()` in `courses/utils.py`
 
@@ -90,16 +78,9 @@ def delete(self, request, pk):
     return Response({'success': True, 'message': 'Course deleted.'})
 ```
 
-### 3. Owner cannot be removed from the instructor list
+### 3. Owner is always in the instructor list
 
-The `update()` method re-appends the owner to the list if they are absent:
-
-```python
-if request_user not in instructors:
-    instructors.append(request_user)
-```
-
-Because only the owner can call `instructors.set(...)`, this rule is enforced whenever the roster is actually written.
+On `create()`, the owner (instructor type) is seeded via `course.instructors.set([request_user])`. On `accept_instructor_invite()` in `invite_service.py`, co-instructors are added atomically. No code path calls `instructors.set(...)` without the owner being present (because only `create()` seeds the M2M, and the owner is always the argument).
 
 ### 4. `created_by` is immutable
 
@@ -107,37 +88,22 @@ Because only the owner can call `instructors.set(...)`, this rule is enforced wh
 
 ---
 
-## How Instructors Are Added Today
+## How Instructors Are Added
 
-The owner passes instructor PKs in the request body at creation or via PATCH:
+Co-instructors can **only** be added via the invitation flow. Passing `instructors` in a POST or PATCH body has no effect — the field is not declared on `NidusCourseCreateUpdateSerializer`.
 
-```json
-POST /api/v1/courses/create/
-{
-    "title": "Machine Learning Basics",
-    "instructors": [5, 12, 23]
-}
-```
+The owner sends an invite by email. The invitee receives an email with a **View Invitation** link and accepts or declines on the platform. Only on accept is the invitee added to `course.instructors`.
 
-Or adds them later:
-
-```json
-PATCH /api/v1/courses/{pk}/
-{
-    "instructors": [5, 12, 23, 31]
-}
-```
-
-The owner must know the co-instructor's user ID. There is no invitation flow yet.
+See the **Invitation Flow** section below for full details.
 
 ---
 
-## Request Flow: Co-instructor PATCH with Roster Field
+## Request Flow: Co-instructor PATCH
 
 ```
 PATCH /api/v1/courses/{pk}/
   instructor A (co-instructor) sends:
-    { "title": "New Title", "instructors": [A_id] }
+    { "title": "New Title" }
 
 CourseDetailView._get_course(request, pk)
   → filters NidusCourse where pk=pk AND instructors=A  ✓ (A is in M2M)
@@ -146,12 +112,194 @@ guard_editable(course)  → None (course is draft)
 
 NidusCourseCreateUpdateSerializer.update()
   → title = "New Title"  ← applied
-  → instructors != None BUT request_user (A) != instance.created_by (owner)
-    → silently skipped
-  → partner_institutions == None  → skipped
+  → roster unchanged (instructors field not accepted by serializer)
 
 Response: 200 OK, title updated, roster unchanged
 ```
+
+Passing `instructors: [...]` in the body is silently ignored — DRF strips unknown fields before `update()` is called.
+
+---
+
+## Invitation Flow
+
+### Model — `CourseInstructorInvite`
+
+**File:** `courses/all_models/course_models.py`
+
+```
+CourseInstructorInvite
+  ├── course        (FK → NidusCourse)
+  ├── invited_by    (FK → User)           ← must be course.created_by
+  ├── invited_user  (FK → User)           ← verified instructor resolved from email
+  ├── token         (UUID, unique)        ← included in the email link
+  ├── status        pending | accepted | declined | expired | revoked
+  ├── expires_at    (DateTimeField)       ← now + INSTRUCTOR_INVITE_EXPIRY_DAYS days
+  └── responded_at  (DateTimeField, nullable)
+```
+
+Partial unique index (`unique_pending_invite_per_course`) prevents a second pending invite to the same user on the same course while one is already open. Declined/expired/revoked invites do not block a fresh invite.
+
+### State Machine
+
+```
+                    ┌─────────────────────────────────────────────────────┐
+                    │  owner calls DELETE .../invites/<id>/               │
+                    ▼                                                     │
+               ┌─────────┐                                               │
+               │ revoked │                                               │
+               └─────────┘                                               │
+                                                                         │
+ ┌─────────┐ ──────────────────────────────────────────────────────────► │
+ │ pending │                                                             │
+ └─────────┘ ──► ┌──────────┐  invitee POSTs accept + course editable   │
+      │          │ accepted │  (locked row — select_for_update)          │
+      │          └──────────┘                                            │
+      │                                                                  │
+      ├───────► ┌──────────┐  invitee POSTs decline                     │
+      │         │ declined │  (locked row — select_for_update)           │
+      │         └──────────┘                                             │
+      │                                                                  │
+      └───────► ┌─────────┐  Celery Beat: expire_instructor_invites_task │
+                │ expired │  bulk UPDATE WHERE expires_at < now, hourly  │
+                └─────────┘                                              │
+```
+
+### End-to-End Flow
+
+```
+OWNER (verified instructor / partner institution)
+───────────────────────────────────────────────────────────────────────────
+
+  POST /api/v1/courses/<pk>/instructors/invite/
+  body: { "email": "co.instructor@example.com" }
+
+  Guards (fail fast, in order):
+    ├─ course not found or caller != created_by         → 404
+    ├─ course.status not in (draft, rejected)           → 422
+    ├─ email not a verified instructor on platform      → 400
+    ├─ email == owner's own email                       → 400
+    ├─ invitee already in course.instructors            → 400
+    └─ pending invite already exists for this invitee  → 400 (or 400 if DB
+                                                             constraint race)
+
+  201 Created ──────────────────────────────────────────────────────────►
+  CourseInstructorInvite row created:
+    status    = pending
+    expires_at = now + INSTRUCTOR_INVITE_EXPIRY_DAYS (default 7)
+    token     = UUID (not exposed in owner response)
+
+  transaction.on_commit ──► send_instructor_invite_email_task.delay(invite.pk)
+    Celery: fetch invite → render HTML email → send_mail()
+    acks_late=True, up to 3 retries with backoff
+
+                                   Email arrives in invitee's inbox:
+                                   "View Invitation" → {FRONTEND_URL}/invites/{token}
+
+ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─
+  While PENDING, owner can list or revoke:
+
+  GET  /api/v1/courses/<pk>/instructors/invites/?status=pending
+    ├─ caller != created_by  → 404 (co-instructors see 404, not 403)
+    └─ 200 { results: [...] }  (paginated, token field excluded)
+
+  DELETE /api/v1/courses/<pk>/instructors/invites/<invite_id>/
+    ├─ caller != created_by        → 404
+    ├─ invite.status != pending    → 422
+    └─ 200  invite.status → revoked
+ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─
+  Celery Beat (hourly):
+  expire_instructor_invites_task()
+    UPDATE course_instructor_invites
+       SET status = 'expired'
+     WHERE status = 'pending' AND expires_at < now()
+ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─
+
+
+INVITEE (verified instructor)
+───────────────────────────────────────────────────────────────────────────
+
+  GET  /api/v1/courses/invites/my/?status=pending
+    └─ 200 { results: [...] }  (paginated, token included)
+
+  POST /api/v1/courses/invites/<token>/accept/
+
+    Inside transaction.atomic() + SELECT ... FOR UPDATE:
+      ├─ token not found or belongs to another user  → 404
+      ├─ invite.expires_at < now                     → 410  (invite has expired)
+      ├─ invite.status != pending                    → 410  (no longer valid)
+      ├─ course.status not in (draft, rejected)      → 422  (course no longer editable)
+      └─ all pass:
+           invite.status        → accepted
+           invite.responded_at  → now
+           course.instructors.add(invitee)           ← atomic, under row lock
+
+    200 OK  — invitee is now a co-instructor
+
+  ── OR ──
+
+  POST /api/v1/courses/invites/<token>/decline/
+
+    Inside transaction.atomic() + SELECT ... FOR UPDATE:
+      ├─ token not found or belongs to another user  → 404
+      ├─ invite.expires_at < now                     → 410
+      ├─ invite.status != pending                    → 410
+      └─ all pass:
+           invite.status        → declined
+           invite.responded_at  → now
+           (invitee NOT added to instructors)
+
+    200 OK  — record kept; owner sees it in GET ?status=declined
+
+
+CO-INSTRUCTOR (after accepting)
+───────────────────────────────────────────────────────────────────────────
+
+  GET  /api/v1/courses/<pk>/            → full course detail (authoring surface)
+  PATCH /api/v1/courses/<pk>/          → edit title, description, price, etc.
+  POST  /api/v1/courses/<pk>/sections/ → add/reorder sections
+  ...all content endpoints...
+
+  Cannot:
+    - Send, revoke, or list invites   (owner-only; co-instructor gets 404)
+    - Change course.created_by        (read-only field)
+```
+
+### Endpoints
+
+| Method | URL | Permission | Action |
+|--------|-----|------------|--------|
+| `POST` | `/courses/<pk>/instructors/invite/` | Owner only | Send invite by email |
+| `GET` | `/courses/<pk>/instructors/invites/` | Owner only | List all invites (`?status=` filter) |
+| `DELETE` | `/courses/<pk>/instructors/invites/<invite_id>/` | Owner only | Revoke pending invite |
+| `GET` | `/courses/invites/my/` | Instructor | Received invites (default `?status=pending`) |
+| `POST` | `/courses/invites/<token>/accept/` | Invitee | Accept — atomically added to `instructors` M2M |
+| `POST` | `/courses/invites/<token>/decline/` | Invitee | Decline — record kept for owner audit |
+
+### Service layer
+
+**File:** `courses/services/invite_service.py`
+
+- `create_instructor_invite(course, owner, email)` — validates, creates, dispatches `send_instructor_invite_email_task` via `transaction.on_commit`
+- `revoke_instructor_invite(invite, owner)` — owner-only, pending-only
+- `accept_instructor_invite(token, user)` — atomic: sets `status=accepted`, adds user to `course.instructors`
+- `decline_instructor_invite(token, user)` — sets `status=declined`, record preserved
+
+### Email & Celery
+
+**Email:** `courses/email_utils.py` → `send_instructor_invite_email()` renders `templates/emails/instructor_invite.html`. The email contains a single **View Invitation** link (`{FRONTEND_URL}/invites/{token}`); accept/decline happen on the platform.
+
+**Tasks** (`courses/tasks.py`):
+- `send_instructor_invite_email_task(invite_id)` — `acks_late=True`, 3 retries with backoff; dispatched on commit.
+- `expire_instructor_invites_task()` — bulk-updates `pending → expired` for rows past `expires_at`; runs hourly via `CELERY_BEAT_SCHEDULE`.
+
+### Configuration
+
+```env
+INSTRUCTOR_INVITE_EXPIRY_DAYS=7   # days before a pending invite expires
+```
+
+Read in `settings.py` as `INSTRUCTOR_INVITE_EXPIRY_DAYS = env.int('INSTRUCTOR_INVITE_EXPIRY_DAYS', default=7)`.
 
 ---
 
@@ -159,7 +307,6 @@ Response: 200 OK, title updated, roster unchanged
 
 | Feature | Description |
 |---------|-------------|
-| **Invitation flow** | `CourseInstructorInvite` model: owner sends invite by email, instructor accepts via endpoint, then added to M2M. Replaces direct-ID approach. |
 | **Granular roles** | Per-instructor roles (`owner`, `editor`, `viewer`) via a through-model on the M2M. Different roles gate different actions. |
 | **Transfer ownership** | Allow owner to transfer `created_by` to another instructor. Requires both parties to confirm. |
 | **Activity log** | Track who changed what: "Instructor B edited Section 3". Useful for accountability. |

@@ -6,6 +6,7 @@ from courses.models import (
     CodingTestCase,
     CourseAudience,
     CourseCategory,
+    CourseInstructorInvite,
     CourseLearningObjective,
     CoursePreRequisite,
     CourseSection,
@@ -236,3 +237,12 @@ class CodingTestCaseAdmin(admin.ModelAdmin):
     list_filter = ('is_hidden', 'exercise__section')
     search_fields = ('exercise__title', 'exercise__section__title', 'exercise__section__course__title')
     ordering = ('exercise', 'position', 'id')
+
+
+@admin.register(CourseInstructorInvite)
+class CourseInstructorInviteAdmin(admin.ModelAdmin):
+    list_display = ('id', 'course', 'invited_by', 'invited_user', 'status', 'expires_at', 'created_at')
+    list_filter = ('status',)
+    search_fields = ('course__title', 'invited_by__email', 'invited_user__email')
+    readonly_fields = ('token', 'created_at', 'updated_at', 'responded_at')
+    ordering = ('-created_at',)

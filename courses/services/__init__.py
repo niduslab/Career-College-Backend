@@ -29,6 +29,13 @@ from courses.services.enrollment_service import (
 from courses.services.curriculum_service import (
     load_catalog_curriculum,
 )
+from courses.services.invite_service import (
+    InviteError,
+    accept_instructor_invite,
+    create_instructor_invite,
+    decline_instructor_invite,
+    revoke_instructor_invite,
+)
 from courses.services.learner_service import (
     AssignmentSubmissionError,
     CodingSubmissionError,
@@ -50,6 +57,11 @@ from courses.services.learner_service import (
 )
 
 __all__ = [
+    'InviteError',
+    'accept_instructor_invite',
+    'create_instructor_invite',
+    'decline_instructor_invite',
+    'revoke_instructor_invite',
     'create_section_content_for_object',
     'get_course_sections',
     'get_file_extension',

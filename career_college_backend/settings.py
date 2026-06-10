@@ -29,9 +29,6 @@ env = environ.Env(
 environ.Env.read_env(BASE_DIR / '.env')
 
 
-# Quick-start development settings - unsuitable for production
-# See https://docs.djangoproject.com/en/5.2/howto/deployment/checklist/
-
 # SECURITY WARNING: keep the secret key used in production secret!
 SECRET_KEY = env('SECRET_KEY')
 
@@ -52,6 +49,7 @@ INSTALLED_APPS = [
     'django.contrib.messages',
     'django.contrib.postgres',
     'django.contrib.staticfiles',
+    
     # Third-party
     'rest_framework',
     'rest_framework_simplejwt.token_blacklist',
@@ -61,6 +59,7 @@ INSTALLED_APPS = [
     'allauth.account',
     'allauth.socialaccount',
     'allauth.socialaccount.providers.google',
+    
     # Local
     'authentication.apps.AuthenticationConfig',
     'id_verification',
@@ -230,18 +229,28 @@ CELERY_ACCEPT_CONTENT = ['json']
 CELERY_TASK_SERIALIZER = 'json'
 CELERY_RESULT_SERIALIZER = 'json'
 CELERY_TIMEZONE = TIME_ZONE
+
+
 # Coding-exercise Run results live in the Celery result backend (Redis); they
 # expire after this many seconds and a polling task_id returns PENDING after.
 CELERY_RESULT_EXPIRES = env.int('CELERY_RESULT_EXPIRES')
+
 # Required for the Run-mode poll endpoint to distinguish PENDING from STARTED.
 CELERY_TASK_TRACK_STARTED = True
+
 # Celery beat: reap CodingSubmissions stuck in queued/grading.
 CELERY_BEAT_SCHEDULE = {
     'reap-stuck-coding-submissions': {
         'task': 'courses.tasks.reap_stuck_coding_submissions_task',
         'schedule': 60.0,
     },
+    'expire-instructor-invites': {
+        'task': 'courses.tasks.expire_instructor_invites_task',
+        'schedule': 3600.0,  # hourly
+    },
 }
+
+INSTRUCTOR_INVITE_EXPIRY_DAYS = env.int('INSTRUCTOR_INVITE_EXPIRY_DAYS', default=7)
 
 # Coding-exercise Docker runner image overrides. Defaults pull from Docker Hub,
 RUNNER_IMAGE_PYTHON = env('RUNNER_IMAGE_PYTHON')

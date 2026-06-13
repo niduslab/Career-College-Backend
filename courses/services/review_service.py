@@ -56,11 +56,6 @@ def create_or_update_review(user, course: NidusCourse, validated_data: dict) -> 
         course_id = course.pk
         transaction.on_commit(lambda: _recalculate_course_avg(course_id))
 
-    action = 'created' if created else 'updated'
-    logger.info(
-        'Review %s: review=%s user=%s course=%s rating=%s',
-        action, review.pk, user.pk, course.pk, review.rating,
-    )
     return review, created
 
 
@@ -82,7 +77,6 @@ def delete_review(user, course: NidusCourse) -> None:
         review.delete()
         transaction.on_commit(lambda: _recalculate_course_avg(course_id))
 
-    logger.info('Review deleted: review=%s user=%s course=%s', review_id, user.pk, course.pk)
 
 
 def vote_on_review(voter, review_id: int, is_helpful: bool) -> ReviewVote:
@@ -121,7 +115,6 @@ def vote_on_review(voter, review_id: int, is_helpful: bool) -> ReviewVote:
             )
             existing.is_helpful = is_helpful
             existing.save(update_fields=['is_helpful'])
-            logger.info('Vote flipped: review=%s voter=%s is_helpful=%s', review_id, voter.pk, is_helpful)
             return existing
 
         # New vote — nested savepoint guards against concurrent first-vote race.
@@ -138,7 +131,6 @@ def vote_on_review(voter, review_id: int, is_helpful: bool) -> ReviewVote:
         CourseReview.objects.filter(pk=review.pk).update(
             **{count_field: F(count_field) + 1, 'updated_at': timezone.now()}
         )
-        logger.info('Vote created: review=%s voter=%s is_helpful=%s', review_id, voter.pk, is_helpful)
         return vote
 
 

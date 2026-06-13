@@ -59,10 +59,8 @@ class CourseReviewListView(APIView):
     GET  — Paginated, published reviews for a course. Public.
     POST — Create or replace the caller's review. Learner-only.
 
-    Slug → 403 when the course is not found (we treat unpublished courses
-    the same as "no access" for learners; 404 would reveal existence).
-    Actually, if the course simply doesn't exist or isn't published we return
-    404 because the slug itself has no public meaning without a published course.
+    Slug → 404 when course not found or not published. The slug itself has no
+    public meaning without a published course listing.
     """
 
     def get_permissions(self):

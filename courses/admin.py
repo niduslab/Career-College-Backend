@@ -9,6 +9,7 @@ from courses.models import (
     CourseInstructorInvite,
     CourseLearningObjective,
     CoursePreRequisite,
+    CourseReview,
     CourseSection,
     Enrollment,
     Lecture,
@@ -16,6 +17,7 @@ from courses.models import (
     Quiz,
     QuizAnswer,
     QuizQuestion,
+    ReviewVote,
     SectionContent,
     VideoAsset,
     VideoProcessingJob,
@@ -237,6 +239,44 @@ class CodingTestCaseAdmin(admin.ModelAdmin):
     list_filter = ('is_hidden', 'exercise__section')
     search_fields = ('exercise__title', 'exercise__section__title', 'exercise__section__course__title')
     ordering = ('exercise', 'position', 'id')
+
+
+@admin.register(CourseReview)
+class CourseReviewAdmin(admin.ModelAdmin):
+    list_display = ('id', 'user', 'course', 'rating', 'is_published', 'helpful_count', 'not_helpful_count', 'created_at')
+    list_filter = ('is_published', 'rating')
+    search_fields = ('user__email', 'user__full_name', 'course__title', 'headline')
+    raw_id_fields = ('user', 'course', 'enrollment')
+    readonly_fields = ('created_at', 'updated_at', 'helpful_count', 'not_helpful_count')
+    ordering = ('-created_at',)
+    actions = ['unpublish_reviews', 'publish_reviews']
+
+    @admin.action(description='Unpublish selected reviews')
+    def unpublish_reviews(self, request, queryset):
+        course_ids = list(queryset.values_list('course_id', flat=True).distinct())
+        updated = queryset.update(is_published=False)
+        from courses.services.review_service import _recalculate_course_avg
+        for course_id in course_ids:
+            _recalculate_course_avg(course_id)
+        self.message_user(request, f'{updated} review(s) unpublished.')
+
+    @admin.action(description='Publish selected reviews')
+    def publish_reviews(self, request, queryset):
+        course_ids = list(queryset.values_list('course_id', flat=True).distinct())
+        updated = queryset.update(is_published=True)
+        from courses.services.review_service import _recalculate_course_avg
+        for course_id in course_ids:
+            _recalculate_course_avg(course_id)
+        self.message_user(request, f'{updated} review(s) published.')
+
+
+@admin.register(ReviewVote)
+class ReviewVoteAdmin(admin.ModelAdmin):
+    list_display = ('id', 'review', 'voter', 'is_helpful', 'created_at')
+    list_filter = ('is_helpful',)
+    search_fields = ('voter__email', 'voter__full_name', 'review__course__title')
+    raw_id_fields = ('review', 'voter')
+    ordering = ('-created_at',)
 
 
 @admin.register(CourseInstructorInvite)

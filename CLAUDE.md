@@ -183,6 +183,29 @@ Two corollaries:
 1. **Don't normalize for "consistency".** Two endpoints in the same module returning different status codes is fine *if* one is slug-based and one is ID-based. The rule is consistent even when the codes differ.
 2. **Don't leak existence in the error body either.** A 404 response for "no access" should use the same message ("Lecture not found.") as a true missing-row 404 — never something like "You don't have access to this lecture." That defeats the point of the 404.
 
+### Certificate System
+
+`Certificate` is auto-issued when `recalculate_progress()` transitions an enrollment to 100% for the first time. The issuance callback fires via `transaction.on_commit(lambda: _issue_certificate_and_notify(enrollment.pk))` in `enrollment_service.py`. `issue_certificate()` uses `get_or_create` — idempotent under Celery redelivery. PDF rendered on-the-fly by reportlab (`courses/certificate_pdf.py`) — no file stored on disk. Public UUID-based URLs (`certificate_uid`) are non-guessable. See `docs/architecture/14-certificate-system.md`.
+
+### Review & Rating System
+
+`CourseReview` — one review per enrolled learner per course, enforced by `OneToOneField(enrollment)` (primary) and `UniqueConstraint(user, course)` (belt-and-braces). `ReviewVote` — one vote per `(review, voter)` pair; row is **mutated** (flag flipped) rather than deleted+recreated on direction change.
+
+**Denormalized fields on `NidusCourse`:** `avg_rating` (DECIMAL 3,2) and `review_count` (INT). Updated after every review create/edit/delete via `_recalculate_course_avg(course_id)` called through `transaction.on_commit`. Never updated directly — always through the service. Enables O(1) catalog sort (`?sort=rating`) and filter (`?rating_min=`, `?min_reviews=`) without subqueries.
+
+**Atomic vote flip:** `vote_on_review()` holds `select_for_update()` on the `ReviewVote` row, then updates both counter fields in a single `UPDATE` via `F()` expressions — no read-modify-write race.
+
+**`ReviewError(message, http_status)`** — same pattern as `AssignmentSubmissionError` and `InviteError`. Views use `exc.http_status` directly.
+
+**Viewer-vote annotation:** `CourseReviewListView.get` annotates the queryset with a `Subquery` for the requesting user's vote (`_viewer_vote`). One extra DB query per page, not per row. Unauthenticated requests skip the annotation.
+
+**Service:** `courses/services/review_service.py`. **Views:** `courses/all_views/review_views.py`. **Serializers:** `courses/all_serializers/review_serializers.py`. **Models:** `courses/all_models/review_models.py`. See `docs/architecture/15-review-rating-system.md`.
+
+**Access-denied policy (follows project-wide slug/ID rule):**
+- Slug-based (`<slug>/reviews/*`) → 404 when course not found/not published
+- Numeric ID (`reviews/<review_id>/vote/`) → 404 on no-access (ID not public-enumerable)
+- Self-vote → 422
+
 ### Course Status State Machine
 
 `NidusCourse.transition_to(new_status, reviewer=None, rejection_reason='')` in `courses/models.py` is the single entry point for all status changes. Valid transitions:
@@ -397,4 +420,4 @@ For local dev, `EMAIL_BACKEND=django.core.mail.backends.console.EmailBackend` pr
 
 ## Docs
 
-Detailed design rationale is in `docs/architecture/` (10 files). `09-workflows-and-architecture-why.md` explains the reasoning behind each major workflow and is worth reading before making structural changes. `10-coding-exercises.md` covers the coding exercise data model, authoring API, and design decisions. `FRONTEND_ERROR_RESPONSE_FORMAT.md` defines the error shape all views must follow.
+Detailed design rationale is in `docs/architecture/` (15 files). `09-workflows-and-architecture-why.md` explains the reasoning behind each major workflow and is worth reading before making structural changes. `10-coding-exercises.md` covers the coding exercise data model, authoring API, and design decisions. `14-certificate-system.md` covers the completion certificate issuance flow, PDF generation, and public share URLs. `15-review-rating-system.md` covers the review/rating data model, vote atomicity, denormalized catalog fields, and access-denied policy. `FRONTEND_ERROR_RESPONSE_FORMAT.md` defines the error shape all views must follow.

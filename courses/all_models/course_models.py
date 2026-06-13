@@ -157,6 +157,11 @@ class NidusCourse(models.Model):
     rejection_reason = models.TextField(blank=True, default='')
     published_at = models.DateTimeField(blank=True, null=True)
 
+    # Denormalized from CourseReview — updated by review_service._recalculate_course_avg
+    # on every review create / update / delete. Enables O(1) catalog sort + filter.
+    avg_rating = models.DecimalField(max_digits=3, decimal_places=2, default=0)
+    review_count = models.PositiveIntegerField(default=0)
+
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
@@ -174,6 +179,9 @@ class NidusCourse(models.Model):
             # `is_published` is the leading column because every catalog query filters on it.
             models.Index(fields=['is_published', 'price'], name='idx_ncourse_pub_price'),
             models.Index(fields=['is_published', 'duration_minutes'], name='idx_ncourse_pub_duration'),
+            # Catalog rating sort + ?rating_min / ?min_reviews filters.
+            models.Index(fields=['is_published', 'avg_rating'], name='idx_ncourse_pub_rating'),
+            models.Index(fields=['is_published', 'review_count'], name='idx_ncourse_pub_reviews'),
             # Catalog search (?search=...) does ILIKE '%foo%' against title and description.
             # gin_trgm_ops makes that planner-friendly; requires the pg_trgm extension,
             # which is installed by the accompanying migration.

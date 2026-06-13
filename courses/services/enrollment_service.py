@@ -134,6 +134,26 @@ def _validate_catalog_params(params):
         if parsed < 0:
             errors[key] = 'Must be non-negative.'
 
+    raw_rating_min = params.get('rating_min')
+    if raw_rating_min not in (None, ''):
+        try:
+            parsed = Decimal(raw_rating_min)
+        except (InvalidOperation, TypeError):
+            errors['rating_min'] = f'"{raw_rating_min}" is not a valid number.'
+        else:
+            if not (Decimal('1') <= parsed <= Decimal('5')):
+                errors['rating_min'] = 'Must be between 1 and 5.'
+
+    raw_min_reviews = params.get('min_reviews')
+    if raw_min_reviews not in (None, ''):
+        try:
+            parsed_int = int(raw_min_reviews)
+        except (TypeError, ValueError):
+            errors['min_reviews'] = f'"{raw_min_reviews}" is not a valid integer.'
+        else:
+            if parsed_int < 0:
+                errors['min_reviews'] = 'Must be non-negative.'
+
     if errors:
         raise ValidationError(errors)
 
@@ -155,9 +175,9 @@ def filter_catalog_courses(queryset: QuerySet[NidusCourse], params) -> QuerySet[
         duration_min=<minutes>         inclusive lower bound on duration_minutes
         duration_max=<minutes>         inclusive upper bound on duration_minutes
         search=<text>                  matches title / description / instructor name
-        rating_min=<1-5>               course rating — REQUIRES new model field
-        min_reviews=<int>              minimum review count — REQUIRES Review model
-        instructor_rating_min=<1-5>    — REQUIRES instructor rating field
+        rating_min=<decimal 1-5>       inclusive lower bound on avg_rating
+        min_reviews=<int>              minimum review_count
+        instructor_rating_min=<1-5>    deferred — requires InstructorProfile.avg_rating
 
     Supported sorts via ?sort=<key>:
         relevance      title match rank (default when ?search= present)
@@ -165,12 +185,13 @@ def filter_catalog_courses(queryset: QuerySet[NidusCourse], params) -> QuerySet[
         popularity     by active enrollment count desc
         price_asc      price ascending
         price_desc     price descending
-        rating         course rating desc — REQUIRES new model field
+        rating         avg_rating desc
 
     Raises ``django.core.exceptions.ValidationError`` with a field-keyed
     error dict when any of the validated params is malformed. The catalog
     view turns that into a 400 response. Validated params:
-        sort, level, price_min, price_max, duration_min, duration_max.
+        sort, level, price_min, price_max, duration_min, duration_max,
+        rating_min, min_reviews.
     """
     _validate_catalog_params(params)
 
@@ -246,29 +267,19 @@ def filter_catalog_courses(queryset: QuerySet[NidusCourse], params) -> QuerySet[
             | Q(instructors__full_name__icontains=search)
         ).distinct()
 
-    # ── TODO: filters that need new model fields ─────────────────────────
-    # Course rating (avg of CourseReview.rating, or a denormalized column).
-    #
-    #   rating_min = _decimal_or_none(params.get('rating_min'))
-    #   if rating_min is not None:
-    #       queryset = queryset.filter(avg_rating__gte=rating_min)
-    #
-    # Review count (requires a CourseReview model with FK 'reviews').
-    #
-    #   min_reviews = _positive_int_or_none(params.get('min_reviews'))
-    #   if min_reviews is not None:
-    #       queryset = queryset.annotate(
-    #           _review_count=Count('reviews')
-    #       ).filter(_review_count__gte=min_reviews)
-    #
-    # Instructor rating (requires InstructorProfile.avg_rating or similar).
-    #
-    #   instructor_rating_min = _decimal_or_none(params.get('instructor_rating_min'))
-    #   if instructor_rating_min is not None:
-    #       queryset = queryset.filter(
-    #           instructors__instructor_profile__avg_rating__gte=instructor_rating_min
-    #       ).distinct()
-    # ─────────────────────────────────────────────────────────────────────
+    # ── Rating floor (?rating_min=) ──────────────────────────────────────
+    rating_min = _decimal_or_none(params.get('rating_min'))
+    if rating_min is not None:
+        queryset = queryset.filter(avg_rating__gte=rating_min)
+
+    # ── Minimum review count (?min_reviews=) ─────────────────────────────
+    # Uses the denormalized review_count field on NidusCourse — no annotation
+    # needed; avoids a COUNT subquery on every catalog page load.
+    min_reviews = _positive_int_or_none(params.get('min_reviews'))
+    if min_reviews is not None:
+        queryset = queryset.filter(review_count__gte=min_reviews)
+
+    # instructor_rating_min — deferred until InstructorProfile.avg_rating exists.
 
     sort = params.get('sort')
     if sort not in CATALOG_SORT_OPTIONS:
@@ -294,9 +305,7 @@ def _apply_catalog_sort(queryset, sort, search):
         return queryset.order_by('-price', F('published_at').desc(nulls_last=True), '-id')
 
     if sort == 'rating':
-        # TODO: enable once NidusCourse.avg_rating (or aggregate) exists.
-        #   return queryset.order_by(F('avg_rating').desc(nulls_last=True), '-published_at', '-id')
-        return queryset.order_by(F('published_at').desc(nulls_last=True), '-id')
+        return queryset.order_by(F('avg_rating').desc(nulls_last=True), F('published_at').desc(nulls_last=True), '-id')
 
     if sort == 'relevance' and search:
         return queryset.annotate(

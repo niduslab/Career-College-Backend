@@ -4,6 +4,10 @@ from courses.views import (
     CertificateDownloadView,
     CertificateVerifyView,
     LearnerCertificateView,
+    CourseReviewListView,
+    CourseReviewSummaryView,
+    MyReviewView,
+    ReviewVoteView,
     CourseInstructorInviteCreateView,
     CourseInstructorInviteListView,
     CourseInstructorInviteRevokeView,
@@ -92,6 +96,16 @@ urlpatterns = [
     # -------------------------------------------------------------------------
     path('certificates/<uuid:certificate_uid>/verify/', CertificateVerifyView.as_view(), name='certificate-verify'),
     path('certificates/<uuid:certificate_uid>/download/', CertificateDownloadView.as_view(), name='certificate-download'),
+
+    # -------------------------------------------------------------------------
+    # Course reviews (slug-based → 403/404; review vote is numeric → 404)
+    # Literal path segments (summary/, my-review/) are declared before the
+    # plain list path to avoid any ambiguity in future route additions.
+    # -------------------------------------------------------------------------
+    path('<slug:slug>/reviews/summary/', CourseReviewSummaryView.as_view(), name='course-review-summary'),
+    path('<slug:slug>/reviews/my-review/', MyReviewView.as_view(), name='my-course-review'),
+    path('<slug:slug>/reviews/', CourseReviewListView.as_view(), name='course-review-list'),
+    path('reviews/<int:review_id>/vote/', ReviewVoteView.as_view(), name='review-vote'),
 
     # -------------------------------------------------------------------------
     # Learner consumption (Phase 1 — curriculum outline, lecture detail, progress)

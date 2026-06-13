@@ -31,3 +31,6 @@ docker>=7.0,<8.0
 
 # Production server
 gunicorn>=22.0,<23.0
+
+# Certificate PDF generation
+reportlab>=4.0,<5.0

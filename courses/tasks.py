@@ -526,6 +526,39 @@ def send_instructor_invite_email_task(self, invite_id: int):
     logger.info('send_instructor_invite_email_task: sent invite %s to %s.', invite_id, invite.invited_user.email)
 
 
+@shared_task(
+    bind=True,
+    autoretry_for=(Exception,),
+    retry_backoff=True,
+    retry_jitter=True,
+    max_retries=3,
+    acks_late=True,
+)
+def send_certificate_email_task(self, certificate_id: int):
+    """Send the certificate congratulations email for a given certificate PK."""
+    from courses.models import Certificate
+    from courses.email_utils import send_certificate_email
+
+    try:
+        certificate = Certificate.objects.select_related(
+            'enrollment__user',
+            'enrollment__course',
+        ).get(pk=certificate_id)
+    except Certificate.DoesNotExist:
+        logger.warning(
+            'send_certificate_email_task: certificate %s not found, skipping.',
+            certificate_id,
+        )
+        return
+
+    send_certificate_email(certificate)
+    logger.info(
+        'send_certificate_email_task: sent to %s for certificate %s.',
+        certificate.enrollment.user.email,
+        certificate_id,
+    )
+
+
 @shared_task
 def expire_instructor_invites_task():
     """

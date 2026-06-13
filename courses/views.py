@@ -1,4 +1,7 @@
 from courses.all_views import (
+    CertificateDownloadView,
+    CertificateVerifyView,
+    LearnerCertificateView,
     CourseInstructorInviteCreateView,
     CourseInstructorInviteListView,
     CourseInstructorInviteRevokeView,
@@ -65,6 +68,9 @@ from courses.all_views import (
 )
 
 __all__ = [
+    'LearnerCertificateView',
+    'CertificateVerifyView',
+    'CertificateDownloadView',
     'CourseInstructorInviteCreateView',
     'CourseInstructorInviteListView',
     'CourseInstructorInviteRevokeView',

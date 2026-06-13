@@ -495,15 +495,50 @@ def recalculate_progress(enrollment: Enrollment) -> Enrollment:
 
     update_fields = ['progress_percent', 'updated_at']
     enrollment.progress_percent = progress
+    newly_completed = False
     if progress >= 100 and enrollment.completed_at is None:
         enrollment.completed_at = timezone.now()
         update_fields.append('completed_at')
+        newly_completed = True
     elif progress < 100 and enrollment.completed_at is not None:
         enrollment.completed_at = None
         update_fields.append('completed_at')
 
     enrollment.save(update_fields=update_fields)
+
+    if newly_completed:
+        enrollment_pk = enrollment.pk
+        transaction.on_commit(lambda: _issue_certificate_and_notify(enrollment_pk))
+
     return enrollment
+
+
+def _issue_certificate_and_notify(enrollment_pk: int) -> None:
+    """Issue a certificate and queue the congratulations email on first completion.
+
+    Called via transaction.on_commit so it never fires for rolled-back
+    transactions. Local imports break the circular dependency between
+    enrollment_service ↔ certificate_service ↔ tasks.
+    """
+    from courses.services.certificate_service import issue_certificate
+    from courses.tasks import send_certificate_email_task
+
+    try:
+        enrollment = Enrollment.objects.select_related('user', 'course').get(pk=enrollment_pk)
+        logger.debug(
+            '_issue_certificate_and_notify: enrollment=%s user=%s course=%s '
+            'progress=%s completed_at=%s is_active=%s',
+            enrollment_pk,
+            enrollment.user_id,
+            enrollment.course_id,
+            enrollment.progress_percent,
+            enrollment.completed_at,
+            enrollment.is_active,
+        )
+        certificate = issue_certificate(enrollment)
+        send_certificate_email_task.delay(certificate.pk)
+    except Exception:
+        logger.exception('_issue_certificate_and_notify failed for enrollment=%s', enrollment_pk)
 
 
 def update_last_accessed(enrollment: Enrollment):

@@ -79,11 +79,17 @@ Learner Consumption endpoints.
 - [41. Assignment Detail + Submission + Polling + Retry](#41-assignment-detail--submission)
 - [42. Coding Exercise Detail + Run + Submit + Polling + Retry](#42-coding-exercise-detail--run--submit)
 
+### Certificates
+- [43. Certificates (Issuance, Verify, Download)](#43-certificates)
+
+### Course Reviews & Ratings
+- [44. Course Reviews & Ratings](#44-course-reviews--ratings)
+
 ### Reference
-- [43. Common Error Responses](#43-common-error-responses)
-- [44. Pagination](#44-pagination)
-- [45. Quick Test Flows](#45-quick-test-flows)
-- [46. Notes](#46-notes)
+- [45. Common Error Responses](#45-common-error-responses)
+- [46. Pagination](#46-pagination)
+- [47. Quick Test Flows](#47-quick-test-flows)
+- [48. Notes](#48-notes)
 
 ---
 
@@ -150,6 +156,8 @@ aq_id           =
 objective_id    =
 prerequisite_id =
 audience_id     =
+certificate_uid =
+review_id       =
 ```
 
 Multi-actor flows (learner + instructor + admin in the same Postman
@@ -2457,8 +2465,10 @@ The catalog supports multi-criteria filtering and sorting. All params are option
 | `duration_min` | non-negative integer (minutes) | `?duration_min=60` |
 | `duration_max` | non-negative integer (minutes) | `?duration_max=240` |
 | `search` | text — matches title, description, instructor full name | `?search=python` |
-| `page` | page number (see Section 44) | `?page=2` |
-| `page_size` | items per page, max 100 (see Section 44) | `?page_size=25` |
+| `rating_min` | decimal 1.0–5.0 — minimum avg rating | `?rating_min=4.0` |
+| `min_reviews` | integer ≥ 0 — minimum number of reviews | `?min_reviews=10` |
+| `page` | page number (see Section 46) | `?page=2` |
+| `page_size` | items per page, max 100 (see Section 46) | `?page_size=25` |
 
 **Sort field** (`?sort=<key>` — one value at a time):
 
@@ -2469,7 +2479,7 @@ The catalog supports multi-criteria filtering and sorting. All params are option
 | `popularity` | Active enrollment count desc, then newest. |
 | `price_asc` | Price ascending. |
 | `price_desc` | Price descending. |
-| `rating` | Stubbed — currently falls back to `newest` until the course-rating field ships. |
+| `rating` | Average rating descending, then newest. Courses with no reviews sort last (`NULLS LAST`). |
 
 #### 35.2.1 Category / subcategory
 
@@ -3677,23 +3687,320 @@ reap_stuck_coding_submissions_task.run()
 
 ---
 
+# Certificates
+
+## 43. Certificates
+
+> Certificates are issued automatically when a learner's `progress_percent` reaches 100%. The endpoints below let learners retrieve their own certificate, share a public verification link, and download a PDF.
+
+### 43.1 Get My Certificate (Learner)
+
+**GET** `{{base_url}}/courses/my-courses/{{course_slug}}/certificate/`
+
+**Headers:** learner JWT.
+
+**Expected 200:**
+```json
+{
+    "success": true,
+    "data": {
+        "certificate_uid": "550e8400-e29b-41d4-a716-446655440000",
+        "learner_name": "John Doe",
+        "course_title": "Python Backend Bootcamp",
+        "issued_at": "2026-06-13T12:00:00Z"
+    }
+}
+```
+
+| Scenario | Status | Body |
+|---|---|---|
+| Course not found / not published | 404 | `"Course not found."` |
+| Enrolled but not completed | 404 | `"Certificate not yet issued."` |
+| Not enrolled | 403 | (slug → 403, project policy) |
+
+Save `certificate_uid` from the response as the `{{certificate_uid}}` variable for sections 43.2 and 43.3.
+
+---
+
+### 43.2 Verify Certificate (Public)
+
+**GET** `{{base_url}}/courses/certificates/{{certificate_uid}}/verify/`
+
+No Authorization header needed.
+
+**Expected 200:**
+```json
+{
+    "success": true,
+    "data": {
+        "certificate_uid": "550e8400-e29b-41d4-a716-446655440000",
+        "learner_name": "John Doe",
+        "course_title": "Python Backend Bootcamp",
+        "issued_at": "2026-06-13T12:00:00Z",
+        "is_valid": true
+    }
+}
+```
+
+`is_valid` is always `true` if the row exists — there is no revocation mechanism.
+
+| Scenario | Status |
+|---|---|
+| UUID not found | 404 |
+
+---
+
+### 43.3 Download Certificate PDF (Public)
+
+**GET** `{{base_url}}/courses/certificates/{{certificate_uid}}/download/`
+
+No Authorization header needed.
+
+**Expected 200:** `Content-Type: application/pdf`, `Content-Disposition: attachment; filename="certificate-<uid>.pdf"`.
+
+The PDF is generated on-the-fly from immutable database snapshots (reportlab). No file is stored on disk.
+
+| Scenario | Status |
+|---|---|
+| UUID not found | 404 JSON |
+| PDF generation error | 500 JSON |
+
+---
+
+# Course Reviews & Ratings
+
+## 44. Course Reviews & Ratings
+
+> Enrolled learners can submit, edit, and delete a review. Guests and unenrolled users can read reviews. Learners can vote on others' reviews. Aggregate stats are returned by the summary endpoint. All slug-based routes return 404 when the course is not found; the numeric `review_id` vote endpoint returns 404 on no-access (ID is not public-enumerable).
+
+### 44.1 Get Review Summary (Public)
+
+**GET** `{{base_url}}/courses/{{course_slug}}/reviews/summary/`
+
+No Authorization header needed.
+
+**Expected 200:**
+```json
+{
+    "success": true,
+    "data": {
+        "avg_rating": 4.32,
+        "review_count": 87,
+        "distribution": {
+            "1": 2,
+            "2": 5,
+            "3": 10,
+            "4": 25,
+            "5": 45
+        }
+    }
+}
+```
+
+---
+
+### 44.2 List Reviews (Public, Paginated)
+
+**GET** `{{base_url}}/courses/{{course_slug}}/reviews/`
+
+No Authorization header needed. Optional query params:
+
+| Param | Values | Default |
+|---|---|---|
+| `rating` | `1`–`5` | — (all stars) |
+| `ordering` | `-created_at`, `created_at`, `-helpful_count`, `-rating`, `rating` | `-created_at` |
+| `page` | integer | 1 |
+| `page_size` | integer (max 100) | 10 |
+
+**Expected 200:**
+```json
+{
+    "success": true,
+    "data": {
+        "count": 87,
+        "next": null,
+        "previous": null,
+        "results": [
+            {
+                "id": 12,
+                "rating": 5,
+                "headline": "Excellent course",
+                "body": "Well-structured and practical.",
+                "helpful_count": 14,
+                "not_helpful_count": 1,
+                "reviewer_name": "John Doe",
+                "viewer_vote": null,
+                "created_at": "2026-06-01T10:00:00Z",
+                "updated_at": "2026-06-01T10:00:00Z"
+            }
+        ]
+    }
+}
+```
+
+`viewer_vote` is `"helpful"`, `"not_helpful"`, or `null`. For unauthenticated requests it is always `null`. For authenticated learners it reflects the `ReviewVote` row for that learner.
+
+---
+
+### 44.3 Submit a Review
+
+**POST** `{{base_url}}/courses/{{course_slug}}/reviews/`
+
+**Headers:** learner JWT.
+
+```json
+{
+    "rating": 5,
+    "headline": "Excellent course",
+    "body": "Well-structured and practical. Highly recommended."
+}
+```
+
+**Expected 201 (first submission):**
+```json
+{
+    "success": true,
+    "message": "Review submitted.",
+    "data": { "id": 12, "rating": 5, "headline": "Excellent course", "...": "..." }
+}
+```
+
+**Expected 200 (edit — upsert):** Same shape, `"message": "Review updated."`.
+
+| Scenario | Status | Body |
+|---|---|---|
+| Not enrolled (active) | 403 | `"You must be enrolled in this course to leave a review."` |
+| `rating` outside 1–5 | 400 | `errors.rating` |
+| Blank `headline` | 400 | `errors.headline: ["Headline must not be blank."]` |
+| `headline` over 150 chars | 400 | `errors.headline` |
+| Instructor / unenrolled calling POST | 403 | `"Only learners can access this resource."` |
+
+---
+
+### 44.4 Get My Review
+
+**GET** `{{base_url}}/courses/{{course_slug}}/reviews/my-review/`
+
+**Headers:** learner JWT.
+
+**Expected 200:** Same review object shape as 44.2.
+
+**Expected 404** if no review exists yet: `"You have not reviewed this course yet."`
+
+---
+
+### 44.5 Edit My Review
+
+**PATCH** `{{base_url}}/courses/{{course_slug}}/reviews/my-review/`
+
+**Headers:** learner JWT.
+
+Send only the fields to change (all fields are re-validated):
+
+```json
+{
+    "rating": 4,
+    "headline": "Good course, some pacing issues",
+    "body": "Content is solid but some sections could move faster."
+}
+```
+
+**Expected 200:**
+```json
+{
+    "success": true,
+    "message": "Review updated.",
+    "data": { "id": 12, "rating": 4, "headline": "Good course, some pacing issues", "...": "..." }
+}
+```
+
+---
+
+### 44.6 Delete My Review
+
+**DELETE** `{{base_url}}/courses/{{course_slug}}/reviews/my-review/`
+
+**Headers:** learner JWT.
+
+**Body:** *(empty)*
+
+**Expected 200:**
+```json
+{ "success": true, "message": "Review deleted." }
+```
+
+After deletion the course `avg_rating` and `review_count` on the catalog are recalculated automatically.
+
+| Scenario | Status | Body |
+|---|---|---|
+| No review exists | 404 | `"Review not found."` |
+
+---
+
+### 44.7 Vote on a Review
+
+**POST** `{{base_url}}/courses/reviews/{{review_id}}/vote/`
+
+**Headers:** learner JWT. Save the review `id` from the list response as `{{review_id}}`.
+
+```json
+{ "is_helpful": true }
+```
+
+**Expected 200:**
+```json
+{ "success": true, "message": "Marked as helpful." }
+```
+
+Or `"Marked as not helpful."` when `is_helpful: false`.
+
+| Scenario | Status | Body |
+|---|---|---|
+| Review not found / not published | 404 | `"Review not found."` |
+| Voting on your own review | 422 | `"You cannot vote on your own review."` |
+| Missing `is_helpful` field | 400 | `errors.is_helpful` |
+| Voting in same direction again | 200 | Idempotent — same vote returned, no double-count |
+| Flipping direction | 200 | Counters updated atomically |
+
+---
+
+### 44.8 Catalog Filter Integration
+
+Reviews integrate with the existing catalog filter/sort:
+
+| Param | Type | Example | Effect |
+|---|---|---|---|
+| `sort=rating` | — | `?sort=rating` | Orders by `avg_rating DESC`, then `published_at DESC` |
+| `rating_min` | decimal 1.0–5.0 | `?rating_min=4.0` | Only courses with `avg_rating ≥ 4.0` |
+| `min_reviews` | integer ≥ 0 | `?min_reviews=10` | Only courses with at least 10 reviews |
+
+Combine freely: `?sort=rating&rating_min=4.0&min_reviews=5`
+
+| Bad input | Status | Error |
+|---|---|---|
+| `?rating_min=0` | 400 | `"rating_min must be between 1 and 5."` |
+| `?rating_min=6` | 400 | `"rating_min must be between 1 and 5."` |
+| `?min_reviews=-1` | 400 | `"min_reviews must be a non-negative integer."` |
+
+---
+
 # Reference
 
-## 43. Common Error Responses
+## 45. Common Error Responses
 
-### 43.1 Invalid `item_type` in section contents
+### 45.1 Invalid `item_type` in section contents
 ```json
 { "item_type": "video", "title": "Invalid Type" }
 ```
 **Expected 400:** `"item_type must be 'lecture', 'quiz', 'coding', or 'assignment'."`
 
-### 43.2 Invalid reorder position
+### 45.2 Invalid reorder position
 ```json
 { "position": 0 }
 ```
 **Expected 400:** `"position must be a positive integer."`
 
-### 43.3 Two correct answers for one question
+### 45.3 Two correct answers for one question
 
 Trying to create a second answer with `"is_correct": true` for the same question:
 
@@ -3710,7 +4017,7 @@ Trying to create a second answer with `"is_correct": true` for the same question
 
 ---
 
-## 44. Pagination
+## 46. Pagination
 
 All list endpoints use page-based pagination.
 
@@ -3736,9 +4043,9 @@ The standard paginated envelope is:
 
 ---
 
-## 45. Quick Test Flows
+## 47. Quick Test Flows
 
-### 45.1 Registration / Login
+### 47.1 Registration / Login
 
 1. **Register** a learner (5.1)
 2. **Check OTP** — look in email or DB: `python manage.py shell -c "from authentication.models import User; u=User.objects.get(email='john.learner@example.com'); print(u.otp_code)"`
@@ -3746,7 +4053,7 @@ The standard paginated envelope is:
 4. **Login** (9) — save the `access` and `refresh` tokens
 5. **Logout** (11) with the tokens
 
-### 45.2 Google Sign-In (Full OAuth Flow)
+### 47.2 Google Sign-In (Full OAuth Flow)
 
 > Prerequisites: set `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, and `GOOGLE_CALLBACK_URL` in `.env`. The callback URL must match Google Cloud Console.
 
@@ -3787,7 +4094,7 @@ Make sure `FRONTEND_GOOGLE_CALLBACK` is **not set** in `.env`.
 - `partner_institution` user_type is rejected with 400
 - Existing `partner_institution` account is rejected with 403
 
-### 45.3 Forgot / Reset Password
+### 47.3 Forgot / Reset Password
 
 1. **Forgot Password** (13) for a verified user email
 2. **Check OTP** — look in email or DB
@@ -3796,7 +4103,7 @@ Make sure `FRONTEND_GOOGLE_CALLBACK` is **not set** in `.env`.
 5. **Reset Password** (15)
 6. **Login** with the new password (9)
 
-### 45.4 Profile Management
+### 47.4 Profile Management
 
 1. **Register** a learner (5.1)
 2. **Verify OTP** (7)
@@ -3808,7 +4115,7 @@ Make sure `FRONTEND_GOOGLE_CALLBACK` is **not set** in `.env`.
 8. **Get My Profile** again — verify education & work experience are included
 9. **View Public Profile** (19) using the slug from the profile response
 
-### 45.5 Public Browsing
+### 47.5 Public Browsing
 
 1. Register and verify a few users of different types
 2. Update their profiles with location data
@@ -3817,7 +4124,7 @@ Make sure `FRONTEND_GOOGLE_CALLBACK` is **not set** in `.env`.
 5. **Browse Institutions** (20.3)
 6. **View Individual Profile** (19) by slug
 
-### 45.6 Instructor ID Verification (Full Cycle)
+### 47.6 Instructor ID Verification (Full Cycle)
 
 1. **Register** an instructor (5.2)
 2. **Verify OTP** (7)
@@ -3835,14 +4142,14 @@ Make sure `FRONTEND_GOOGLE_CALLBACK` is **not set** in `.env`.
 14. **Approve** (25.3b) — instructor is now verified
 15. **Login as instructor** again → **Get My Profile** (16.1) — confirm `is_verified: true`
 
-### 45.7 Rejection & Resubmission
+### 47.7 Rejection & Resubmission
 
 1. Complete 45.6 steps 1–13 (up to `under_review`)
 2. **Reject** (25.3c) with a reason
 3. **Login as instructor** → **List verifications** (24.1) — see `rejected` status with reason
 4. Instructor creates a **new draft** (21) and goes through the flow again
 
-### 45.8 Action Required & Resubmit
+### 47.8 Action Required & Resubmit
 
 1. Complete 45.6 steps 1–13 (up to `under_review`)
 2. **Request action** (25.3d) — admin specifies what needs to be fixed
@@ -3851,7 +4158,7 @@ Make sure `FRONTEND_GOOGLE_CALLBACK` is **not set** in `.env`.
 5. **Submit** again (23) — transitions back to `submitted` (profile completeness is checked again)
 6. **Admin picks up** and **approves** (25.3a, 25.3b)
 
-### 45.9 Course Authoring (Full E2E)
+### 47.9 Course Authoring (Full E2E)
 
 1. Login as a verified instructor and copy the access token.
 2. **Create course** (26.1) → save `course_id`.
@@ -3875,7 +4182,27 @@ Make sure `FRONTEND_GOOGLE_CALLBACK` is **not set** in `.env`.
 20. As an **admin**, call **review** (34.2) with `{"action": "approve"}` — expect `status: published`.
 21. Call **archive** (34.5) — expect `status: archived`.
 
-### 45.10 Catalog → Enrollment → Consumption
+### 47.10 Certificates & Reviews (Full E2E)
+
+Prerequisites: a learner enrolled in a published course who has completed all content items (progress = 100%).
+
+| Step | Action | What to verify |
+|---|---|---|
+| 1 | Complete all lectures / quizzes / assignments / exercises | `progress_percent` reaches 100 on `/my-courses/` |
+| 2 | `GET /courses/my-courses/{{course_slug}}/certificate/` (learner JWT) | 200, `certificate_uid` in response; save as `{{certificate_uid}}` |
+| 3 | `GET /courses/certificates/{{certificate_uid}}/verify/` (no auth) | 200, `is_valid: true` |
+| 4 | `GET /courses/certificates/{{certificate_uid}}/download/` (no auth) | 200, PDF bytes; open in Postman visualizer or save file |
+| 5 | `GET /courses/{{course_slug}}/reviews/summary/` (no auth) | 200, `review_count: 0` initially |
+| 6 | `POST /courses/{{course_slug}}/reviews/` (learner JWT) `{"rating":5,"headline":"Great course","body":""}` | 201, save `id` as `{{review_id}}` |
+| 7 | `GET /courses/{{course_slug}}/reviews/summary/` (no auth) | 200, `review_count: 1`, `avg_rating: 5.0` |
+| 8 | `GET /courses/{{course_slug}}/reviews/` (learner2 JWT) | 200, `viewer_vote: null` |
+| 9 | `POST /courses/reviews/{{review_id}}/vote/` (learner2 JWT) `{"is_helpful":true}` | 200, `"Marked as helpful."` |
+| 10 | `GET /courses/{{course_slug}}/reviews/` (learner2 JWT) | 200, `viewer_vote: "helpful"` on that review |
+| 11 | `POST /courses/reviews/{{review_id}}/vote/` (learner2 JWT) `{"is_helpful":false}` | 200, `"Marked as not helpful."` — flip updates counters atomically |
+| 12 | `PATCH /courses/{{course_slug}}/reviews/my-review/` (learner JWT) `{"rating":4,"headline":"Good course"}` | 200, `avg_rating` on catalog updates |
+| 13 | `DELETE /courses/{{course_slug}}/reviews/my-review/` (learner JWT) | 200, `review_count` drops back to 0 |
+
+### 47.12 Catalog → Enrollment → Consumption
 
 | Step | Method | URL | Auth | What to verify |
 |---|---|---|---|---|
@@ -3909,7 +4236,7 @@ Make sure `FRONTEND_GOOGLE_CALLBACK` is **not set** in `.env`.
 
 ---
 
-## 46. Notes
+## 48. Notes
 
 - All ownership checks are instructor-scoped on the authoring side; if the course/section/exercise/assignment is not yours, the API returns 404 (not 403). The "leak existence" hardening is also applied to numeric-ID learner endpoints.
 - Status transitions (submit, review, rework, archive) are dedicated POST endpoints. Do not set `status` directly via PATCH — the field is not writable that way.

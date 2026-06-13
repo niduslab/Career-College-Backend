@@ -1,7 +1,8 @@
-from django.db.models.signals import post_save, pre_save
+from django.db import transaction
+from django.db.models.signals import post_delete, post_save, pre_save
 from django.dispatch import receiver
 
-from courses.models import Enrollment, WatchProgress
+from courses.models import CourseReview, Enrollment, WatchProgress
 from courses.services.enrollment_service import recalculate_progress
 
 
@@ -44,3 +45,15 @@ def recalculate_enrollment_progress_on_watch_update(sender, instance, created, *
     )
     if enrollment:
         recalculate_progress(enrollment)
+
+
+@receiver(post_delete, sender=CourseReview)
+def recalculate_course_avg_on_review_delete(sender, instance, **kwargs):
+    """Keep avg_rating / review_count fresh when a review is cascade-deleted.
+
+    Covers GDPR wipes, enrollment hard-deletes, and admin row deletions —
+    all paths that remove a CourseReview without going through delete_review().
+    """
+    from courses.services.review_service import _recalculate_course_avg
+    course_id = instance.course_id
+    transaction.on_commit(lambda: _recalculate_course_avg(course_id))

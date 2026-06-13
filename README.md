@@ -434,6 +434,26 @@ All authenticated endpoints require: `Authorization: Bearer <access_token>`
 | POST | `{slug}/unenroll/` | Learner | Soft-unenroll while preserving progress |
 | GET | `my-courses/` | Learner | List active enrollments with progress |
 | GET | `my-courses/{slug}/` | Learner or course instructor | Slim course-header metadata + caller's enrollment status (no curriculum tree — see `learn/{slug}/curriculum/`) |
+| GET | `my-courses/{slug}/certificate/` | Learner | Retrieve own completion certificate for a course. 404 if not yet completed. |
+
+#### Certificates
+
+| Method | Endpoint | Auth | Description |
+|--------|----------|------|-------------|
+| GET | `certificates/{uuid}/verify/` | No | Public share/verification page — returns certificate metadata + `is_valid: true` |
+| GET | `certificates/{uuid}/download/` | No | Download certificate as a PDF (generated on-the-fly via reportlab; no file stored on disk) |
+
+#### Course Reviews & Ratings
+
+| Method | Endpoint | Auth | Description |
+|--------|----------|------|-------------|
+| GET | `{slug}/reviews/summary/` | No | Aggregate stats: `avg_rating`, `review_count`, 1–5 star distribution |
+| GET | `{slug}/reviews/` | No | Paginated published reviews. `?rating=1-5`, `?ordering=(-created_at\|created_at\|-helpful_count\|-rating\|rating)` |
+| POST | `{slug}/reviews/` | Learner | Create or replace own review (upsert). Caller must be actively enrolled. 201 on create, 200 on update. |
+| GET | `{slug}/reviews/my-review/` | Learner | Fetch own review for this course. 404 if none exists yet. |
+| PATCH | `{slug}/reviews/my-review/` | Learner | Update own review. |
+| DELETE | `{slug}/reviews/my-review/` | Learner | Delete own review. Recalculates course `avg_rating` on commit. |
+| POST | `reviews/{review_id}/vote/` | Learner | Cast or flip a helpful / not-helpful vote. 422 on self-vote. |
 
 #### Learner Consumption (Phase 1 + Phase 2)
 
@@ -662,7 +682,9 @@ career_college_backend/
 │   │   ├── learner_service.py     Curriculum, lecture/quiz/assignment/coding consumption + submission flows
 │   │   ├── code_runner.py         Docker sandbox + per-language batched harness (one container per submission)
 │   │   ├── assignment_grading.py  RubricGrader for the assignment auto-grader
-│   │   └── enrollment_service.py  Catalog filtering + `recalculate_progress` (lecture/quiz/assignment/coding rollup)
+│   │   ├── enrollment_service.py  Catalog filtering + `recalculate_progress` (lecture/quiz/assignment/coding rollup)
+│   │   ├── certificate_service.py `issue_certificate`, `get_certificate_for_learner`, `get_certificate_by_uid`
+│   │   └── review_service.py      `ReviewError`, review upsert/delete, vote flip, `_recalculate_course_avg`
 │   ├── selectors.py               Reusable query helpers
 │   ├── signals.py                 Domain event hooks (enrollment progress updates)
 │   ├── tasks.py                   Celery tasks (video transcoding, assignment grading, coding run/submit, zombie reaper)
@@ -671,7 +693,7 @@ career_college_backend/
 │       └── seed_course_categories.py
 ├── id_verification/               Identity verification workflow
 ├── core/                          Shared: permissions, pagination, middleware
-├── docs/architecture/             13 architecture design documents
+├── docs/architecture/             15 architecture design documents
 ├── docs/submission-flow.md        Coding-exercise Run/Submit pipeline + sandbox design
 ├── docs/comparison.md             Comparison vs Udemy-style platform (drives the 1-container-per-submission optimisation)
 ├── scripts/                       Manual smoke tests (real Docker; not in test suite)
@@ -702,6 +724,8 @@ career_college_backend/
 - **Coding runner contract**: learner code must define a top-level `solve(...)` function taking one string argument. The harness substitutes test inputs through `INPUT_{i}` env vars, captures per-test stdout/stderr/runtime via sentinel markers, and aggregates results Python-side. Single container per submission — see [docs/submission-flow.md](docs/submission-flow.md).
 - **Coding execution sandbox**: one Docker container per submission with `runtime='runsc'` (gVisor; configurable via `RUNNER_RUNTIME`), `network_disabled`, 128 MB RAM, 0.5 CPU (`nano_cpus=500_000_000`), `pids_limit=64`, `ulimits` (fsize 10 MB, nproc 64, nofile 128, cpu 10 s), read-only root FS, 32 MB tmpfs at `/tmp`, all capabilities dropped, `no-new-privileges`. Wall-clock budget enforced via `container.wait(timeout=...)` + `container.kill()`. Demo-only — Docker-out-of-Docker; the daemon socket is shared with the host.
 - **Coding submission idempotency**: `evaluate_coding_submission_task` is `acks_late=True` and short-circuits on terminal status, so worker-death redelivery is safe. A Celery-beat reaper (`reap_stuck_coding_submissions_task`, 60 s) flips `queued`/`grading` rows older than 5 min to `error`.
+- **Certificates** — issued automatically when `progress_percent` reaches 100% for the first time (`recalculate_progress` → `transaction.on_commit` → `_issue_certificate_and_notify`). `Certificate` is identified by a UUID4 (non-guessable); `issue_certificate` uses `get_or_create` so Celery redelivery is idempotent. PDF generated on-the-fly by reportlab (`courses/certificate_pdf.py`); no file stored on disk.
+- **Reviews & ratings** — `CourseReview` is one-per-enrollment (enforced by `OneToOneField(enrollment)`). `ReviewVote` tracks helpful/not-helpful per reviewer. `avg_rating` and `review_count` are denormalized onto `NidusCourse` (updated via `transaction.on_commit` after every review write) so catalog sort/filter (`?sort=rating`, `?rating_min=`, `?min_reviews=`) stays a single-table scan. Vote flips use `select_for_update` + `F()` expressions for atomicity.
 
 ---
 
@@ -709,7 +733,7 @@ career_college_backend/
 
 | File | Contents |
 |------|----------|
-| [POSTMAN_TESTING_GUIDE.md](POSTMAN_TESTING_GUIDE.md) | Complete API testing guide — auth, courses, learner consumption (lectures, quizzes, assignments, coding) |
+| [POSTMAN_TESTING_GUIDE.md](POSTMAN_TESTING_GUIDE.md) | Complete API testing guide — auth, courses, learner consumption (lectures, quizzes, assignments, coding), certificates, reviews & ratings |
 | [FRONTEND_ERROR_RESPONSE_FORMAT.md](FRONTEND_ERROR_RESPONSE_FORMAT.md) | Error response shape spec |
 | [docs/architecture/](docs/architecture/) | Architecture design documents |
 | [docs/submission-flow.md](docs/submission-flow.md) | Coding-exercise Run/Submit pipeline, sandbox model, redaction layers, failure modes |

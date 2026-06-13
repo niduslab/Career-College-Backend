@@ -60,6 +60,15 @@ from courses.services.certificate_service import (
     get_certificate_for_learner,
     issue_certificate,
 )
+from courses.services.review_service import (
+    ReviewError,
+    create_or_update_review,
+    delete_review,
+    get_course_reviews,
+    get_my_review,
+    get_review_summary,
+    vote_on_review,
+)
 
 __all__ = [
     'InviteError',
@@ -110,4 +119,11 @@ __all__ = [
     'get_certificate_by_uid',
     'get_certificate_for_learner',
     'issue_certificate',
+    'ReviewError',
+    'create_or_update_review',
+    'delete_review',
+    'get_course_reviews',
+    'get_my_review',
+    'get_review_summary',
+    'vote_on_review',
 ]

@@ -62,6 +62,12 @@ from courses.all_views.certificate_views import (
     CertificateVerifyView,
     LearnerCertificateView,
 )
+from courses.all_views.review_views import (
+    CourseReviewListView,
+    CourseReviewSummaryView,
+    MyReviewView,
+    ReviewVoteView,
+)
 from courses.all_views.content_views import (
     CourseAudienceDetailAPIView,
     CourseAudienceListCreateAPIView,
@@ -150,4 +156,8 @@ __all__ = [
     'LearnerCertificateView',
     'CertificateVerifyView',
     'CertificateDownloadView',
+    'CourseReviewListView',
+    'CourseReviewSummaryView',
+    'MyReviewView',
+    'ReviewVoteView',
 ]

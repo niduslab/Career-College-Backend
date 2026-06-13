@@ -525,6 +525,16 @@ def _issue_certificate_and_notify(enrollment_pk: int) -> None:
 
     try:
         enrollment = Enrollment.objects.select_related('user', 'course').get(pk=enrollment_pk)
+        logger.debug(
+            '_issue_certificate_and_notify: enrollment=%s user=%s course=%s '
+            'progress=%s completed_at=%s is_active=%s',
+            enrollment_pk,
+            enrollment.user_id,
+            enrollment.course_id,
+            enrollment.progress_percent,
+            enrollment.completed_at,
+            enrollment.is_active,
+        )
         certificate = issue_certificate(enrollment)
         send_certificate_email_task.delay(certificate.pk)
     except Exception:

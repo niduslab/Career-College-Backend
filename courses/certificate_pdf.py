@@ -11,11 +11,31 @@ demo_certificate_template.html:
 
 import io
 import math
+import os
 
+import reportlab
 from django.conf import settings
 from reportlab.lib import colors
 from reportlab.lib.pagesizes import A4, landscape
+from reportlab.pdfbase import pdfmetrics
+from reportlab.pdfbase.ttfonts import TTFont
 from reportlab.pdfgen import canvas
+
+# Register a Unicode-capable bold font for learner name rendering.
+# VeraBd ships with every ReportLab installation and covers Latin Extended,
+# Greek, and Cyrillic — far wider than the built-in Type1 Helvetica (Latin-1
+# only). For CJK / Arabic coverage, drop a Noto Sans TTF into the project,
+# register it here, and point _UNICODE_BOLD at the registered name.
+_REPORTLAB_FONTS = os.path.join(os.path.dirname(reportlab.__file__), 'fonts')
+
+_UNICODE_BOLD = 'Helvetica-Bold'  # fallback if VeraBd is missing
+try:
+    _vera_bd = os.path.join(_REPORTLAB_FONTS, 'VeraBd.ttf')
+    if os.path.isfile(_vera_bd):
+        pdfmetrics.registerFont(TTFont('VeraBd', _vera_bd))
+        _UNICODE_BOLD = 'VeraBd'
+except Exception:
+    pass
 
 # ── Palette (matching the HTML template exactly) ──────────────────────────────
 _PAPER      = colors.HexColor('#F9F9F7')
@@ -211,6 +231,18 @@ def _draw_signature(c, base_x, base_y):
     c.setLineJoin(0)
 
 
+def _fit_text(c, text, font, max_size, min_size, max_width):
+    """Shrink font until text fits max_width, then truncate with ellipsis if still too wide."""
+    size = max_size
+    while c.stringWidth(text, font, size) > max_width and size > min_size:
+        size -= 1
+    if c.stringWidth(text, font, size) > max_width:
+        while text and c.stringWidth(text + '…', font, size) > max_width:
+            text = text[:-1]
+        text = text + '…'
+    return text, size
+
+
 def _draw_spaced_text(c, text, x, y, font, size, color, spacing):
     """Draw text with explicit inter-character spacing, left-aligned from x."""
     c.setFont(font, size)
@@ -324,13 +356,14 @@ def generate_certificate_pdf(certificate) -> bytes:
     c.setFillColor(_GREY_99)
     c.drawString(pad_l, date_y, issued_date)
 
-    # Learner name — large, bold, uppercase
+    # Learner name — large, bold, uppercase.
+    # Uses _UNICODE_BOLD (VeraBd TTF) so extended-Latin, Greek, and Cyrillic
+    # names render correctly. _fit_text truncates with ellipsis if the name
+    # still overflows at the minimum size (guards against very long names).
     name = certificate.learner_name.upper()
-    name_sz = 32
-    while c.stringWidth(name, 'Helvetica-Bold', name_sz) > avail_w and name_sz > 16:
-        name_sz -= 1
+    name, name_sz = _fit_text(c, name, _UNICODE_BOLD, 32, 16, avail_w)
     name_y = date_y - 14 - name_sz
-    c.setFont('Helvetica-Bold', name_sz)
+    c.setFont(_UNICODE_BOLD, name_sz)
     c.setFillColor(_NEAR_BLACK)
     c.drawString(pad_l, name_y, name)
 
@@ -340,11 +373,14 @@ def generate_certificate_pdf(certificate) -> bytes:
     c.setFillColor(_GREY_66)
     c.drawString(pad_l, comp_y, 'has successfully completed')
 
-    # Course title (serif, normal weight)
+    # Course title (serif, normal weight). Times-Roman is a Type1 font (Latin-1
+    # only) but course titles are authored by instructors on this platform and
+    # are unlikely to contain non-Latin text. Overflow is still guarded by
+    # _fit_text so an unusually long title truncates rather than bleeds off-edge.
     course_title = certificate.course_title
-    title_sz = 15
-    while c.stringWidth(course_title, 'Times-Roman', title_sz) > avail_w * 0.90 and title_sz > 10:
-        title_sz -= 1
+    course_title, title_sz = _fit_text(
+        c, course_title, 'Times-Roman', 15, 10, avail_w * 0.90
+    )
     title_y = comp_y - title_sz - 8
     c.setFont('Times-Roman', title_sz)
     c.setFillColor(_NEAR_BLACK)

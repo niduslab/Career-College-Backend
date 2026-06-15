@@ -19,14 +19,11 @@ def _expiry_days():
 
 
 def create_instructor_invite(course, owner, email):
-    """
-    Validate and create a pending CourseInstructorInvite.
-    Dispatches the email task on commit.
-    Raises InviteError on any validation failure.
-    """
+    """Create a pending invite. Raises InviteError on any validation failure."""
     from authentication.models import User
     from courses.models import CourseInstructorInvite
-    from courses.tasks import send_instructor_invite_email_task
+    from notifications.models import NotificationEventType
+    from notifications.services.dispatcher import dispatch
 
     if course.created_by_id != owner.pk:
         raise InviteError('Only the course owner can send invites.', http_status=403)
@@ -61,16 +58,21 @@ def create_instructor_invite(course, owner, email):
             invited_user=invited_user,
             expires_at=timezone.now() + timedelta(days=_expiry_days()),
         )
-        transaction.on_commit(lambda: send_instructor_invite_email_task.delay(invite.pk))
+        invite_id = invite.pk
+        ctx = {
+            'course_title': course.title,
+            'course_slug': course.slug,
+            'invite_id': invite_id,
+        }
+        transaction.on_commit(
+            lambda: dispatch(NotificationEventType.INVITE_SENT, [invited_user], context=ctx)
+        )
 
     return invite
 
 
 def revoke_instructor_invite(invite, owner):
-    """
-    Revoke a pending invite. Owner-only.
-    Raises InviteError on failure.
-    """
+    """Revoke a pending invite. Owner-only. Raises InviteError on failure."""
     from courses.models import CourseInstructorInvite
 
     if invite.course.created_by_id != owner.pk:
@@ -90,11 +92,7 @@ def revoke_instructor_invite(invite, owner):
 
 
 def accept_instructor_invite(token, user):
-    """
-    Accept an invite. Atomically adds user to course.instructors M2M.
-    Raises CourseInstructorInvite.DoesNotExist when token not found or not for this user.
-    Raises InviteError(http_status=410) when invite is not actionable.
-    """
+    """Accept an invite; atomically adds user to course.instructors. Raises DoesNotExist or InviteError(410)."""
     from courses.models import CourseInstructorInvite
 
     with transaction.atomic():
@@ -121,15 +119,23 @@ def accept_instructor_invite(token, user):
         invite.save(update_fields=['status', 'responded_at', 'updated_at'])
         invite.course.instructors.add(invite.invited_user)
 
+        from notifications.models import NotificationEventType
+        from notifications.services.dispatcher import dispatch
+        invited_by = invite.invited_by
+        course_title = invite.course.title
+        course_slug = invite.course.slug
+        invitee_name = user.get_full_name() or user.email
+        transaction.on_commit(lambda: dispatch(
+            NotificationEventType.INVITE_ACCEPTED,
+            [invited_by],
+            context={'course_title': course_title, 'course_slug': course_slug, 'invitee_name': invitee_name},
+        ))
+
     return invite
 
 
 def decline_instructor_invite(token, user):
-    """
-    Decline an invite.
-    Raises CourseInstructorInvite.DoesNotExist when token not found or not for this user.
-    Raises InviteError(http_status=410) when invite is not actionable.
-    """
+    """Decline an invite. Raises DoesNotExist or InviteError(410)."""
     from courses.models import CourseInstructorInvite
 
     with transaction.atomic():
@@ -149,16 +155,23 @@ def decline_instructor_invite(token, user):
         invite.responded_at = timezone.now()
         invite.save(update_fields=['status', 'responded_at', 'updated_at'])
 
+        from notifications.models import NotificationEventType
+        from notifications.services.dispatcher import dispatch
+        invited_by = invite.invited_by
+        course_title = invite.course.title
+        course_slug = invite.course.slug
+        invitee_name = user.get_full_name() or user.email
+        transaction.on_commit(lambda: dispatch(
+            NotificationEventType.INVITE_DECLINED,
+            [invited_by],
+            context={'course_title': course_title, 'course_slug': course_slug, 'invitee_name': invitee_name},
+        ))
+
     return invite
 
 
 def _assert_actionable(invite):
-    """Raise InviteError(410) if invite cannot be acted on.
-
-    Does NOT mutate the invite row — all callers run inside transaction.atomic(), so
-    any save here would be rolled back when InviteError propagates up. Expiry DB
-    writes are owned by expire_instructor_invites_task (runs hourly via Celery Beat).
-    """
+    """Raise InviteError(410) if invite is expired or not pending. Read-only; callers own the transaction."""
     from courses.models import CourseInstructorInvite
 
     if invite.expires_at <= timezone.now():

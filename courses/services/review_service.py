@@ -19,18 +19,9 @@ class ReviewError(Exception):
         super().__init__(message)
 
 
-# ---------------------------------------------------------------------------
-# Public API
-# ---------------------------------------------------------------------------
 
 def create_or_update_review(user, course: NidusCourse, validated_data: dict) -> tuple:
-    """Upsert a review for an enrolled learner.
-
-    Returns (review, created: bool). Dispatches avg_rating recalc on commit.
-
-    Raises:
-        ReviewError(403) — caller is not actively enrolled in the course.
-    """
+    """Upsert a review. Returns (review, created). Raises ReviewError(403) if not enrolled."""
     from courses.all_models.enrollment_models import Enrollment
 
     enrollment = (
@@ -56,15 +47,21 @@ def create_or_update_review(user, course: NidusCourse, validated_data: dict) -> 
         course_id = course.pk
         transaction.on_commit(lambda: _recalculate_course_avg(course_id))
 
+        if created:
+            _review_id = review.pk
+            _review_rating = review.rating
+            _course_title = course.title
+            _course_slug = course.slug
+            _course_pk = course.pk
+            transaction.on_commit(lambda: _dispatch_review_received(
+                _course_pk, _course_title, _course_slug, _review_id, _review_rating,
+            ))
+
     return review, created
 
 
 def delete_review(user, course: NidusCourse) -> None:
-    """Delete a learner's own review. Dispatches avg_rating recalc on commit.
-
-    Raises:
-        ReviewError(404) — no review exists for this (user, course) pair.
-    """
+    """Delete a learner's own review. Raises ReviewError(404) if not found."""
     try:
         review = CourseReview.objects.get(user=user, course=course)
     except CourseReview.DoesNotExist:
@@ -79,13 +76,31 @@ def delete_review(user, course: NidusCourse) -> None:
 
 
 
-def vote_on_review(voter, review_id: int, is_helpful: bool) -> ReviewVote:
-    """Upsert a helpful/not-helpful vote. Flips if already voted opposite.
+def _dispatch_review_received(course_pk, course_title, course_slug, review_id, rating):
+    from courses.all_models.course_models import NidusCourse
+    from notifications.models import NotificationEventType
+    from notifications.services.dispatcher import dispatch
+    try:
+        course = NidusCourse.objects.prefetch_related('instructors').get(pk=course_pk)
+        instructors = list(course.instructors.all())
+        if instructors:
+            dispatch(
+                NotificationEventType.REVIEW_RECEIVED,
+                instructors,
+                context={
+                    'course_title': course_title,
+                    'course_slug': course_slug,
+                    'review_id': review_id,
+                    'rating': rating,
+                },
+                skip_email=True,
+            )
+    except Exception:
+        logger.warning('REVIEW_RECEIVED dispatch failed for course=%s', course_pk)
 
-    Raises:
-        ReviewError(404) — review does not exist or is not published.
-        ReviewError(422) — voter is the review's own author.
-    """
+
+def vote_on_review(voter, review_id: int, is_helpful: bool) -> ReviewVote:
+    """Upsert a vote; flips direction if already voted opposite. Raises ReviewError(404/422)."""
     try:
         review = CourseReview.objects.get(pk=review_id, is_published=True)
     except CourseReview.DoesNotExist:
@@ -103,7 +118,6 @@ def vote_on_review(voter, review_id: int, is_helpful: bool) -> ReviewVote:
             return existing  # idempotent — same direction, no-op
 
         if existing is not None:
-            # Vote flip: decrement old counter, flip flag, increment new counter.
             old_field = 'helpful_count' if existing.is_helpful else 'not_helpful_count'
             new_field = 'helpful_count' if is_helpful else 'not_helpful_count'
             CourseReview.objects.filter(pk=review.pk).update(
@@ -117,10 +131,7 @@ def vote_on_review(voter, review_id: int, is_helpful: bool) -> ReviewVote:
             existing.save(update_fields=['is_helpful'])
             return existing
 
-        # New vote — nested savepoint guards against concurrent first-vote race.
-        # If two requests both find existing=None, the second hits the unique
-        # constraint; we catch IntegrityError, roll back only the savepoint, and
-        # return the vote the winning request created (it also updated the count).
+        # Nested savepoint guards concurrent first-vote race on the unique constraint.
         try:
             with transaction.atomic():
                 vote = ReviewVote.objects.create(review=review, voter=voter, is_helpful=is_helpful)
@@ -135,12 +146,7 @@ def vote_on_review(voter, review_id: int, is_helpful: bool) -> ReviewVote:
 
 
 def get_course_reviews(course: NidusCourse, params, requesting_user=None) -> QuerySet:
-    """Return a filtered, ordered queryset of published reviews for a course.
-
-    Supported params:
-        ?rating=<1-5>         exact star filter
-        ?ordering=            -created_at (default) | created_at | -helpful_count | -rating | rating
-    """
+    """Return filtered, ordered published reviews. Supports ?rating= and ?ordering=."""
     qs = (
         CourseReview.objects
         .filter(course=course, is_published=True)
@@ -170,10 +176,7 @@ def get_course_reviews(course: NidusCourse, params, requesting_user=None) -> Que
 
 
 def get_review_summary(course: NidusCourse) -> dict:
-    """Return avg_rating, review_count, and 1–5 star distribution for a course.
-
-    One DB round-trip: per-star counts are computed in Python from the five rows.
-    """
+    """Return avg_rating, review_count, and 1–5 star distribution."""
     qs = CourseReview.objects.filter(course=course, is_published=True)
     distribution = {str(i): 0 for i in range(1, 6)}
     total_count = 0
@@ -192,23 +195,13 @@ def get_review_summary(course: NidusCourse) -> dict:
 
 
 def get_my_review(user, course: NidusCourse) -> CourseReview:
-    """Fetch the caller's own review for a course.
-
-    Raises CourseReview.DoesNotExist if none exists.
-    """
+    """Fetch the caller's own review. Raises DoesNotExist if none."""
     return CourseReview.objects.get(user=user, course=course)
 
 
-# ---------------------------------------------------------------------------
-# Internal helpers
-# ---------------------------------------------------------------------------
 
 def _recalculate_course_avg(course_id: int) -> None:
-    """Recompute avg_rating and review_count on NidusCourse from published reviews.
-
-    Called via transaction.on_commit so it never fires on a rolled-back write.
-    Uses a single aggregate query + a targeted UPDATE (no full model save).
-    """
+    """Recompute avg_rating and review_count from published reviews. Called via on_commit only."""
     agg = CourseReview.objects.filter(
         course_id=course_id, is_published=True
     ).aggregate(avg=Avg('rating'), count=Count('id'))

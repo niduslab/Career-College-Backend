@@ -1,0 +1,195 @@
+from notifications.models import NotificationEventType
+
+# Each builder receives (recipient, context) and returns a dict with keys:
+#   title, body, data, deduplication_key (None if not needed)
+
+_ET = NotificationEventType
+
+
+def _build(title, body, data=None, dedup_key=None):
+    return {'title': title, 'body': body, 'data': data or {}, 'deduplication_key': dedup_key}
+
+
+def _enrollment_created(recipient, ctx):
+    return _build(
+        title=f'Enrolled in {ctx["course_title"]}',
+        body=f'You are now enrolled in "{ctx["course_title"]}". Start learning!',
+        data={'course_slug': ctx['course_slug']},
+    )
+
+
+def _lecture_completed(recipient, ctx):
+    return _build(
+        title='Lecture completed',
+        body=f'You completed "{ctx["lecture_title"]}" in {ctx["course_title"]}.',
+        data={'course_slug': ctx['course_slug'], 'lecture_id': ctx['lecture_id']},
+    )
+
+
+def _course_completed(recipient, ctx):
+    return _build(
+        title='Course completed!',
+        body=f'Congratulations! You have completed "{ctx["course_title"]}". Your certificate is ready.',
+        data={'course_slug': ctx['course_slug'], 'certificate_uid': ctx.get('certificate_uid', '')},
+        dedup_key=f'course.completed:{recipient.id}:{ctx["enrollment_id"]}',
+    )
+
+
+def _course_submitted(recipient, ctx):
+    return _build(
+        title='Course submitted for review',
+        body=f'"{ctx["course_title"]}" by {ctx["instructor_name"]} has been submitted for review.',
+        data={'course_id': ctx['course_id']},
+    )
+
+
+def _course_approved(recipient, ctx):
+    return _build(
+        title='Course approved',
+        body=f'Your course "{ctx["course_title"]}" has been approved and is now published.',
+        data={'course_slug': ctx['course_slug']},
+    )
+
+
+def _course_rejected(recipient, ctx):
+    reason = ctx.get('rejection_reason', '')
+    body = f'Your course "{ctx["course_title"]}" was rejected.'
+    if reason:
+        body += f' Reason: {reason}'
+    return _build(
+        title='Course rejected',
+        body=body,
+        data={'course_slug': ctx['course_slug']},
+    )
+
+
+def _course_archived(recipient, ctx):
+    return _build(
+        title='Course archived',
+        body=f'Your course "{ctx["course_title"]}" has been archived.',
+        data={'course_slug': ctx['course_slug']},
+    )
+
+
+def _video_ready(recipient, ctx):
+    return _build(
+        title='Video ready',
+        body=f'Video for "{ctx["lecture_title"]}" has finished processing.',
+        data={'course_slug': ctx['course_slug'], 'lecture_id': ctx['lecture_id']},
+    )
+
+
+def _video_failed(recipient, ctx):
+    return _build(
+        title='Video processing failed',
+        body=f'Video processing failed for "{ctx["lecture_title"]}". Please re-upload.',
+        data={'course_slug': ctx['course_slug'], 'lecture_id': ctx['lecture_id']},
+        dedup_key=f'video.transcoding_failed:{ctx.get("course_id")}:{ctx.get("video_asset_id")}',
+    )
+
+
+def _invite_sent(recipient, ctx):
+    return _build(
+        title='Co-instructor invitation',
+        body=f'You have been invited to co-instruct "{ctx["course_title"]}".',
+        data={'invite_id': ctx['invite_id'], 'course_slug': ctx['course_slug']},
+    )
+
+
+def _invite_accepted(recipient, ctx):
+    return _build(
+        title='Invitation accepted',
+        body=f'{ctx["invitee_name"]} accepted your invitation to co-instruct "{ctx["course_title"]}".',
+        data={'course_slug': ctx['course_slug']},
+    )
+
+
+def _invite_declined(recipient, ctx):
+    return _build(
+        title='Invitation declined',
+        body=f'{ctx["invitee_name"]} declined your invitation to co-instruct "{ctx["course_title"]}".',
+        data={'course_slug': ctx['course_slug']},
+    )
+
+
+def _review_received(recipient, ctx):
+    return _build(
+        title='New course review',
+        body=f'"{ctx["course_title"]}" received a {ctx["rating"]}-star review.',
+        data={'course_slug': ctx['course_slug'], 'review_id': ctx['review_id']},
+    )
+
+
+def _learner_enrolled(recipient, ctx):
+    return _build(
+        title='New learner enrolled',
+        body=f'{ctx["learner_name"]} enrolled in your course "{ctx["course_title"]}".',
+        data={'course_slug': ctx['course_slug']},
+    )
+
+
+def _verification_submitted(recipient, ctx):
+    return _build(
+        title='Identity verification submitted',
+        body=f'{ctx["instructor_name"]} submitted an identity verification request.',
+        data={'verification_id': ctx['verification_id']},
+    )
+
+
+def _verification_approved(recipient, ctx):
+    return _build(
+        title='Identity verification approved',
+        body='Your identity has been verified. You can now publish courses.',
+        data={},
+    )
+
+
+def _verification_rejected(recipient, ctx):
+    return _build(
+        title='Identity verification rejected',
+        body='Your identity verification was rejected. Please re-submit with valid documents.',
+        data={},
+    )
+
+
+def _verification_action_required(recipient, ctx):
+    note = ctx.get('admin_note', '')
+    body = 'Additional action is required for your identity verification.'
+    if note:
+        body += f' Note: {note}'
+    return _build(
+        title='Action required for verification',
+        body=body,
+        data={},
+    )
+
+
+_BUILDERS = {
+    _ET.ENROLLMENT_CREATED:      _enrollment_created,
+    _ET.LECTURE_COMPLETED:       _lecture_completed,
+    _ET.COURSE_COMPLETED:        _course_completed,
+    _ET.COURSE_SUBMITTED:        _course_submitted,
+    _ET.COURSE_APPROVED:         _course_approved,
+    _ET.COURSE_REJECTED:         _course_rejected,
+    _ET.COURSE_ARCHIVED:         _course_archived,
+    _ET.VIDEO_READY:             _video_ready,
+    _ET.VIDEO_FAILED:            _video_failed,
+    _ET.INVITE_SENT:             _invite_sent,
+    _ET.INVITE_ACCEPTED:         _invite_accepted,
+    _ET.INVITE_DECLINED:         _invite_declined,
+    _ET.REVIEW_RECEIVED:         _review_received,
+    _ET.LEARNER_ENROLLED:        _learner_enrolled,
+    _ET.VERIFICATION_SUBMITTED:  _verification_submitted,
+    _ET.VERIFICATION_APPROVED:   _verification_approved,
+    _ET.VERIFICATION_REJECTED:   _verification_rejected,
+    _ET.VERIFICATION_ACTION_REQ: _verification_action_required,
+}
+
+
+def build_notification_payload(event_type: str, recipient, context: dict) -> dict:
+    """Return {title, body, data, deduplication_key} for an event+recipient.
+
+    Raises KeyError if event_type has no registered builder.
+    """
+    builder = _BUILDERS[event_type]
+    return builder(recipient, context)

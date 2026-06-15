@@ -68,6 +68,33 @@ def transcode_video_asset_task(self, video_asset_id: int, job_id: int):
             job.notes = 'Transcoding completed successfully.'
             job.save(update_fields=['status', 'completed_at', 'notes', 'updated_at'])
 
+            _lecture_title = video_asset.lecture.title
+            _lecture_id = video_asset.lecture.pk
+            _course_slug = video_asset.lecture.section.course.slug
+            _course_pk = video_asset.lecture.section.course.pk
+            _va_id = video_asset_id
+
+            def _notify_video_ready():
+                from courses.models import NidusCourse
+                from notifications.models import NotificationEventType
+                from notifications.services.dispatcher import dispatch
+                try:
+                    _c = NidusCourse.objects.prefetch_related('instructors').get(pk=_course_pk)
+                    dispatch(
+                        NotificationEventType.VIDEO_READY,
+                        list(_c.instructors.all()),
+                        context={
+                            'lecture_title': _lecture_title,
+                            'lecture_id': _lecture_id,
+                            'course_slug': _course_slug,
+                        },
+                        skip_email=True,
+                    )
+                except Exception:
+                    logger.warning('VIDEO_READY dispatch failed for video_asset=%s', _va_id)
+
+            transaction.on_commit(_notify_video_ready)
+
         logger.info('Transcoding completed for video_asset=%s', video_asset_id)
         return {'video_asset_id': video_asset_id, 'status': 'completed'}
 
@@ -86,6 +113,36 @@ def transcode_video_asset_task(self, video_asset_id: int, job_id: int):
             job.completed_at = timezone.now()
             job.notes = f'Transcoding failed: {exc}'
             job.save(update_fields=['status', 'completed_at', 'notes', 'updated_at'])
+
+            if self.request.retries >= self.max_retries:
+                _lec_title = video_asset.lecture.title
+                _lec_id = video_asset.lecture.pk
+                _c_slug = video_asset.lecture.section.course.slug
+                _c_pk = video_asset.lecture.section.course.pk
+                _va_id_f = video_asset_id
+
+                def _notify_video_failed():
+                    from courses.models import NidusCourse
+                    from notifications.models import NotificationEventType
+                    from notifications.services.dispatcher import dispatch
+                    try:
+                        _c = NidusCourse.objects.prefetch_related('instructors').get(pk=_c_pk)
+                        dispatch(
+                            NotificationEventType.VIDEO_FAILED,
+                            list(_c.instructors.all()),
+                            context={
+                                'lecture_title': _lec_title,
+                                'lecture_id': _lec_id,
+                                'course_slug': _c_slug,
+                                'course_id': _c_pk,
+                                'video_asset_id': _va_id_f,
+                            },
+                            skip_email=True,
+                        )
+                    except Exception:
+                        logger.warning('VIDEO_FAILED dispatch failed for video_asset=%s', _va_id_f)
+
+                transaction.on_commit(_notify_video_failed)
 
         raise
 
@@ -504,67 +561,9 @@ def reap_stuck_coding_submissions_task(stale_minutes: int = 5):
     return {'reaped': count}
 
 
-# ---------------------------------------------------------------------------
-# Instructor invite tasks
-# ---------------------------------------------------------------------------
-
-@shared_task(bind=True, autoretry_for=(Exception,), retry_backoff=True, retry_jitter=True, max_retries=3, acks_late=True)
-def send_instructor_invite_email_task(self, invite_id: int):
-    """Send the co-instructor invitation email for a given invite PK."""
-    from courses.models import CourseInstructorInvite
-    from courses.email_utils import send_instructor_invite_email
-
-    try:
-        invite = CourseInstructorInvite.objects.select_related(
-            'course', 'invited_by', 'invited_user'
-        ).get(pk=invite_id)
-    except CourseInstructorInvite.DoesNotExist:
-        logger.warning('send_instructor_invite_email_task: invite %s not found, skipping.', invite_id)
-        return
-
-    send_instructor_invite_email(invite)
-    logger.info('send_instructor_invite_email_task: sent invite %s to %s.', invite_id, invite.invited_user.email)
-
-
-@shared_task(
-    bind=True,
-    autoretry_for=(Exception,),
-    retry_backoff=True,
-    retry_jitter=True,
-    max_retries=3,
-    acks_late=True,
-)
-def send_certificate_email_task(self, certificate_id: int):
-    """Send the certificate congratulations email for a given certificate PK."""
-    from courses.models import Certificate
-    from courses.email_utils import send_certificate_email
-
-    try:
-        certificate = Certificate.objects.select_related(
-            'enrollment__user',
-            'enrollment__course',
-        ).get(pk=certificate_id)
-    except Certificate.DoesNotExist:
-        logger.warning(
-            'send_certificate_email_task: certificate %s not found, skipping.',
-            certificate_id,
-        )
-        return
-
-    send_certificate_email(certificate)
-    logger.info(
-        'send_certificate_email_task: sent to %s for certificate %s.',
-        certificate.enrollment.user.email,
-        certificate_id,
-    )
-
-
 @shared_task
 def expire_instructor_invites_task():
-    """
-    Mark pending invites past their expiry date as expired.
-    Scheduled via CELERY_BEAT_SCHEDULE in settings.py.
-    """
+    """Mark pending invites past their expiry date as expired. Runs hourly via CELERY_BEAT_SCHEDULE."""
     from courses.models import CourseInstructorInvite
 
     count = CourseInstructorInvite.objects.filter(

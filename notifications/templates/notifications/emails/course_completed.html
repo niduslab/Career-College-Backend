@@ -1,0 +1,8 @@
+{% extends "notifications/emails/base_notification.html" %}
+{% block content %}
+<h2>{{ title }}</h2>
+<p>{{ body }}</p>
+{% if data.certificate_uid %}
+<p>Your certificate is available at your profile page. Share it with your network!</p>
+{% endif %}
+{% endblock %}

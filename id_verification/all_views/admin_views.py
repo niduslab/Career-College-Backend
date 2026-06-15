@@ -1,6 +1,7 @@
 import logging
 
 from django.core.exceptions import ValidationError
+from django.db import transaction
 from django.shortcuts import get_object_or_404
 from rest_framework import status
 from rest_framework.permissions import IsAuthenticated
@@ -28,10 +29,6 @@ ACTION_TO_STATUS = {
 
 
 class AdminVerificationListView(APIView):
-    """
-    GET → Admin lists all verification requests.
-    Supports ?status= filter and pagination.
-    """
     permission_classes = [IsAuthenticated, IsEmailVerified, IsPlatformAdmin]
 
     def get(self, request):
@@ -52,9 +49,6 @@ class AdminVerificationListView(APIView):
 
 
 class AdminVerificationDetailView(APIView):
-    """
-    GET → Admin views full detail of a verification request.
-    """
     permission_classes = [IsAuthenticated, IsEmailVerified, IsPlatformAdmin]
 
     def get(self, request, pk):
@@ -70,11 +64,6 @@ class AdminVerificationDetailView(APIView):
 
 
 class AdminVerificationReviewView(APIView):
-    """
-    POST → Admin performs a review action on a verification request.
-
-    Actions: pick_up, approve, reject, request_action, expire.
-    """
     permission_classes = [IsAuthenticated, IsEmailVerified, IsPlatformAdmin]
 
     def post(self, request, pk):
@@ -116,6 +105,26 @@ class AdminVerificationReviewView(APIView):
                 {'success': False, 'message': 'An unexpected server error occurred. Please try again.'},
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR,
             )
+
+        _target_status = target_status
+        _verification_user = verification.user
+        _action_note = action_required_reason
+
+        def _notify_verification_decision():
+            from notifications.models import NotificationEventType
+            from notifications.services.dispatcher import dispatch
+            if _target_status == 'approved':
+                dispatch(NotificationEventType.VERIFICATION_APPROVED, [_verification_user], context={})
+            elif _target_status == 'rejected':
+                dispatch(NotificationEventType.VERIFICATION_REJECTED, [_verification_user], context={})
+            elif _target_status == 'action_required':
+                dispatch(
+                    NotificationEventType.VERIFICATION_ACTION_REQ,
+                    [_verification_user],
+                    context={'admin_note': _action_note},
+                )
+
+        transaction.on_commit(_notify_verification_decision)
 
         detail = AdminVerificationDetailSerializer(
             IdentityVerification.objects.select_related('user', 'reviewed_by').get(pk=pk),

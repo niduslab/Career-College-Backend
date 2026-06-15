@@ -1,0 +1,7 @@
+{{ title }}
+
+{{ body }}
+
+---
+Career College
+You are receiving this email because you have an account on Career College.

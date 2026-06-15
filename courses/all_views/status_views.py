@@ -1,6 +1,7 @@
 import logging
 
 from django.core.exceptions import ValidationError
+from django.db import transaction
 from django.db.models import Q
 from django.shortcuts import get_object_or_404
 from rest_framework import status
@@ -17,12 +18,6 @@ logger = logging.getLogger(__name__)
 
 
 class CourseSubmitForReviewView(APIView):
-    """
-    POST /api/v1/courses/{pk}/submit/
-
-    Instructor or partner institution submits a draft course for admin review.
-    Validates course completeness before allowing the transition.
-    """
 
     permission_classes = [IsAuthenticated, IsEmailVerified, IsVerifiedCourseCreator]
     parser_classes = [JSONParser, FormParser, MultiPartParser]
@@ -48,6 +43,30 @@ class CourseSubmitForReviewView(APIView):
                 status=status.HTTP_422_UNPROCESSABLE_ENTITY,
             )
 
+        _course_id = course.pk
+        _course_title = course.title
+        _course_slug = course.slug
+        _instructor_name = request.user.get_full_name() or request.user.email
+
+        def _notify_submitted():
+            from authentication.models import User
+            from notifications.models import NotificationEventType
+            from notifications.services.dispatcher import dispatch
+            admins = list(User.objects.filter(user_type='admin', is_deleted=False, is_active=True))
+            if admins:
+                dispatch(
+                    NotificationEventType.COURSE_SUBMITTED,
+                    admins,
+                    context={
+                        'course_id': _course_id,
+                        'course_title': _course_title,
+                        'course_slug': _course_slug,
+                        'instructor_name': _instructor_name,
+                    },
+                )
+
+        transaction.on_commit(_notify_submitted)
+
         return Response(
             {
                 'success': True,
@@ -59,12 +78,6 @@ class CourseSubmitForReviewView(APIView):
 
 
 class CourseAdminReviewView(APIView):
-    """
-    POST /api/v1/courses/{pk}/review/
-
-    Admin approves or rejects a submitted course.
-    Body: {"action": "approve"} or {"action": "reject", "rejection_reason": "..."}
-    """
 
     permission_classes = [IsAuthenticated, IsEmailVerified, IsPlatformAdmin]
     parser_classes = [JSONParser, FormParser, MultiPartParser]
@@ -99,6 +112,34 @@ class CourseAdminReviewView(APIView):
                 status=status.HTTP_422_UNPROCESSABLE_ENTITY,
             )
 
+        _course_title = course.title
+        _course_slug = course.slug
+        _rejection_reason = rejection_reason
+        _action = action
+        _instructors_snapshot = list(course.instructors.all())
+
+        def _notify_review_decision():
+            from notifications.models import NotificationEventType
+            from notifications.services.dispatcher import dispatch
+            if _action == 'approve':
+                dispatch(
+                    NotificationEventType.COURSE_APPROVED,
+                    _instructors_snapshot,
+                    context={'course_title': _course_title, 'course_slug': _course_slug},
+                )
+            else:
+                dispatch(
+                    NotificationEventType.COURSE_REJECTED,
+                    _instructors_snapshot,
+                    context={
+                        'course_title': _course_title,
+                        'course_slug': _course_slug,
+                        'rejection_reason': _rejection_reason,
+                    },
+                )
+
+        transaction.on_commit(_notify_review_decision)
+
         message = (
             'Course approved successfully.'
             if action == 'approve'
@@ -115,11 +156,6 @@ class CourseAdminReviewView(APIView):
 
 
 class CourseReworkView(APIView):
-    """
-    POST /api/v1/courses/{pk}/rework/
-
-    Instructor or partner institution moves a rejected course back to draft for reworking.
-    """
 
     permission_classes = [IsAuthenticated, IsEmailVerified, IsVerifiedCourseCreator]
     parser_classes = [JSONParser, FormParser, MultiPartParser]
@@ -156,11 +192,6 @@ class CourseReworkView(APIView):
 
 
 class CourseArchiveView(APIView):
-    """
-    POST /api/v1/courses/{pk}/archive/
-
-    Instructor or admin archives a published course.
-    """
 
     permission_classes = [IsAuthenticated, IsEmailVerified]
     parser_classes = [JSONParser, FormParser, MultiPartParser]
@@ -200,11 +231,6 @@ class CourseArchiveView(APIView):
 
 
 class CourseRestoreView(APIView):
-    """
-    POST /api/v1/courses/{pk}/restore/
-
-    Instructor or admin restores an archived course back to draft.
-    """
 
     permission_classes = [IsAuthenticated, IsEmailVerified]
     parser_classes = [JSONParser, FormParser, MultiPartParser]

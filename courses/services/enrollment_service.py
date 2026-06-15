@@ -19,9 +19,7 @@ from courses.models import (
 
 logger = logging.getLogger(__name__)
 
-# `update_last_accessed` is called on every learner consumption GET; debounce
-# so we don't write a row on every page refresh. 5 minutes of staleness is
-# acceptable for "last opened the course" — nobody needs second-level precision.
+# 5-minute debounce so every consumption GET doesn't write a DB row.
 LAST_ACCESSED_DEBOUNCE = timedelta(minutes=5)
 
 
@@ -36,8 +34,6 @@ def get_catalog_courses() -> QuerySet[NidusCourse]:
     )
 
 
-# Catalog sort keys exposed to the public API. Treat any other value as the
-# default ("relevance" when ?search= is supplied, "newest" otherwise).
 CATALOG_SORT_OPTIONS = frozenset({
     'relevance',
     'newest',
@@ -49,11 +45,7 @@ CATALOG_SORT_OPTIONS = frozenset({
 
 
 def _csv_param(params, key):
-    """Split a comma-separated query param into a deduped list of non-empty tokens.
-
-    Order is preserved — ``dict.fromkeys`` keeps first-seen insertion order
-    so the validator's error messages echo the user's input order back.
-    """
+    """Split a comma-separated query param into a deduped, order-preserving list."""
     raw = params.get(key)
     if not raw:
         return []
@@ -82,15 +74,8 @@ def _positive_int_or_none(value):
 
 
 def _validate_catalog_params(params):
-    """Validate catalog filter/sort params; raise ValidationError if any bad.
-
-    Collects every problem before raising so the frontend can fix all bad
-    fields in one round-trip rather than one-at-a-time.
-    """
+    """Validate catalog filter/sort params. Raises ValidationError with all field errors at once."""
     errors = {}
-
-    # ── M4: ?sort= must be a known key (unknown values used to silently
-    # fall back to newest, hiding both backend typos and frontend bugs).
     raw_sort = params.get('sort')
     if raw_sort and raw_sort not in CATALOG_SORT_OPTIONS:
         errors['sort'] = (
@@ -98,7 +83,6 @@ def _validate_catalog_params(params):
             f'{", ".join(sorted(CATALOG_SORT_OPTIONS))}.'
         )
 
-    # ── M6: every ?level= token must be a real CourseLevel choice.
     valid_levels = set(NidusCourse.CourseLevel.values)
     bad_levels = [lvl for lvl in _csv_param(params, 'level') if lvl not in valid_levels]
     if bad_levels:
@@ -107,9 +91,6 @@ def _validate_catalog_params(params):
             f'Must be one of: {", ".join(sorted(valid_levels))}.'
         )
 
-    # ── M5: numeric range params must parse and be non-negative.
-    # The model itself constrains price with MinValueValidator(0); the API
-    # should mirror that, not silently accept impossible ranges.
     for key in ('price_min', 'price_max'):
         raw = params.get(key)
         if raw in (None, ''):
@@ -159,50 +140,9 @@ def _validate_catalog_params(params):
 
 
 def filter_catalog_courses(queryset: QuerySet[NidusCourse], params) -> QuerySet[NidusCourse]:
-    """
-    Apply multi-criteria filtering and sorting to a catalog queryset.
-
-    ``params`` is request.query_params (or any mapping with .get()).
-
-    Supported filters (all optional, AND-combined):
-        category=<slug>                top-level CourseCategory.slug
-        subcategory=<slug>             child CourseCategory.slug (parent should be `category`)
-        level=<csv>                    e.g. ?level=beginner,intermediate
-        language=<csv>                 case-insensitive; e.g. ?language=english,bangla
-        price_type=free|paid           shortcut for price=0 / price>0
-        price_min=<decimal>            inclusive lower bound on price
-        price_max=<decimal>            inclusive upper bound on price
-        duration_min=<minutes>         inclusive lower bound on duration_minutes
-        duration_max=<minutes>         inclusive upper bound on duration_minutes
-        search=<text>                  matches title / description / instructor name
-        rating_min=<decimal 1-5>       inclusive lower bound on avg_rating
-        min_reviews=<int>              minimum review_count
-        instructor_rating_min=<1-5>    deferred — requires InstructorProfile.avg_rating
-
-    Supported sorts via ?sort=<key>:
-        relevance      title match rank (default when ?search= present)
-        newest         -published_at (default otherwise)
-        popularity     by active enrollment count desc
-        price_asc      price ascending
-        price_desc     price descending
-        rating         avg_rating desc
-
-    Raises ``django.core.exceptions.ValidationError`` with a field-keyed
-    error dict when any of the validated params is malformed. The catalog
-    view turns that into a 400 response. Validated params:
-        sort, level, price_min, price_max, duration_min, duration_max,
-        rating_min, min_reviews.
-    """
+    """Apply filtering and sorting to a catalog queryset. Raises ValidationError on bad params."""
     _validate_catalog_params(params)
 
-    # ── Category / subcategory ───────────────────────────────────────────
-    # Category is a single FK on NidusCourse; a course points at exactly one
-    # CourseCategory row, which itself may be a child (subcategory) via the
-    # self-FK `parent`. Three valid input shapes:
-    #   - subcategory only      → exact match on the subcategory slug
-    #   - category only         → match the category itself OR any of its children
-    #   - category + subcategory → match the subcategory, but only if its parent
-    #                              actually is the given category (rejects mismatched pairs)
     category_slug = params.get('category')
     subcategory_slug = params.get('subcategory')
     if subcategory_slug and category_slug:
@@ -218,12 +158,10 @@ def filter_catalog_courses(queryset: QuerySet[NidusCourse], params) -> QuerySet[
             | Q(category__parent__slug=category_slug)
         )
 
-    # ── Skill level (multi-select via CSV) ───────────────────────────────
     levels = _csv_param(params, 'level')
     if levels:
         queryset = queryset.filter(level__in=levels)
 
-    # ── Language (multi-select, case-insensitive) ────────────────────────
     languages = _csv_param(params, 'language')
     if languages:
         lang_q = Q()
@@ -231,7 +169,6 @@ def filter_catalog_courses(queryset: QuerySet[NidusCourse], params) -> QuerySet[
             lang_q |= Q(language__iexact=lang)
         queryset = queryset.filter(lang_q)
 
-    # ── Price (free / paid / range) ──────────────────────────────────────
     price_type = params.get('price_type')
     if price_type == 'free':
         queryset = queryset.filter(price=0)
@@ -246,7 +183,6 @@ def filter_catalog_courses(queryset: QuerySet[NidusCourse], params) -> QuerySet[
     if price_max is not None:
         queryset = queryset.filter(price__lte=price_max)
 
-    # ── Duration (in minutes — frontend converts hours/weeks/months) ─────
     duration_min = _positive_int_or_none(params.get('duration_min'))
     if duration_min is not None:
         queryset = queryset.filter(duration_minutes__gte=duration_min)
@@ -255,10 +191,7 @@ def filter_catalog_courses(queryset: QuerySet[NidusCourse], params) -> QuerySet[
     if duration_max is not None:
         queryset = queryset.filter(duration_minutes__lte=duration_max)
 
-    # ── Search across title, description, instructor name ────────────────
-    # The custom User model stores the human name in `full_name`; the
-    # AbstractUser-inherited first_name / last_name columns exist but are
-    # never populated in this project, so they must not be searched.
+    # Search: use full_name — first_name/last_name are never populated.
     search = params.get('search')
     if search:
         queryset = queryset.filter(
@@ -267,19 +200,13 @@ def filter_catalog_courses(queryset: QuerySet[NidusCourse], params) -> QuerySet[
             | Q(instructors__full_name__icontains=search)
         ).distinct()
 
-    # ── Rating floor (?rating_min=) ──────────────────────────────────────
     rating_min = _decimal_or_none(params.get('rating_min'))
     if rating_min is not None:
         queryset = queryset.filter(avg_rating__gte=rating_min)
 
-    # ── Minimum review count (?min_reviews=) ─────────────────────────────
-    # Uses the denormalized review_count field on NidusCourse — no annotation
-    # needed; avoids a COUNT subquery on every catalog page load.
     min_reviews = _positive_int_or_none(params.get('min_reviews'))
     if min_reviews is not None:
         queryset = queryset.filter(review_count__gte=min_reviews)
-
-    # instructor_rating_min — deferred until InstructorProfile.avg_rating exists.
 
     sort = params.get('sort')
     if sort not in CATALOG_SORT_OPTIONS:
@@ -334,12 +261,7 @@ def get_learner_enrollments(user) -> QuerySet[Enrollment]:
 
 @transaction.atomic
 def enroll_learner(user, course: NidusCourse) -> Enrollment:
-    """
-    Enroll a learner in a published course.
-
-    Raises ``ValidationError`` if the learner is already enrolled or if
-    the course is not published.
-    """
+    """Enroll a learner in a published course. Raises ValidationError on duplicate or unpublished."""
     if user.user_type != 'learner':
         raise ValidationError('Only learners can enroll in courses.')
 
@@ -360,6 +282,7 @@ def enroll_learner(user, course: NidusCourse) -> Enrollment:
         existing.last_accessed_at = now
         existing.save(update_fields=['is_active', 'last_accessed_at', 'updated_at'])
         logger.info('Enrollment reactivated: user=%s course=%s', user.pk, course.pk)
+        _dispatch_enrollment_notifications(user, course, existing)
         return existing
 
     try:
@@ -375,16 +298,13 @@ def enroll_learner(user, course: NidusCourse) -> Enrollment:
         raise ValidationError('You are already enrolled in this course.') from exc
 
     logger.info('Enrollment created: user=%s course=%s', user.pk, course.pk)
+    _dispatch_enrollment_notifications(user, course, enrollment)
     return enrollment
 
 
 @transaction.atomic
 def unenroll_learner(user, course: NidusCourse) -> Enrollment:
-    """
-    Soft-deactivate a learner's enrollment. Progress is preserved.
-
-    Raises ``ValidationError`` if no active enrollment exists.
-    """
+    """Soft-deactivate a learner's enrollment; preserves progress. Raises ValidationError if not enrolled."""
     enrollment = Enrollment.objects.select_for_update().filter(
         user=user, course=course, is_active=True,
     ).first()
@@ -400,19 +320,7 @@ def unenroll_learner(user, course: NidusCourse) -> Enrollment:
 
 
 def recalculate_progress(enrollment: Enrollment) -> Enrollment:
-    """
-    Recompute ``progress_percent`` from the actual content completion data.
-
-    Formula: (completed content items / total content items) * 100
-    Completion rules:
-    - lecture: WatchProgress.is_completed=True
-    - quiz: at least one QuizAttempt exists for the learner
-    - assignment: AssignmentSubmission(status='passed')
-    - coding: CodingSubmission(status='passed') — distinct per exercise so
-      multiple PASSED attempts on the same exercise count once.
-
-    Uses grouped queries + set intersections to avoid N+1 behavior.
-    """
+    """Recompute progress_percent from actual completion data. Issues certificate at 100%."""
     course = enrollment.course
 
     content_rows = list(
@@ -523,14 +431,10 @@ def recalculate_progress(enrollment: Enrollment) -> Enrollment:
 
 
 def _issue_certificate_and_notify(enrollment_pk: int) -> None:
-    """Issue a certificate and queue the congratulations email on first completion.
-
-    Called via transaction.on_commit so it never fires for rolled-back
-    transactions. Local imports break the circular dependency between
-    enrollment_service ↔ certificate_service ↔ tasks.
-    """
+    """Issue certificate and fire course.completed notification. Called via on_commit only."""
     from courses.services.certificate_service import issue_certificate
-    from courses.tasks import send_certificate_email_task
+    from notifications.models import NotificationEventType
+    from notifications.services.dispatcher import dispatch
 
     try:
         enrollment = Enrollment.objects.select_related('user', 'course').get(pk=enrollment_pk)
@@ -545,17 +449,49 @@ def _issue_certificate_and_notify(enrollment_pk: int) -> None:
             enrollment.is_active,
         )
         certificate = issue_certificate(enrollment)
-        send_certificate_email_task.delay(certificate.pk)
+        dispatch(
+            NotificationEventType.COURSE_COMPLETED,
+            [enrollment.user],
+            context={
+                'course_title': enrollment.course.title,
+                'course_slug': enrollment.course.slug,
+                'enrollment_id': enrollment.pk,
+                'certificate_uid': str(certificate.certificate_uid),
+            },
+        )
     except Exception:
         logger.exception('_issue_certificate_and_notify failed for enrollment=%s', enrollment_pk)
 
 
-def update_last_accessed(enrollment: Enrollment):
-    """Touch the last_accessed_at timestamp, debounced to LAST_ACCESSED_DEBOUNCE.
+def _dispatch_enrollment_notifications(user, course, enrollment) -> None:
+    """Fire ENROLLMENT_CREATED and LEARNER_ENROLLED notifications via on_commit."""
+    from notifications.models import NotificationEventType
+    from notifications.services.dispatcher import dispatch
 
-    Skips the write when the previous touch is younger than the debounce
-    window. Avoids a row-level UPDATE on every page refresh / progress ping.
-    """
+    ctx_learner = {'course_title': course.title, 'course_slug': course.slug}
+    transaction.on_commit(
+        lambda: dispatch(NotificationEventType.ENROLLMENT_CREATED, [user], context=ctx_learner)
+    )
+
+    instructors = list(course.instructors.all())
+    if instructors:
+        ctx_instructor = {
+            'course_title': course.title,
+            'course_slug': course.slug,
+            'learner_name': user.get_full_name() or user.email,
+        }
+        transaction.on_commit(
+            lambda: dispatch(
+                NotificationEventType.LEARNER_ENROLLED,
+                instructors,
+                context=ctx_instructor,
+                skip_email=True,
+            )
+        )
+
+
+def update_last_accessed(enrollment: Enrollment):
+    """Touch last_accessed_at, skipping the write if within LAST_ACCESSED_DEBOUNCE."""
     now = timezone.now()
     if enrollment.last_accessed_at is not None and (
         now - enrollment.last_accessed_at < LAST_ACCESSED_DEBOUNCE

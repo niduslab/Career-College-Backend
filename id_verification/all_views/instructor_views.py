@@ -1,6 +1,7 @@
 import logging
 
 from django.core.exceptions import ObjectDoesNotExist, ValidationError
+from django.db import transaction
 from django.shortcuts import get_object_or_404
 from rest_framework import status
 from rest_framework.permissions import IsAuthenticated
@@ -28,10 +29,7 @@ def _require_instructor(request):
 
 
 def _check_profile_completeness(user):
-    """
-    Check if instructor profile is complete.
-    Returns (is_complete: bool, missing_fields: dict).
-    """
+    """Returns (is_complete, missing_fields) for an instructor profile."""
     try:
         profile = user.instructor_profile
     except ObjectDoesNotExist:
@@ -61,10 +59,6 @@ def _check_profile_completeness(user):
 
 
 class VerificationCreateView(APIView):
-    """
-    POST → Create a new draft verification request.
-    All document fields are optional at this stage.
-    """
     permission_classes = [IsAuthenticated, IsEmailVerified]
 
     def post(self, request):
@@ -93,9 +87,6 @@ class VerificationCreateView(APIView):
 
 
 class VerificationUpdateView(APIView):
-    """
-    PUT / PATCH → Update a draft or action_required verification request.
-    """
     permission_classes = [IsAuthenticated, IsEmailVerified]
 
     def _get_editable(self, request, pk):
@@ -139,11 +130,6 @@ class VerificationUpdateView(APIView):
 
 
 class VerificationSubmitView(APIView):
-    """
-    POST → Submit a draft verification (draft → submitted).
-    Also handles resubmission (action_required → submitted).
-    Validates that all required fields are filled.
-    """
     permission_classes = [IsAuthenticated, IsEmailVerified]
 
     def post(self, request, pk):
@@ -151,7 +137,6 @@ class VerificationSubmitView(APIView):
         if err:
             return err
 
-        # Check if instructor profile is complete
         is_complete, missing_fields = _check_profile_completeness(request.user)
         if not is_complete:
             return Response(
@@ -189,6 +174,23 @@ class VerificationSubmitView(APIView):
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR,
             )
 
+        _verification_id = verification.pk
+        _instructor_name = request.user.get_full_name() or request.user.email
+
+        def _notify_verification_submitted():
+            from authentication.models import User
+            from notifications.models import NotificationEventType
+            from notifications.services.dispatcher import dispatch
+            admins = list(User.objects.filter(user_type='admin', is_deleted=False, is_active=True))
+            if admins:
+                dispatch(
+                    NotificationEventType.VERIFICATION_SUBMITTED,
+                    admins,
+                    context={'verification_id': _verification_id, 'instructor_name': _instructor_name},
+                )
+
+        transaction.on_commit(_notify_verification_submitted)
+
         return Response(
             {
                 'success': True,
@@ -200,9 +202,6 @@ class VerificationSubmitView(APIView):
 
 
 class VerificationListView(APIView):
-    """
-    GET → Instructor views their verification history (most recent first).
-    """
     permission_classes = [IsAuthenticated, IsEmailVerified]
 
     def get(self, request):
@@ -219,9 +218,6 @@ class VerificationListView(APIView):
 
 
 class VerificationDetailView(APIView):
-    """
-    GET → Instructor views a single verification request.
-    """
     permission_classes = [IsAuthenticated, IsEmailVerified]
 
     def get(self, request, pk):

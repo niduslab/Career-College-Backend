@@ -420,3 +420,26 @@ class LearnerQuizConsumptionAPITests(APITestCase):
         self.enrollment.refresh_from_db()
         self.assertEqual(self.enrollment.progress_percent, 100)
         self.assertIsNotNone(self.enrollment.completed_at)
+
+    def test_submit_does_not_create_quiz_submitted_notification(self):
+        from notifications.models import Notification
+        self.auth()
+        url = reverse('courses:learner-quiz-submit', kwargs={'quiz_id': self.quiz.id})
+
+        with self.captureOnCommitCallbacks(execute=True):
+            self.client.post(
+                url,
+                {
+                    'answers': [
+                        {'question_id': self.q1.id, 'selected_answer_id': self.q1_correct.id},
+                        {'question_id': self.q2.id, 'selected_answer_id': self.q2_correct.id},
+                        {'question_id': self.q3.id, 'selected_answer_id': self.q3_correct.id},
+                    ],
+                },
+                format='json',
+            )
+
+        self.assertFalse(
+            Notification.objects.filter(event_type='quiz.submitted').exists(),
+            'quiz.submitted notifications must not be created on submission',
+        )

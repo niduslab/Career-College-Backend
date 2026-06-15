@@ -1,19 +1,3 @@
-"""
-Tests for the Phase-2 learner assignment consumption + auto-grading flow.
-
-Covers:
-  - RubricGrader unit tests (pure Python, no DB).
-  - Authoring-side rubric validation on AssignmentQuestionSerializer.
-  - GET  /learn/assignments/<id>/                                   (detail)
-  - POST /learn/assignments/<id>/submit/                            (submit + auto-grade)
-  - GET  /learn/assignments/submissions/<id>/                       (own-submission detail)
-  - POST /learn/assignments/submissions/<id>/retry/                 (grading_failed recovery)
-  - recalculate_progress integration when a submission transitions to passed.
-
-Celery tasks run inline via CELERY_TASK_ALWAYS_EAGER so we can assert the
-final terminal state inside the same request/response cycle.
-"""
-
 from unittest.mock import patch
 
 from django.contrib.contenttypes.models import ContentType
@@ -37,10 +21,6 @@ from courses.models import (
 from courses.serializers import AssignmentQuestionSerializer
 from courses.services.assignment_grading import RubricGrader
 
-
-# =============================================================================
-# RubricGrader unit tests (no DB, no client)
-# =============================================================================
 
 class RubricGraderUnitTests(SimpleTestCase):
     def setUp(self):
@@ -74,10 +54,8 @@ class RubricGraderUnitTests(SimpleTestCase):
 
     def test_min_length_strips_whitespace(self):
         rubric = [{'type': 'min_length', 'value': 5, 'points': 2}]
-        # 4 chars after strip → miss.
         score, _, _ = self.grader.grade('   abcd   ', rubric, 2)
         self.assertEqual(score, 0)
-        # 5 chars after strip → match.
         score, _, _ = self.grader.grade('   abcde  ', rubric, 2)
         self.assertEqual(score, 2)
 
@@ -103,7 +81,6 @@ class RubricGraderUnitTests(SimpleTestCase):
         self.assertEqual(score, 0)
 
     def test_score_clamps_to_max_score_when_rubric_oversums(self):
-        # Misconfigured rubric whose criteria sum to 20 but question.points = 10.
         rubric = [
             {'type': 'keyword', 'value': 'x', 'points': 15},
             {'type': 'keyword', 'value': 'y', 'points': 5},
@@ -129,13 +106,8 @@ class RubricGraderUnitTests(SimpleTestCase):
         self.assertEqual(feedback, 'got a\nmissed b')
 
 
-# =============================================================================
-# Authoring-side rubric validation on AssignmentQuestionSerializer
-# =============================================================================
 
 class AssignmentQuestionRubricAuthoringTests(APITestCase):
-    """Validate that the authoring serializer enforces the rubric's shape
-    + sum-of-points invariant before persistence."""
 
     def _validate(self, data, instance=None):
         serializer = AssignmentQuestionSerializer(instance=instance, data=data, partial=instance is not None)
@@ -181,8 +153,6 @@ class AssignmentQuestionRubricAuthoringTests(APITestCase):
         self.assertFalse(valid)
 
     def test_empty_rubric_is_allowed_during_draft_authoring(self):
-        # Empty rubric => no auto-grading possible, but authoring should
-        # not block — instructors author iteratively.
         data = {'question_text': 'Q?', 'points': 5, 'rubric': []}
         valid, errors = self._validate(data)
         self.assertTrue(valid, errors)
@@ -210,13 +180,8 @@ class AssignmentQuestionRubricAuthoringTests(APITestCase):
         self.assertEqual(len(data['rubric']), 1)
 
 
-# =============================================================================
-# Assignment.total_score (instructor-declared total)
-# =============================================================================
 
 class AssignmentTotalScoreTests(APITestCase):
-    """Cross-field validation on the authoring serializer + snapshot
-    behaviour on the submission flow."""
 
     def test_passing_score_above_total_score_is_rejected(self):
         from courses.serializers import AssignmentCreateUpdateSerializer
@@ -239,8 +204,6 @@ class AssignmentTotalScoreTests(APITestCase):
 
     def test_partial_update_uses_instance_for_missing_side(self):
         from courses.serializers import AssignmentCreateUpdateSerializer
-        # Stub matching the model's attribute access; serializer only reads
-        # total_score / passing_score for cross-field validation.
         class Stub:
             total_score = 100
             passing_score = 10
@@ -252,8 +215,6 @@ class AssignmentTotalScoreTests(APITestCase):
         self.assertTrue(s.is_valid(), s.errors)
 
     def test_submission_max_score_snapshots_assignment_total_score(self):
-        """Even if sum(question.points) differs, the submission's max_score
-        snapshot is the assignment's declared total."""
         instructor = User.objects.create_user(
             email='ts_instr@example.com', password='pw12345!',
             full_name='I', user_type='instructor', is_email_verified=True,
@@ -268,7 +229,6 @@ class AssignmentTotalScoreTests(APITestCase):
         )
         course.instructors.add(instructor)
         section = CourseSection.objects.create(course=course, title='S', position=1)
-        # total_score = 50 but question.points sum to 5. Snapshot must be 50.
         assignment = Assignment.objects.create(
             section=section, title='A', total_score=50, passing_score=0,
         )
@@ -315,23 +275,9 @@ def _fake_request(user):
     return req
 
 
-# =============================================================================
-# Learner consumption + auto-grading API tests
-# =============================================================================
 
 class LearnerAssignmentConsumptionAPITests(APITestCase):
-    """End-to-end Phase-2 assignment flow with Celery running inline.
-
-    Celery is forced into eager mode by mutating the app config directly —
-    `@override_settings(CELERY_TASK_ALWAYS_EAGER=True)` does not propagate
-    because the Celery app's config is loaded once at module import.
-
-    Submits / retries are wrapped in `captureOnCommitCallbacks(execute=True)`
-    inside helpers (`_submit_with_grading`, `_retry_with_grading`) because
-    `transaction.on_commit` callbacks never fire automatically under
-    `TestCase` — the test's wrapping transaction is rolled back, not
-    committed.
-    """
+    """End-to-end assignment flow. Celery runs inline (mutated app config — override_settings doesn't propagate)."""
 
     @classmethod
     def setUpClass(cls):
@@ -367,7 +313,7 @@ class LearnerAssignmentConsumptionAPITests(APITestCase):
             created_by=cls.instructor,
             title='Assignable Course',
             slug='assignable-course',
-            description='Course used by Phase-2 assignment tests.',
+            description='',
             status=NidusCourse.CourseStatus.PUBLISHED,
         )
         cls.course.instructors.add(cls.instructor)
@@ -376,8 +322,6 @@ class LearnerAssignmentConsumptionAPITests(APITestCase):
             course=cls.course, title='Section One', position=1,
         )
 
-        # Assignment with total_score=10 (declared), passing_score=5;
-        # two questions allocating 6 + 4 = 10 points (matches the declared total).
         cls.assignment = Assignment.objects.create(
             section=cls.section, title='Mini Essay',
             total_score=10, passing_score=5,
@@ -421,9 +365,6 @@ class LearnerAssignmentConsumptionAPITests(APITestCase):
     def auth(self, user=None):
         self.client.force_authenticate(user=user or self.learner)
 
-    # -------------------------------------------------------------------------
-    # GET /learn/assignments/<id>/
-    # -------------------------------------------------------------------------
 
     def test_detail_strips_model_answer_and_rubric(self):
         self.auth()
@@ -437,11 +378,11 @@ class LearnerAssignmentConsumptionAPITests(APITestCase):
         self.assertEqual(data['question_count'], 2)
         self.assertEqual(data['max_score'], 10)
         self.assertEqual(data['passing_score'], 5)
-        for question in data['questions']:
-            self.assertNotIn('model_answer', question)
-            self.assertNotIn('rubric', question)
-            self.assertIn('question_text', question)
-            self.assertIn('points', question)
+        for q in data['questions']:
+            self.assertNotIn('model_answer', q)
+            self.assertNotIn('rubric', q)
+            self.assertIn('question_text', q)
+            self.assertIn('points', q)
         self.assertIsNone(data['latest_submission'])
 
     def test_detail_returns_404_for_unenrolled_learner(self):
@@ -455,8 +396,6 @@ class LearnerAssignmentConsumptionAPITests(APITestCase):
         url = reverse('courses:learner-assignment-detail', kwargs={'assignment_id': self.assignment.id})
         response = self.client.get(url)
         self.assertEqual(response.status_code, status.HTTP_200_OK)
-        # Instructor preview uses the same serializer; absence guarantee
-        # still holds — `model_answer` / `rubric` not leaked here either.
         for question in response.data['data']['questions']:
             self.assertNotIn('model_answer', question)
             self.assertNotIn('rubric', question)
@@ -471,9 +410,6 @@ class LearnerAssignmentConsumptionAPITests(APITestCase):
         self.assertEqual(latest['status'], AssignmentSubmission.Status.PASSED)
         self.assertEqual(latest['max_score'], 10)
 
-    # -------------------------------------------------------------------------
-    # POST /learn/assignments/<id>/submit/
-    # -------------------------------------------------------------------------
 
     def test_submit_happy_path_returns_202_and_grades_inline(self):
         self.auth()
@@ -484,12 +420,10 @@ class LearnerAssignmentConsumptionAPITests(APITestCase):
         self.assertEqual(data['status'], AssignmentSubmission.Status.SUBMITTED)
         submission_id = data['submission_id']
 
-        # Celery ran inline (eager mode) → submission should be terminal now.
         submission = AssignmentSubmission.objects.get(pk=submission_id)
         self.assertEqual(submission.status, AssignmentSubmission.Status.PASSED)
         self.assertEqual(submission.total_score, 10)
         self.assertEqual(submission.max_score, 10)
-        # rubric_snapshot copied onto each answer row at submit time.
         for answer in submission.answers.all():
             self.assertTrue(answer.rubric_snapshot, 'rubric_snapshot must be populated')
 
@@ -502,9 +436,7 @@ class LearnerAssignmentConsumptionAPITests(APITestCase):
                 url,
                 {
                     'answers': [
-                        # Q1 will miss the keyword and the length criterion.
                         {'question_id': self.q1.id, 'answer_text': 'no'},
-                        # Q2 will miss the keyword.
                         {'question_id': self.q2.id, 'answer_text': 'not relevant'},
                     ],
                 },
@@ -517,8 +449,6 @@ class LearnerAssignmentConsumptionAPITests(APITestCase):
         self.assertEqual(submission.total_score, 0)
 
     def test_submit_rejects_inflight_submission_with_422(self):
-        # Manually park a submission in `grading` so the partial unique index
-        # (or the .exists() guard) blocks a concurrent attempt.
         AssignmentSubmission.objects.create(
             user=self.learner, assignment=self.assignment,
             status=AssignmentSubmission.Status.GRADING, max_score=10,
@@ -618,9 +548,6 @@ class LearnerAssignmentConsumptionAPITests(APITestCase):
         # IsLearnerUser blocks the instructor — preview must not pollute history.
         self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
 
-    # -------------------------------------------------------------------------
-    # Submission detail (own only, model_answer reveal rule)
-    # -------------------------------------------------------------------------
 
     def test_submission_detail_visible_to_owner(self):
         self.auth()
@@ -636,7 +563,6 @@ class LearnerAssignmentConsumptionAPITests(APITestCase):
         data = response.data['data']
         self.assertEqual(data['status'], AssignmentSubmission.Status.PASSED)
         self.assertEqual(len(data['answers']), 2)
-        # Each answer has criterion_results & feedback.
         for answer in data['answers']:
             self.assertIn('criterion_results', answer)
             self.assertIn('feedback', answer)
@@ -655,7 +581,6 @@ class LearnerAssignmentConsumptionAPITests(APITestCase):
         self.assertEqual(response.status_code, status.HTTP_404_NOT_FOUND)
 
     def test_submission_detail_reveals_model_answer_only_after_terminal_grading(self):
-        # Create a submission stuck in `grading` (Celery skipped via mock).
         submission = AssignmentSubmission.objects.create(
             user=self.learner, assignment=self.assignment,
             status=AssignmentSubmission.Status.GRADING, max_score=10,
@@ -678,7 +603,6 @@ class LearnerAssignmentConsumptionAPITests(APITestCase):
         for answer in response.data['data']['answers']:
             self.assertNotIn('model_answer', answer)
 
-        # Now flip to passed and the reveal kicks in.
         submission.status = AssignmentSubmission.Status.PASSED
         submission.save(update_fields=['status'])
 
@@ -711,13 +635,8 @@ class LearnerAssignmentConsumptionAPITests(APITestCase):
             self.assertNotIn('model_answer', answer)
         self.assertEqual(response.data['data']['grading_error'], 'Worker exploded')
 
-    # -------------------------------------------------------------------------
-    # POST /learn/assignments/submissions/<id>/retry/
-    # -------------------------------------------------------------------------
 
     def test_retry_from_grading_failed_re_enqueues_and_reaches_terminal(self):
-        # Park a submission in `grading_failed` with real answer rows so the
-        # eager re-dispatch can actually grade something.
         submission = AssignmentSubmission.objects.create(
             user=self.learner, assignment=self.assignment,
             status=AssignmentSubmission.Status.GRADING_FAILED,
@@ -745,7 +664,6 @@ class LearnerAssignmentConsumptionAPITests(APITestCase):
 
         submission.refresh_from_db()
         self.assertEqual(submission.status, AssignmentSubmission.Status.PASSED)
-        # grading_error must be cleared on retry.
         self.assertEqual(submission.grading_error, '')
 
     def test_retry_rejected_when_status_is_not_grading_failed(self):
@@ -774,13 +692,8 @@ class LearnerAssignmentConsumptionAPITests(APITestCase):
         response = self.client.post(url)
         self.assertEqual(response.status_code, status.HTTP_404_NOT_FOUND)
 
-    # -------------------------------------------------------------------------
-    # Idempotency under double-dispatch of the Celery task
-    # -------------------------------------------------------------------------
 
     def test_grade_task_short_circuits_when_status_already_terminal(self):
-        # Run grading once, then dispatch the task again directly. The second
-        # run must not re-grade or re-trigger recalc.
         from courses.tasks import grade_assignment_submission_task
 
         self.auth()
@@ -790,17 +703,11 @@ class LearnerAssignmentConsumptionAPITests(APITestCase):
         with patch('courses.tasks.recalculate_progress') as recalc_mock:
             result = grade_assignment_submission_task.run(submission_id)
 
-        # Short-circuit branch returns the skipped marker.
         self.assertTrue(result.get('skipped'))
         recalc_mock.assert_not_called()
 
-    # -------------------------------------------------------------------------
-    # recalculate_progress integration
-    # -------------------------------------------------------------------------
 
     def test_passing_submission_triggers_progress_recalc(self):
-        # The assignment is the only content item on the course, so a
-        # passing grade should bring progress to 100%.
         self.auth()
         with self.captureOnCommitCallbacks(execute=True):
             self._submit_passing_answers()
@@ -829,16 +736,19 @@ class LearnerAssignmentConsumptionAPITests(APITestCase):
         self.assertEqual(self.enrollment.progress_percent, 0)
         self.assertIsNone(self.enrollment.completed_at)
 
-    # -------------------------------------------------------------------------
-    # Helpers
-    # -------------------------------------------------------------------------
+    def test_grading_does_not_create_assignment_graded_notification(self):
+        from notifications.models import Notification
+        self.auth()
+
+        with self.captureOnCommitCallbacks(execute=True):
+            self._submit_passing_answers()
+
+        self.assertFalse(
+            Notification.objects.filter(event_type='assignment.graded').exists(),
+            'assignment.graded notifications must not be created after grading',
+        )
 
     def _submit_passing_answers(self):
-        # Wrap in captureOnCommitCallbacks so the on_commit-deferred Celery
-        # dispatch actually runs inside the test's transaction. With eager
-        # mode set on the app config, the task body executes synchronously
-        # when `.delay()` is called, so by the time this helper returns the
-        # submission has reached a terminal state.
         url = reverse('courses:learner-assignment-submit', kwargs={'assignment_id': self.assignment.id})
         with self.captureOnCommitCallbacks(execute=True):
             response = self.client.post(

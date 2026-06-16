@@ -164,6 +164,20 @@ def _verification_action_required(recipient, ctx):
     )
 
 
+def _message_received(recipient, ctx):
+    preview = ctx.get('body_preview', '')
+    if len(preview) > 120:
+        preview = preview[:120] + '...'
+    return _build(
+        title=f'New message from {ctx["sender_name"]}',
+        body=f'In {ctx["course_title"]}: {preview}',
+        data={
+            'conversation_id': ctx['conversation_id'],
+            'course_slug': ctx['course_slug'],
+        },
+    )
+
+
 _BUILDERS = {
     _ET.ENROLLMENT_CREATED:      _enrollment_created,
     _ET.LECTURE_COMPLETED:       _lecture_completed,
@@ -183,6 +197,7 @@ _BUILDERS = {
     _ET.VERIFICATION_APPROVED:   _verification_approved,
     _ET.VERIFICATION_REJECTED:   _verification_rejected,
     _ET.VERIFICATION_ACTION_REQ: _verification_action_required,
+    _ET.MESSAGE_RECEIVED:        _message_received,
 }
 
 

@@ -9,6 +9,7 @@ urlpatterns = [
     path('api/v1/verification/', include('id_verification.urls', namespace='id_verification')),
     path('api/v1/courses/', include('courses.urls', namespace='courses')),
     path('api/v1/notifications/', include('notifications.urls', namespace='notifications')),
+    path('api/v1/messaging/', include('messaging.urls', namespace='messaging')),
 ]
 
 if settings.DEBUG:

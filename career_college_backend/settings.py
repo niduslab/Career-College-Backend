@@ -57,6 +57,7 @@ INSTALLED_APPS = [
     'courses.apps.CoursesConfig',
     'realtime.apps.RealtimeConfig',
     'notifications.apps.NotificationsConfig',
+    'messaging.apps.MessagingConfig',
 ]
 
 MIDDLEWARE = [

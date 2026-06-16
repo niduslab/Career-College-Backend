@@ -16,7 +16,8 @@ _STREAM_HANDLER_CLASSES = {
 
 # Maps channel-layer event type → (stream_name, handler_method_name).
 _CHANNEL_EVENT_DISPATCH = {
-    'notification.push': ('notifications', 'handle_notification_push'),
+    'notification.push':      ('notifications', 'handle_notification_push'),
+    'messaging.new_message':  ('messaging',     'handle_new_message'),
 }
 
 
@@ -93,6 +94,15 @@ class PlatformConsumer(AsyncWebsocketConsumer):
                 await handler(event)
             except Exception:
                 logger.exception('notification.push handler failed')
+
+    async def messaging_new_message(self, event: dict):
+        stream_name, method_name = _CHANNEL_EVENT_DISPATCH['messaging.new_message']
+        handler = getattr(self._handlers.get(stream_name), method_name, None)
+        if handler:
+            try:
+                await handler(event)
+            except Exception:
+                logger.exception('messaging.new_message handler failed')
 
     async def send_to_client(self, stream: str, payload: dict):
         await self.send(text_data=json.dumps({'stream': stream, 'payload': payload}))

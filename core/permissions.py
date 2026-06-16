@@ -117,3 +117,22 @@ class IsVerifiedCourseCreator(BasePermission):
             IsVerifiedInstructor().has_permission(request, view)
             or IsVerifiedPartnerInstitution().has_permission(request, view)
         )
+
+
+class IsConversationParticipant(BasePermission):
+    """
+    Object-level guard for Conversation instances.
+
+    Returns True only when the requesting user is either the learner or the
+    instructor of the conversation. Intended for use alongside view-level
+    participant checks that already return 404 on no-access; this class
+    provides a secondary object-level safety net.
+    """
+
+    message = 'You are not a participant in this conversation.'
+
+    def has_object_permission(self, request, view, obj):
+        user = request.user
+        if not user or not user.is_authenticated:
+            return False
+        return obj.learner_id == user.pk or obj.instructor_id == user.pk

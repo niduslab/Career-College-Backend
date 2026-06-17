@@ -79,6 +79,50 @@ class ConversationListViewTest(APITestCase):
         self.assertNotIn(self.conv.pk, ids)
 
 
+class UnreadConversationCountViewTest(APITestCase):
+    def setUp(self):
+        self.learner = _make_user('lcount@v.com', 'learner', 'Una')
+        self.instructor = _make_user('icount@v.com', 'instructor', 'Vic')
+        self.course = _make_course(self.instructor, 'count-course')
+        self.course.instructors.add(self.instructor)
+        _enroll(self.learner, self.course)
+        self.conv = Conversation.objects.create(
+            learner=self.learner, instructor=self.instructor, course=self.course
+        )
+        self.url = reverse('messaging:unread-conversation-count')
+
+    def test_unauthenticated_returns_401(self):
+        r = self.client.get(self.url)
+        self.assertEqual(r.status_code, status.HTTP_401_UNAUTHORIZED)
+
+    def test_zero_when_no_unread(self):
+        _auth(self.client, self.learner)
+        r = self.client.get(self.url)
+        self.assertEqual(r.status_code, status.HTTP_200_OK)
+        self.assertTrue(r.data['success'])
+        self.assertEqual(r.data['data']['unread_conversations'], 0)
+
+    def test_counts_unread_conversation(self):
+        Message.objects.create(conversation=self.conv, sender=self.instructor, body='Hi')
+        _auth(self.client, self.learner)
+        r = self.client.get(self.url)
+        self.assertEqual(r.data['data']['unread_conversations'], 1)
+
+    def test_instructor_side_counted(self):
+        # A message from the learner is unread for the instructor.
+        Message.objects.create(conversation=self.conv, sender=self.learner, body='Question')
+        _auth(self.client, self.instructor)
+        r = self.client.get(self.url)
+        self.assertEqual(r.status_code, status.HTTP_200_OK)
+        self.assertEqual(r.data['data']['unread_conversations'], 1)
+
+    def test_admin_forbidden(self):
+        admin = _make_user('admincount@v.com', 'admin', 'Wally')
+        _auth(self.client, admin)
+        r = self.client.get(self.url)
+        self.assertEqual(r.status_code, status.HTTP_403_FORBIDDEN)
+
+
 class ConversationCreateViewTest(APITestCase):
     def setUp(self):
         self.learner = _make_user('lcreate@v.com', 'learner', 'Dave')

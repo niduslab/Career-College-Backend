@@ -67,6 +67,15 @@ Unread = messages where `created_at > caller_last_read_at`.
 Marking read = one `UPDATE conversations SET *_last_read_at = NOW()`.  
 This avoids per-message `is_read` flags and the N UPDATE rows they'd require.
 
+**Two derived metrics, same rule:**
+
+| Metric | Meaning | Source |
+|---|---|---|
+| Unread **message** count (per conversation) | `COUNT(messages WHERE created_at > last_read)` | `get_unread_counts()` → `[{conversation_id, unread_count}]` |
+| Unread **conversation** count | number of threads with ≥1 unread message | `get_unread_conversation_count()` → single int |
+
+A never-opened conversation (its `*_last_read_at` is `NULL`) counts as unread when it holds any visible message — there is **no separate "new conversation" counter**; a brand-new thread is just a conversation whose opener message is unread. `get_unread_conversation_count()` Coalesces `NULL` last-read to the epoch so the `created_at > last_read` comparison holds for every message, and pushes the existence check into the DB via `Exists` (two queries, one per role side) rather than the per-conversation Python loop `get_unread_counts()` uses. The two always agree: `get_unread_conversation_count(user) == len(get_unread_counts(user))`.
+
 ---
 
 ## Architecture
@@ -211,6 +220,7 @@ All endpoints require `IsAuthenticated + IsEmailVerified + (IsLearnerUser OR IsI
 | Method | URL | Who | Notes |
 |---|---|---|---|
 | `GET` | `conversations/` | Both | Paginated list, `?page_size=N` supported |
+| `GET` | `conversations/unread-count/` | Both | `{unread_conversations: N}` — count of threads with ≥1 unread message (badge) |
 | `POST` | `conversations/create/` | Learner only | Creates conversation + first message atomically |
 | `GET` | `conversations/<id>/` | Participant | Metadata + paginated messages |
 | `POST` | `conversations/<id>/messages/` | Participant | Send-gate checked in service |
@@ -249,7 +259,7 @@ Stream name: `messaging` (multiplexed via the existing `PlatformConsumer` at `/w
 { "stream": "messaging", "payload": { "type": "new_message",   "conversation_id": 5, "message": {...} } }
 { "stream": "messaging", "payload": { "type": "message_sent",  "message": {...} } }
 { "stream": "messaging", "payload": { "type": "marked_read",   "conversation_id": 5 } }
-{ "stream": "messaging", "payload": { "type": "unread_summary","conversations": [{"conversation_id": 5, "unread_count": 2}] } }
+{ "stream": "messaging", "payload": { "type": "unread_summary","conversations": [{"conversation_id": 5, "unread_count": 2}], "unread_conversations": 1 } }
 { "stream": "messaging", "payload": { "type": "error",         "detail": "..." } }
 ```
 
@@ -258,6 +268,58 @@ On connect: each user joins the channel group `messaging_user_{user_id}`. `unrea
 On new message (REST or WS): the service pushes a `messaging.new_message` channel event only to `messaging_user_{recipient_id}`. The sender already has the message — via `message_sent` (WS path) or the 201 response body (REST path) — so pushing to the sender group would cause duplicate delivery on the WS path. The `PlatformConsumer.messaging_new_message` handler routes the channel event to `MessagingStreamHandler.handle_new_message`.
 
 Send-gate is enforced inside `messaging_service.send_message` — the same function is called from both REST and WS paths so rules are never duplicated.
+
+---
+
+## Frontend Client Contract
+
+### Write path strategy
+
+The backend exposes two write paths for sending messages. Clients should use them in this order:
+
+| Action | Path | Notes |
+|--------|------|-------|
+| Create conversation | REST only | No `conversation_id` exists yet; WS `send_message` requires one |
+| Send message | WS primary → in-memory queue → WS flush on reconnect | REST endpoint remains available for non-browser clients |
+| Mark read | WS primary, REST fallback | Either path calls the same service |
+| Receive messages | WS only | No polling endpoint |
+
+### Recommended frontend pattern (Option A — in-memory queue)
+
+When the WS connection is open, send over WS. When it is down (mid-reconnect), buffer messages locally and flush when the connection reopens. No REST call needed for the fallback.
+
+```
+User sends message
+    WS open?  → send via WS  → server returns message_sent frame
+    WS closed? → push to pendingQueue, show pending indicator in UI
+
+WS reconnects (onopen)
+    → flush pendingQueue in order
+    → each message gets message_sent or error frame
+    → UI updates accordingly
+```
+
+**UI states required:**
+
+| State | Trigger | Display |
+|-------|---------|---------|
+| `pending` | message added to queue while WS down | clock / spinner icon |
+| `sent` | `message_sent` frame received | checkmark |
+| `failed` | `error` frame received | `!` icon + retry button |
+
+Retry button re-calls `sendMessage(conversationId, body)` — tries WS again; re-queues if still down.
+
+### Why REST send endpoint is kept
+
+The `POST conversations/<id>/messages/` REST endpoint is not removed even though the frontend prefers WS:
+
+- **Non-browser clients** — scripts, bots, server-to-server integrations have no WS connection.
+- **Testing** — REST is directly testable via Postman without a live WS session.
+- **Zero maintenance cost** — both paths call the same `messaging_service.send_message()`.
+
+### Multi-tab note
+
+With Option A, if the user has two tabs open and sends from Tab A, Tab B's WS session will not receive a push for that message (the sender's group is excluded from `new_message` to prevent duplicate delivery on the sending tab). Tab B will see the message on next load via `GET /conversations/<id>/`. For an LMS this is acceptable. If multi-tab real-time sync is required in future, push `new_message` to the sender group and let clients deduplicate by `message.id`.
 
 ---
 
@@ -296,7 +358,7 @@ When a message is sent, the service calls `notifications.services.dispatcher.dis
 | `notifications/models.py` | Added `MESSAGE_RECEIVED` event type + `MESSAGING` category |
 | `notifications/services/builders.py` | Added `_message_received` builder |
 | `notifications/services/preference_service.py` | Added `MESSAGE_RECEIVED → MESSAGING` mapping |
-| `core/permissions.py` | Added `IsConversationParticipant` |
+| `core/permissions.py` | (no new class — participant access enforced in the service layer via 404) |
 | `realtime/streams/messaging_stream.py` | Full implementation (was a stub) |
 | `realtime/consumers.py` | Added `messaging.new_message` dispatch entry + `messaging_new_message` handler |
 

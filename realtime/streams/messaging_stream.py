@@ -20,7 +20,7 @@ class MessagingStreamHandler(BaseStreamHandler):
         new_message  : { "type": "new_message",  "conversation_id": <int>, "message": {…} }
         message_sent : { "type": "message_sent", "message": {…} }
         marked_read  : { "type": "marked_read",  "conversation_id": <int> }
-        unread_summary: { "type": "unread_summary", "conversations": [{conversation_id, unread_count}] }
+        unread_summary: { "type": "unread_summary", "conversations": [{conversation_id, unread_count}], "unread_conversations": <int> }
         error        : { "type": "error",        "detail": "<str>" }
     """
 
@@ -39,7 +39,11 @@ class MessagingStreamHandler(BaseStreamHandler):
             self.channel_name,
         )
         unread = await self._get_unread_counts(user.id)
-        await self.send({'type': 'unread_summary', 'conversations': unread})
+        await self.send({
+            'type': 'unread_summary',
+            'conversations': unread,
+            'unread_conversations': len(unread),
+        })
 
     async def on_disconnect(self, user):
         await self.channel_layer.group_discard(

@@ -247,6 +247,46 @@ def mark_read(user, conversation_id: int) -> None:
         Conversation.objects.filter(pk=conversation.pk).update(instructor_last_read_at=now)
 
 
+def get_unread_conversation_count(user) -> int:
+    """
+    Return the number of conversations that have at least one unread message
+    for this user (NOT the total unread message count).
+
+    A never-opened conversation (its *_last_read_at is NULL) counts as unread
+    when it has any visible message — Coalesce maps NULL to the epoch so the
+    created_at > last_read comparison holds for every message.
+
+    Two queries (one per role side), each pushing the existence check into the
+    DB via Exists — no per-conversation Python loop, unlike get_unread_counts.
+    """
+    import datetime
+
+    from django.db.models import Exists, OuterRef, Value
+    from django.db.models.functions import Coalesce
+
+    epoch = datetime.datetime(1970, 1, 1, tzinfo=datetime.timezone.utc)
+
+    def _count_for(role_field: str, last_read_field: str) -> int:
+        unread_msgs = Message.objects.filter(
+            conversation=OuterRef('pk'),
+            is_deleted=False,
+            created_at__gt=Coalesce(OuterRef(last_read_field), Value(epoch)),
+        )
+        return (
+            Conversation.objects
+            .filter(**{role_field: user})
+            .filter(Exists(unread_msgs))
+            .count()
+        )
+
+    # A user is never both learner and instructor of the same conversation
+    # (CHECK(learner != instructor)), so the two sides never double-count.
+    return (
+        _count_for('learner', 'learner_last_read_at')
+        + _count_for('instructor', 'instructor_last_read_at')
+    )
+
+
 def get_unread_counts(user) -> list[dict]:
     """
     Return a list of {conversation_id, unread_count} dicts for conversations
@@ -352,7 +392,8 @@ def _push_ws_and_notify(
                 'course_slug': course_slug,
                 'course_title': course_title,
                 'sender_name': sender_name,
-                'body_preview': message_snapshot['body'][:120],
+                # Full body — the notification builder owns truncation + ellipsis.
+                'body_preview': message_snapshot['body'],
             },
         )
     except Exception:

@@ -316,6 +316,33 @@ GET {{base_url}}/messaging/conversations/
 
 ---
 
+### 2.5 Unread conversation count (inbox badge)
+
+```
+GET {{base_url}}/messaging/conversations/unread-count/
+Authorization: {{learner_token}}
+```
+
+**Expected:** `200 OK`.
+```json
+{ "success": true, "data": { "unread_conversations": 1 } }
+```
+
+> Counts **distinct conversations** with at least one unread message — not total unread messages. Three unread messages in one thread → `unread_conversations: 1`. A never-opened thread counts as unread (its opener message has not been read yet). Equals the length of the WS `unread_summary.conversations` list.
+
+**Postman test snippet:**
+```javascript
+pm.test("returns unread conversation count", function () {
+    const body = pm.response.json();
+    pm.expect(body.success).to.be.true;
+    pm.expect(body.data.unread_conversations).to.be.a("number");
+});
+```
+
+After `POST .../read/` on every unread thread, this drops to `0`.
+
+---
+
 ## Group 3: Conversation Detail and Messages
 
 ### 3.1 Learner gets conversation detail
@@ -703,27 +730,52 @@ Re-enable:
 
 ## Group 7: WebSocket Testing
 
-Use [wscat](https://github.com/websockets/wscat) (`npm install -g wscat`) or the Postman WebSocket feature.
+Two ways to connect — Postman UI (recommended for this guide) or wscat CLI.
+
+---
+
+### Postman WebSocket Setup
+
+1. In Postman, click **New → WebSocket Request**.
+2. Enter the URL:
+   ```
+   ws://localhost:8000/ws/?token={{learner_raw_token}}
+   ```
+   > `{{learner_raw_token}}` is the raw JWT with no `Bearer ` prefix.
+3. Click **Connect**. The **Messages** pane shows all incoming frames in real time.
+4. To send a frame: paste JSON into the message composer at the bottom, then click **Send**.
+5. To test two sessions simultaneously, open a second Postman tab and connect with `{{instructor_raw_token}}` (add `instructor_raw_token` to your environment).
+
+> Add `instructor_raw_token` to your Postman environment the same way as `learner_raw_token` — raw JWT, no prefix.
+
+**wscat equivalent (CLI):**
+```bash
+# Learner session
+wscat -c "ws://localhost:8000/ws/?token={{learner_raw_token}}"
+
+# Instructor session (separate terminal)
+wscat -c "ws://localhost:8000/ws/?token={{instructor_raw_token}}"
+```
+
+---
 
 ### 7.1 Connect and receive unread summary
 
-```bash
-wscat -c "ws://localhost:8000/ws/?token={{learner_raw_token}}"
-```
+Connect as the learner (Postman or wscat).
 
-> Use the raw JWT token (no `Bearer ` prefix) in the URL.
-
-**Expected immediately on connect (two frames):**
+**Expected immediately on connect — two frames arrive automatically:**
 ```json
 { "stream": "notifications", "payload": { "type": "unread_count", "count": 2 } }
-{ "stream": "messaging",     "payload": { "type": "unread_summary", "conversations": [{ "conversation_id": 1, "unread_count": 1 }] } }
+{ "stream": "messaging",     "payload": { "type": "unread_summary", "conversations": [{ "conversation_id": 1, "unread_count": 1 }], "unread_conversations": 1 } }
 ```
 
-> `unread_summary` lists only conversations with unread messages. Empty array if all are read.
+> `unread_summary` lists only conversations with unread messages. Empty array if all are read. `unread_conversations` is the number of entries in that list — the same value (and same field name) the REST `conversations/unread-count/` endpoint returns. Use it directly for an inbox badge instead of summing `unread_count`.
 
 ---
 
 ### 7.2 Send a message via WebSocket
+
+**Prerequisite:** learner session connected. Paste into Postman message composer and click **Send**:
 
 ```json
 {
@@ -754,23 +806,58 @@ wscat -c "ws://localhost:8000/ws/?token={{learner_raw_token}}"
 }
 ```
 
-The sender does **not** receive a `new_message` frame. `message_sent` is the only delivery to the sender's session.
+The sender does **not** receive a `new_message` frame. `message_sent` is the only delivery to the sender's session — the server intentionally excludes the sender's channel group from the broadcast to prevent duplicate delivery.
 
-**If the instructor is connected in a second wscat session, they receive:**
+**If the instructor is connected in a second session, they receive:**
 ```json
 {
   "stream": "messaging",
   "payload": {
     "type": "new_message",
     "conversation_id": 1,
-    "message": { "id": 4, ... }
+    "message": {
+      "id": 4,
+      "conversation_id": 1,
+      "sender_id": 3,
+      "body": "Sent over WebSocket!",
+      "is_deleted": false,
+      "created_at": "2026-06-16T10:10:00Z"
+    }
   }
 }
 ```
 
-> `new_message` is pushed only to the recipient's channel group. The sender's group is intentionally excluded — the sender already has the message via `message_sent`.
+**Verify:** `GET /messaging/conversations/{{conversation_id}}/` — message count increased by 1.
 
-**Verify:** `GET /messaging/conversations/{{conversation_id}}/` — message appears in REST feed.
+---
+
+### 7.2a Send-gate error via WebSocket
+
+With learner's enrollment set to inactive (`is_active = False` in admin), send:
+
+```json
+{
+  "stream": "messaging",
+  "payload": {
+    "type": "send_message",
+    "conversation_id": 1,
+    "body": "Should be blocked"
+  }
+}
+```
+
+**Expected — error frame, connection stays open:**
+```json
+{
+  "stream": "messaging",
+  "payload": {
+    "type": "error",
+    "detail": "You must be actively enrolled to send messages in this course."
+  }
+}
+```
+
+Reset `is_active = True` after testing.
 
 ---
 
@@ -803,14 +890,27 @@ The sender does **not** receive a `new_message` frame. `message_sent` is the onl
 
 ### 7.4 Receive a live message from the other party
 
-1. Open two wscat sessions — one as learner, one as instructor.
-2. From the instructor session, send:
-   ```json
-   { "stream": "messaging", "payload": { "type": "send_message", "conversation_id": 1, "body": "Live push test" } }
-   ```
-3. Instructor session receives `message_sent`.
+**Setup:** two Postman WebSocket tabs open simultaneously.
+- **Tab A** connected as learner (`ws://localhost:8000/ws/?token={{learner_raw_token}}`)
+- **Tab B** connected as instructor (`ws://localhost:8000/ws/?token={{instructor_raw_token}}`)
 
-**Expected on the learner session (no action needed):**
+From **Tab B (instructor)**, send:
+```json
+{ "stream": "messaging", "payload": { "type": "send_message", "conversation_id": 1, "body": "Live push test" } }
+```
+
+**Tab B (instructor) receives `message_sent` only:**
+```json
+{
+  "stream": "messaging",
+  "payload": {
+    "type": "message_sent",
+    "message": { "id": 5, "sender_id": 2, "body": "Live push test", "conversation_id": 1, ... }
+  }
+}
+```
+
+**Tab A (learner) receives `new_message` automatically — no action needed:**
 ```json
 {
   "stream": "messaging",
@@ -821,6 +921,25 @@ The sender does **not** receive a `new_message` frame. `message_sent` is the onl
   }
 }
 ```
+
+> Tab B does **not** receive `new_message` — the server pushes that frame only to the recipient's channel group.
+
+---
+
+### 7.4a Reconnect behavior after disconnect
+
+This test verifies the backend accepts sends normally after a reconnect. The in-memory queue (which holds messages while the WS is down) is frontend logic and cannot be simulated in Postman.
+
+1. Close the learner's Postman WS tab (click **Disconnect**).
+2. Reopen a new WebSocket tab and reconnect as learner.
+3. **Expected on reconnect:** `unread_summary` frame arrives with current unread state.
+4. Send a message immediately after reconnect:
+   ```json
+   { "stream": "messaging", "payload": { "type": "send_message", "conversation_id": 1, "body": "After reconnect" } }
+   ```
+5. **Expected:** `message_sent` frame arrives normally — no errors, no delay.
+
+> In a real frontend using Option A, any messages queued while the connection was down would flush in order at step 4's moment. The backend sees them as normal sequential sends and returns a `message_sent` for each. The frontend upgrades each queued message's UI state from `pending` to `sent`.
 
 ---
 
@@ -909,21 +1028,27 @@ Connection stays open.
 
 ### 7.9 Connect without token — auth failure
 
+**Postman:** open a new WebSocket tab, enter `ws://localhost:8000/ws/` (no token param), click **Connect**.
+
+**wscat:**
 ```bash
 wscat -c "ws://localhost:8000/ws/"
 ```
 
-**Expected:** Connection closed immediately with code `4001`.
+**Expected:** Connection rejected immediately with close code `4001`.
 
 ---
 
 ### 7.10 Connect with invalid/expired token
 
+**Postman:** enter `ws://localhost:8000/ws/?token=not.a.real.token`, click **Connect**.
+
+**wscat:**
 ```bash
 wscat -c "ws://localhost:8000/ws/?token=not.a.real.token"
 ```
 
-**Expected:** Connection closed immediately with code `4001`.
+**Expected:** Connection rejected immediately with close code `4001`.
 
 ---
 
@@ -1005,6 +1130,11 @@ Authorization: {{admin_token}}
 }
 ```
 
+**Unread conversation count (200):**
+```json
+{ "success": true, "data": { "unread_conversations": 1 } }
+```
+
 **Mark read (200):**
 ```json
 { "success": true, "message": "Marked as read." }
@@ -1067,6 +1197,7 @@ Group 2: List
   2.1  Learner lists                  → 200, conversation present
   2.2  Instructor lists               → 200, same conversation
   2.4  Unauthenticated               → 401
+  2.5  Unread conversation count      → 200, {unread_conversations: N}
 
 Group 3: Detail
   3.1  Learner gets detail            → 200, is_own=true on own msg
@@ -1091,10 +1222,10 @@ Group 6: Notifications
   6.2  Disable email pref             → no email, bell unaffected
 
 Group 7: WebSocket (requires Daphne + Redis)
-  7.1  Connect                        → unread_summary pushed on connect
-  7.2  Send via WS                    → message_sent back, new_message to both
+  7.1  Connect                        → unread_summary (+ unread_conversations) pushed on connect
+  7.2  Send via WS                    → message_sent back to sender; new_message to recipient only
   7.3  Mark read via WS               → marked_read back
-  7.4  Live push to other party       → two sessions, new_message delivered
+  7.4  Live push to other party       → two tabs, new_message delivered to recipient only
   7.5  Send to bad conversation       → error frame
   7.9  Connect without token          → closed 4001
 

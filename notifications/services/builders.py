@@ -167,7 +167,7 @@ def _verification_action_required(recipient, ctx):
 def _message_received(recipient, ctx):
     preview = ctx.get('body_preview', '')
     if len(preview) > 120:
-        preview = preview[:120] + '...'
+        preview = preview[:117] + '...'
     return _build(
         title=f'New message from {ctx["sender_name"]}',
         body=f'In {ctx["course_title"]}: {preview}',

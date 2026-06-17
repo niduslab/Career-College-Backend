@@ -12,6 +12,7 @@ from messaging.services.messaging_service import (
     get_conversation_for_participant,
     get_messages,
     get_or_create_conversation,
+    get_unread_conversation_count,
     get_unread_counts,
     list_conversations,
     mark_read,
@@ -228,3 +229,67 @@ class GetUnreadCountsTest(TestCase):
         msg.save()
         counts = get_unread_counts(self.learner)
         self.assertEqual(len(counts), 0)
+
+
+class GetUnreadConversationCountTest(TestCase):
+    def setUp(self):
+        self.learner = _make_user('learner@ucc.com', 'learner', 'Peggy')
+        self.instructor = _make_user('instructor@ucc.com', 'instructor', 'Quinn')
+        self.course = _make_course(self.instructor, 'ucc-course')
+        self.course.instructors.add(self.instructor)
+        self.conv = Conversation.objects.create(
+            learner=self.learner,
+            instructor=self.instructor,
+            course=self.course,
+        )
+
+    def test_zero_when_no_messages(self):
+        self.assertEqual(get_unread_conversation_count(self.learner), 0)
+        self.assertEqual(get_unread_conversation_count(self.instructor), 0)
+
+    def test_counts_never_opened_conversation_with_message(self):
+        # last_read is NULL → a visible message makes the conversation unread.
+        Message.objects.create(conversation=self.conv, sender=self.instructor, body='Hi')
+        self.assertEqual(get_unread_conversation_count(self.learner), 1)
+
+    def test_zero_after_mark_read(self):
+        Message.objects.create(conversation=self.conv, sender=self.instructor, body='Hi')
+        mark_read(self.learner, self.conv.pk)
+        self.assertEqual(get_unread_conversation_count(self.learner), 0)
+
+    def test_soft_deleted_message_does_not_count(self):
+        msg = Message.objects.create(conversation=self.conv, sender=self.instructor, body='Gone')
+        msg.is_deleted = True
+        msg.save()
+        self.assertEqual(get_unread_conversation_count(self.learner), 0)
+
+    def test_counts_distinct_conversations_not_messages(self):
+        # Three unread messages in ONE conversation → count is 1, not 3.
+        for _ in range(3):
+            Message.objects.create(conversation=self.conv, sender=self.instructor, body='msg')
+        self.assertEqual(get_unread_conversation_count(self.learner), 1)
+
+    def test_counts_multiple_conversations(self):
+        course2 = _make_course(self.instructor, 'ucc-course-2')
+        course2.instructors.add(self.instructor)
+        conv2 = Conversation.objects.create(
+            learner=self.learner, instructor=self.instructor, course=course2,
+        )
+        Message.objects.create(conversation=self.conv, sender=self.instructor, body='one')
+        Message.objects.create(conversation=conv2, sender=self.instructor, body='two')
+        self.assertEqual(get_unread_conversation_count(self.learner), 2)
+
+    def test_matches_len_of_unread_counts(self):
+        # The REST endpoint (this fn) and the WS unread_summary list length must agree.
+        Message.objects.create(conversation=self.conv, sender=self.instructor, body='Hi')
+        self.assertEqual(
+            get_unread_conversation_count(self.learner),
+            len(get_unread_counts(self.learner)),
+        )
+
+    def test_instructor_side_counted_independently(self):
+        # A message from the learner is unread for the instructor.
+        Message.objects.create(conversation=self.conv, sender=self.learner, body='Question')
+        self.assertEqual(get_unread_conversation_count(self.instructor), 1)
+        mark_read(self.instructor, self.conv.pk)
+        self.assertEqual(get_unread_conversation_count(self.instructor), 0)

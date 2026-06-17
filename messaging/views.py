@@ -4,6 +4,7 @@ from messaging.all_views.conversation_views import (
     ConversationListView,
     MarkConversationReadView,
     SendMessageView,
+    UnreadConversationCountView,
 )
 
 __all__ = [
@@ -12,4 +13,5 @@ __all__ = [
     'ConversationListView',
     'MarkConversationReadView',
     'SendMessageView',
+    'UnreadConversationCountView',
 ]

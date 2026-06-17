@@ -6,6 +6,7 @@ from messaging.views import (
     ConversationListView,
     MarkConversationReadView,
     SendMessageView,
+    UnreadConversationCountView,
 )
 
 app_name = 'messaging'
@@ -13,6 +14,9 @@ app_name = 'messaging'
 urlpatterns = [
     # List all conversations for the calling user (learner or instructor).
     path('conversations/', ConversationListView.as_view(), name='conversation-list'),
+
+    # Count of conversations with unread messages (nav/inbox badge).
+    path('conversations/unread-count/', UnreadConversationCountView.as_view(), name='unread-conversation-count'),
 
     # Start a new conversation (learner only — body required).
     path('conversations/create/', ConversationCreateView.as_view(), name='conversation-create'),

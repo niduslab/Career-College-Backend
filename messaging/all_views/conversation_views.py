@@ -33,6 +33,7 @@ from messaging.services import (
     get_conversation_for_participant,
     get_messages,
     get_or_create_conversation,
+    get_unread_conversation_count,
     list_conversations,
     mark_read,
     send_message,
@@ -60,6 +61,35 @@ class ConversationListView(APIView):
         paginated = paginator.get_paginated_response(serializer.data)
         paginated.data = {'success': True, 'data': paginated.data}
         return paginated
+
+
+class UnreadConversationCountView(APIView):
+    """
+    GET — Number of conversations with at least one unread message for the caller.
+
+    Returns a single integer (not the total unread message count). Suited to a
+    nav/inbox badge. Accessible to both learners and instructors.
+    """
+
+    permission_classes = [IsAuthenticated, IsEmailVerified, _MESSAGING_USERS]
+
+    def get(self, request):
+        try:
+            count = get_unread_conversation_count(request.user)
+        except Exception:
+            logger.exception(
+                'UnreadConversationCountView: unexpected error user=%s',
+                request.user.pk,
+            )
+            return Response(
+                {'success': False, 'message': 'An unexpected error occurred. Please try again.'},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            )
+
+        return Response(
+            {'success': True, 'data': {'unread_conversations': count}},
+            status=status.HTTP_200_OK,
+        )
 
 
 class ConversationCreateView(APIView):

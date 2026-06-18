@@ -51,7 +51,18 @@ python manage.py reindex_section_content_positions --dry-run
 | `authentication` | `/api/v1/auth/` | Registration, OTP, JWT, OAuth (Google/LinkedIn), profiles |
 | `courses` | `/api/v1/courses/` | Course authoring, curriculum, lectures, video pipeline, quizzes, coding exercises |
 | `id_verification` | `/api/v1/verification/` | Instructor identity verification state machine |
+| `messaging` | `/api/v1/messaging/` | Learner ↔ instructor direct messaging (REST + WebSocket); send-gate in service layer |
+| `notifications` | `/api/v1/notifications/` | In-app notification feed, email preferences, `dispatch()` API |
+| `realtime` | `/ws/` | ASGI `PlatformConsumer` multiplexing the `notifications` and `messaging` WebSocket streams |
 | `core` | — | Shared permissions, pagination, middleware |
+
+### Messaging
+
+`messaging/` — one `Conversation` per `(learner, instructor, course)` triad; **only learners initiate**, either party replies. The send-gate (learner active enrollment / instructor still on course) lives in `messaging/services/messaging_service.py` → `send_message()` and is enforced identically on the REST and WebSocket paths — never duplicate it in a view or consumer. Unread state is two timestamp cursors (`learner_last_read_at` / `instructor_last_read_at`), not per-message flags: marking read is one UPDATE. After a message commits, `_push_ws_and_notify` pushes a `new_message` channel event **only to the recipient's** `messaging_user_{id}` group (the sender already has it via the `message_sent` ack or 201 body — pushing to both causes duplicate delivery) and dispatches `MESSAGE_RECEIVED`. Two unread metrics, same rule: `get_unread_counts()` (per-conversation message counts) and `get_unread_conversation_count()` (number of threads with ≥1 unread); they always agree. Numeric IDs → 404 on no-access. See `docs/architecture/17-messaging-system.md`.
+
+### Realtime / WebSocket
+
+`realtime/` — a single ASGI `PlatformConsumer` at `/ws/` multiplexes per-feature streams via `{"stream": "<name>", "payload": {...}}`. JWT is passed as a `?token=` query param and validated on connect (close `4001` on failure). Cross-process delivery uses the Redis channel layer (`group_send`). Add a stream by registering a handler class in `realtime/streams/` and wiring it into `_STREAM_HANDLER_CLASSES` / `_CHANNEL_EVENT_DISPATCH` in `realtime/consumers.py`. Stream handlers run async — wrap ORM calls in `database_sync_to_async`.
 
 ### Custom User Model
 
@@ -420,4 +431,4 @@ For local dev, `EMAIL_BACKEND=django.core.mail.backends.console.EmailBackend` pr
 
 ## Docs
 
-Detailed design rationale is in `docs/architecture/` (15 files). `09-workflows-and-architecture-why.md` explains the reasoning behind each major workflow and is worth reading before making structural changes. `10-coding-exercises.md` covers the coding exercise data model, authoring API, and design decisions. `14-certificate-system.md` covers the completion certificate issuance flow, PDF generation, and public share URLs. `15-review-rating-system.md` covers the review/rating data model, vote atomicity, denormalized catalog fields, and access-denied policy. `FRONTEND_ERROR_RESPONSE_FORMAT.md` defines the error shape all views must follow.
+Detailed design rationale is in `docs/architecture/` (17 files). `09-workflows-and-architecture-why.md` explains the reasoning behind each major workflow and is worth reading before making structural changes. `10-coding-exercises.md` covers the coding exercise data model, authoring API, and design decisions. `14-certificate-system.md` covers the completion certificate issuance flow, PDF generation, and public share URLs. `15-review-rating-system.md` covers the review/rating data model, vote atomicity, denormalized catalog fields, and access-denied policy. `16-notification-system.md` covers the notification dispatcher, event types, and WebSocket delivery. `17-messaging-system.md` covers the messaging data model, REST + WebSocket protocol, unread semantics, and frontend client contract (see also `messaging-write-path-rationale.md` and `docs/api-testing/postman-messaging.md`). `FRONTEND_ERROR_RESPONSE_FORMAT.md` defines the error shape all views must follow.

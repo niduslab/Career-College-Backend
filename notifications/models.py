@@ -21,6 +21,7 @@ class NotificationEventType(models.TextChoices):
     VERIFICATION_APPROVED    = 'verification.approved',    'Verification Approved'
     VERIFICATION_REJECTED    = 'verification.rejected',    'Verification Rejected'
     VERIFICATION_ACTION_REQ  = 'verification.action_required', 'Verification Action Required'
+    MESSAGE_RECEIVED         = 'message.received',         'Message Received'
 
 
 class NotificationCategory(models.TextChoices):
@@ -29,6 +30,7 @@ class NotificationCategory(models.TextChoices):
     COURSE_MANAGEMENT = 'course_management', 'Course Management'
     COLLABORATION     = 'collaboration',     'Collaboration'
     VERIFICATION      = 'verification',      'Verification'
+    MESSAGING         = 'messaging',         'Messaging'
 
 
 class Notification(models.Model):

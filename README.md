@@ -13,6 +13,7 @@ A Django REST Framework backend for a course marketplace platform. Instructors c
 | Auth | Simple JWT (access + refresh tokens) + django-allauth (OAuth) |
 | Database | PostgreSQL (psycopg2-binary) |
 | Task queue | Celery 5.x + Redis (beat for scheduled tasks) |
+| Realtime | Django Channels (ASGI) + Redis channel layer — multiplexed WebSocket for notifications & messaging |
 | Video processing | FFmpeg / FFprobe (via ffmpeg-python) |
 | Code execution sandbox | Docker (one container per submission; docker SDK 7.x) |
 | Media storage | Local filesystem (configurable via `MEDIA_ROOT`) |
@@ -27,6 +28,9 @@ A Django REST Framework backend for a course marketplace platform. Instructors c
 | `authentication` | `/api/v1/auth/` | Registration, OTP, JWT, OAuth (Google/LinkedIn), profiles |
 | `courses` | `/api/v1/courses/` | Public catalog, learner enrollment, my-courses dashboard, plus instructor course authoring/curriculum |
 | `id_verification` | `/api/v1/verification/` | Instructor identity verification state machine |
+| `messaging` | `/api/v1/messaging/` | Learner ↔ instructor direct messaging (REST + WebSocket) |
+| `notifications` | `/api/v1/notifications/` | In-app notification feed, email preferences, dispatcher |
+| `realtime` | `/ws/` | ASGI WebSocket consumer multiplexing the `notifications` and `messaging` streams |
 | `core` | — | Shared permissions, pagination, middleware |
 
 ---
@@ -351,6 +355,16 @@ Tests must **never** hit real Docker. Patch `courses.services.code_runner.CodeRu
 5. The dashboard "My Courses" list is at `GET /api/v1/courses/my-courses/`.
 6. Learners can soft-unenroll via `POST /api/v1/courses/{slug}/unenroll/`; progress stays preserved.
 
+### 8. Learner ↔ instructor messaging
+
+1. A learner opens a thread with `POST /api/v1/messaging/conversations/create/` (`course_id`, `instructor_id`, `body`). Only learners can initiate; idempotent — returns the existing thread (200) if the triad already exists. One thread per `(learner, instructor, course)`.
+2. Either party appends messages via `POST /api/v1/messaging/conversations/{id}/messages/` (REST) **or** the `messaging` WebSocket stream (primary path for the frontend). Both routes call the same service, so the send-gate is enforced identically: the learner must have an active enrollment and the instructor must still be on the course *at send time*.
+3. Real-time delivery: the recipient receives a `new_message` frame on their `messaging_user_{id}` channel group (the sender does **not** — they already have the message via the `message_sent` ack / 201 response). A `message.received` notification + optional email also fire.
+4. Unread tracking is cursor-based: `POST /api/v1/messaging/conversations/{id}/read/` (or the `mark_read` WS action) stamps the caller's `*_last_read_at`. Unread message count is per-conversation; `GET /api/v1/messaging/conversations/unread-count/` returns the number of conversations with ≥1 unread message (inbox badge).
+5. Either party can always read historical messages, even after unenrollment or instructor removal.
+
+See [docs/architecture/17-messaging-system.md](docs/architecture/17-messaging-system.md) for the data model, WS protocol, and frontend client contract.
+
 ---
 
 ## API Endpoints
@@ -591,6 +605,35 @@ For the learner-side Run / Submit / poll / retry endpoints, see *Learner Consump
 
 ---
 
+### Messaging — `/api/v1/messaging/`
+
+All endpoints require `IsEmailVerified` + (`IsLearnerUser` OR `IsInstructorUser`). Numeric IDs → 404 on no-access (project-wide rule).
+
+| Method | Endpoint | Auth | Description |
+|--------|----------|------|-------------|
+| GET | `conversations/` | Learner or Instructor | Paginated inbox, newest-active first. Each row carries the caller's `unread_count` |
+| GET | `conversations/unread-count/` | Learner or Instructor | `{unread_conversations: N}` — count of threads with ≥1 unread message (inbox badge) |
+| POST | `conversations/create/` | Learner only | Initiate a thread (`course_id`, `instructor_id`, `body`). 201 on create, 200 if it already exists (idempotent) |
+| GET | `conversations/{id}/` | Participant | Thread metadata + paginated messages (oldest-first). Does **not** mark read |
+| POST | `conversations/{id}/messages/` | Participant | Append a message. Send-gate (enrollment / instructor membership) enforced in the service |
+| POST | `conversations/{id}/read/` | Participant | Stamp the caller's `*_last_read_at` (one UPDATE) |
+
+#### WebSocket — `/ws/` (stream `messaging`)
+
+Multiplexed over the shared `PlatformConsumer`. Connect with `ws://host/ws/?token=<raw JWT>`.
+
+| Direction | Frame `type` | Notes |
+|---|---|---|
+| client → server | `send_message` | `{conversation_id, body}` — same send-gate as REST |
+| client → server | `mark_read` | `{conversation_id}` |
+| server → client | `message_sent` | Ack to the sender after insert (sender's only frame) |
+| server → client | `new_message` | Pushed only to the **recipient**'s group |
+| server → client | `marked_read` | Ack to the caller |
+| server → client | `unread_summary` | Pushed on connect: per-conversation unread counts + `unread_conversations` total |
+| server → client | `error` | `{detail}` — connection stays open |
+
+---
+
 ## Response Format
 
 All endpoints return the same envelope:
@@ -692,8 +735,17 @@ career_college_backend/
 │   └── management/commands/
 │       └── seed_course_categories.py
 ├── id_verification/               Identity verification workflow
+├── messaging/                     Learner ↔ instructor messaging
+│   ├── models.py                  Conversation, Message (cursor-based unread tracking)
+│   ├── services/messaging_service.py  Send-gate, send/read, unread counts, WS push + notify
+│   ├── all_views/conversation_views.py  REST endpoints (list, create, detail, send, read, unread-count)
+│   └── tests/                     Model, service, and view tests
+├── notifications/                 In-app notification feed + email preferences + dispatcher
+├── realtime/                      ASGI WebSocket layer
+│   ├── consumers.py               PlatformConsumer — multiplexes streams, routes channel events
+│   └── streams/                   Per-stream handlers (notifications_stream, messaging_stream)
 ├── core/                          Shared: permissions, pagination, middleware
-├── docs/architecture/             15 architecture design documents
+├── docs/architecture/             17 architecture design documents
 ├── docs/submission-flow.md        Coding-exercise Run/Submit pipeline + sandbox design
 ├── docs/comparison.md             Comparison vs Udemy-style platform (drives the 1-container-per-submission optimisation)
 ├── scripts/                       Manual smoke tests (real Docker; not in test suite)
@@ -726,6 +778,8 @@ career_college_backend/
 - **Coding submission idempotency**: `evaluate_coding_submission_task` is `acks_late=True` and short-circuits on terminal status, so worker-death redelivery is safe. A Celery-beat reaper (`reap_stuck_coding_submissions_task`, 60 s) flips `queued`/`grading` rows older than 5 min to `error`.
 - **Certificates** — issued automatically when `progress_percent` reaches 100% for the first time (`recalculate_progress` → `transaction.on_commit` → `_issue_certificate_and_notify`). `Certificate` is identified by a UUID4 (non-guessable); `issue_certificate` uses `get_or_create` so Celery redelivery is idempotent. PDF generated on-the-fly by reportlab (`courses/certificate_pdf.py`); no file stored on disk.
 - **Reviews & ratings** — `CourseReview` is one-per-enrollment (enforced by `OneToOneField(enrollment)`). `ReviewVote` tracks helpful/not-helpful per reviewer. `avg_rating` and `review_count` are denormalized onto `NidusCourse` (updated via `transaction.on_commit` after every review write) so catalog sort/filter (`?sort=rating`, `?rating_min=`, `?min_reviews=`) stays a single-table scan. Vote flips use `select_for_update` + `F()` expressions for atomicity.
+- **Messaging** — one `Conversation` per `(learner, instructor, course)` triad; only learners initiate. The send-gate (active enrollment / current instructor membership) lives in `messaging_service.send_message()` and is enforced identically on the REST and WebSocket paths. Unread state is two timestamp cursors (`learner_last_read_at` / `instructor_last_read_at`), so marking a thread read is a single UPDATE rather than N per-message flags. After a message commits, a `new_message` channel event is pushed **only to the recipient's** group (the sender already has it), plus a `message.received` notification via `transaction.on_commit`.
+- **Realtime / WebSocket** — a single ASGI `PlatformConsumer` at `/ws/` multiplexes per-feature streams (`{"stream": "...", "payload": {...}}`); JWT is passed as a `?token=` query param and validated on connect. Cross-process delivery uses the Redis channel layer (`group_send` to `messaging_user_{id}` / notification groups). Adding a stream = register a handler class in `realtime/streams/`.
 
 ---
 
@@ -736,6 +790,9 @@ career_college_backend/
 | [POSTMAN_TESTING_GUIDE.md](POSTMAN_TESTING_GUIDE.md) | Complete API testing guide — auth, courses, learner consumption (lectures, quizzes, assignments, coding), certificates, reviews & ratings |
 | [FRONTEND_ERROR_RESPONSE_FORMAT.md](FRONTEND_ERROR_RESPONSE_FORMAT.md) | Error response shape spec |
 | [docs/architecture/](docs/architecture/) | Architecture design documents |
+| [docs/architecture/17-messaging-system.md](docs/architecture/17-messaging-system.md) | Messaging data model, REST + WebSocket protocol, unread semantics, frontend client contract |
+| [docs/architecture/messaging-write-path-rationale.md](docs/architecture/messaging-write-path-rationale.md) | Why both REST and WebSocket write paths are kept |
+| [docs/api-testing/postman-messaging.md](docs/api-testing/postman-messaging.md) | Postman / wscat testing guide for the messaging REST + WS endpoints |
 | [docs/submission-flow.md](docs/submission-flow.md) | Coding-exercise Run/Submit pipeline, sandbox model, redaction layers, failure modes |
 | [docs/comparison.md](docs/comparison.md) | Comparison vs Udemy-style platform; rationale for the 1-container-per-submission optimisation |
 | [CLAUDE.md](CLAUDE.md) | AI assistant coding instructions |

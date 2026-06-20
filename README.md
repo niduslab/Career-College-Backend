@@ -793,6 +793,7 @@ career_college_backend/
 | [docs/architecture/17-messaging-system.md](docs/architecture/17-messaging-system.md) | Messaging data model, REST + WebSocket protocol, unread semantics, frontend client contract |
 | [docs/architecture/messaging-write-path-rationale.md](docs/architecture/messaging-write-path-rationale.md) | Why both REST and WebSocket write paths are kept |
 | [docs/api-testing/postman-messaging.md](docs/api-testing/postman-messaging.md) | Postman / wscat testing guide for the messaging REST + WS endpoints |
+| [docs/api-testing/postman-partner-institution.md](docs/api-testing/postman-partner-institution.md) | Postman testing guide for partner-institution verification, expert management, course creation + roster assignment |
 | [docs/submission-flow.md](docs/submission-flow.md) | Coding-exercise Run/Submit pipeline, sandbox model, redaction layers, failure modes |
 | [docs/comparison.md](docs/comparison.md) | Comparison vs Udemy-style platform; rationale for the 1-container-per-submission optimisation |
 | [CLAUDE.md](CLAUDE.md) | AI assistant coding instructions |

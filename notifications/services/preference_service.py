@@ -20,6 +20,11 @@ EVENT_TO_CATEGORY: dict[str, str] = {
     NotificationEventType.VERIFICATION_APPROVED:   NotificationCategory.VERIFICATION,
     NotificationEventType.VERIFICATION_REJECTED:   NotificationCategory.VERIFICATION,
     NotificationEventType.VERIFICATION_ACTION_REQ: NotificationCategory.VERIFICATION,
+    NotificationEventType.INST_VERIFICATION_SUBMITTED:  NotificationCategory.VERIFICATION,
+    NotificationEventType.INST_VERIFICATION_APPROVED:   NotificationCategory.VERIFICATION,
+    NotificationEventType.INST_VERIFICATION_REJECTED:   NotificationCategory.VERIFICATION,
+    NotificationEventType.INST_VERIFICATION_ACTION_REQ: NotificationCategory.VERIFICATION,
+    NotificationEventType.EXPERT_ONBOARDED:        NotificationCategory.COLLABORATION,
     NotificationEventType.MESSAGE_RECEIVED:        NotificationCategory.MESSAGING,
 }
 

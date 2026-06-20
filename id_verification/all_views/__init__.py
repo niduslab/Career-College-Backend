@@ -9,6 +9,16 @@ from id_verification.all_views.admin_views import (
     AdminVerificationListView,
     AdminVerificationDetailView,
     AdminVerificationReviewView,
+    AdminInstitutionVerificationListView,
+    AdminInstitutionVerificationDetailView,
+    AdminInstitutionVerificationReviewView,
+)
+from id_verification.all_views.institution_views import (
+    InstitutionVerificationCreateView,
+    InstitutionVerificationUpdateView,
+    InstitutionVerificationSubmitView,
+    InstitutionVerificationListView,
+    InstitutionVerificationDetailView,
 )
 
 __all__ = [
@@ -20,4 +30,12 @@ __all__ = [
     'AdminVerificationListView',
     'AdminVerificationDetailView',
     'AdminVerificationReviewView',
+    'InstitutionVerificationCreateView',
+    'InstitutionVerificationUpdateView',
+    'InstitutionVerificationSubmitView',
+    'InstitutionVerificationListView',
+    'InstitutionVerificationDetailView',
+    'AdminInstitutionVerificationListView',
+    'AdminInstitutionVerificationDetailView',
+    'AdminInstitutionVerificationReviewView',
 ]

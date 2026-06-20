@@ -12,6 +12,12 @@ validate_video_file = FileExtensionValidator(
 )
 
 
+validate_document_file = FileExtensionValidator(
+    allowed_extensions=['pdf', 'jpg', 'jpeg', 'png', 'webp'],
+    message='Upload a valid document. Allowed formats: PDF, JPG, JPEG, PNG, WEBP.',
+)
+
+
 def validate_pdf_file(value):
     FileExtensionValidator(
         allowed_extensions=['pdf'],

@@ -14,6 +14,7 @@ from courses.views import (
     InviteAcceptView,
     InviteDeclineView,
     MyInviteListView,
+    InstitutionCourseInstructorView,
     AssignmentDetailAPIView,
     AssignmentListAPIView,
     AssignmentQuestionDetailAPIView,
@@ -145,6 +146,10 @@ urlpatterns = [
     path('invites/my/', MyInviteListView.as_view(), name='my-invite-list'),
     path('invites/<uuid:token>/accept/', InviteAcceptView.as_view(), name='invite-accept'),
     path('invites/<uuid:token>/decline/', InviteDeclineView.as_view(), name='invite-decline'),
+
+    # Partner institution: direct roster management (no accept step)
+    path('<int:pk>/institution-instructors/', InstitutionCourseInstructorView.as_view(), name='institution-course-instructor-add'),
+    path('<int:pk>/institution-instructors/<int:expert_user_id>/', InstitutionCourseInstructorView.as_view(), name='institution-course-instructor-remove'),
 
     # -------------------------------------------------------------------------
     # Course status transitions

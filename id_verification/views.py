@@ -7,5 +7,12 @@ from id_verification.all_views import (
     AdminVerificationListView,
     AdminVerificationDetailView,
     AdminVerificationReviewView,
+    InstitutionVerificationCreateView,
+    InstitutionVerificationUpdateView,
+    InstitutionVerificationSubmitView,
+    InstitutionVerificationListView,
+    InstitutionVerificationDetailView,
+    AdminInstitutionVerificationListView,
+    AdminInstitutionVerificationDetailView,
+    AdminInstitutionVerificationReviewView,
 )
-

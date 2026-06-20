@@ -24,6 +24,8 @@ from authentication.views import (
     PublicLearnerListView,
     PublicInstructorListView,
     PublicInstitutionListView,
+    InstitutionExpertListCreateView,
+    InstitutionExpertDetailView,
 )
 
 app_name = 'authentication'
@@ -60,6 +62,10 @@ urlpatterns = [
     path('profile/me/education/<int:pk>/', EducationDetailView.as_view(), name='my-education-detail'),
     path('profile/me/work-experience/', WorkExperienceListCreateView.as_view(), name='my-work-experience-list'),
     path('profile/me/work-experience/<int:pk>/', WorkExperienceDetailView.as_view(), name='my-work-experience-detail'),
+
+    # ── Partner institution: expert management ───────────────
+    path('partner/experts/', InstitutionExpertListCreateView.as_view(), name='institution-expert-list-create'),
+    path('partner/experts/<int:expert_id>/', InstitutionExpertDetailView.as_view(), name='institution-expert-detail'),
 
     # ── Public profile browsing ──────────────────────────────
     path('profiles/learners/', PublicLearnerListView.as_view(), name='public-learner-list'),

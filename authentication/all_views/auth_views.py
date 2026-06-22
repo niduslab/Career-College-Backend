@@ -14,7 +14,7 @@ from authentication.serializers import (
     UserLoginSerializer,
     UserRegistrationSerializer,
 )
-from authentication.utils import send_otp_email
+from authentication.tasks import send_otp_email_task
 from authentication.utils.cookie_helpers import delete_jwt_cookies, set_jwt_cookies
 
 logger = logging.getLogger(__name__)
@@ -57,13 +57,12 @@ class UserRegistrationView(APIView):
         # OTP is already generated in serializer.create(); only send it here.
         otp_code = user.otp_code
 
+        # OTP email is sent asynchronously; only a broker-enqueue failure is
+        # surfaced synchronously (the worker handles SMTP + retries).
         try:
-            email_sent = send_otp_email(user, otp_code, purpose='registration')
+            send_otp_email_task.delay(user.pk, otp_code, 'registration')
         except Exception as e:
-            logger.error(f"Failed to send OTP email to {user.email}: {e}")
-            email_sent = False
-
-        if not email_sent:
+            logger.error(f"Failed to enqueue OTP email for {user.email}: {e}")
             return Response({
                 'success': False,
                 'user_created': True,

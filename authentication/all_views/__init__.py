@@ -27,6 +27,12 @@ from authentication.all_views.profile_views import (
     PublicInstructorListView,
     PublicInstitutionListView,
 )
+from authentication.all_views.partner_views import (
+    InstitutionExpertListCreateView,
+    InstitutionExpertDetailView,
+    InstitutionDepartmentListCreateView,
+    InstitutionDepartmentDetailView,
+)
 
 __all__ = [
     'GoogleAuthRedirectView',
@@ -52,5 +58,9 @@ __all__ = [
     'PublicLearnerListView',
     'PublicInstructorListView',
     'PublicInstitutionListView',
+    'InstitutionExpertListCreateView',
+    'InstitutionExpertDetailView',
+    'InstitutionDepartmentListCreateView',
+    'InstitutionDepartmentDetailView',
     'TokenRefreshView',
 ]

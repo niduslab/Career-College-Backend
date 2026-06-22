@@ -6,7 +6,6 @@ Covers: create, list, revoke, my-invites, accept, decline, expiry task,
 """
 import uuid
 from datetime import timedelta
-from unittest.mock import patch
 
 from django.urls import reverse
 from django.utils import timezone
@@ -104,8 +103,9 @@ class InviteTestBase(APITestCase):
 
 class CreateInviteTests(InviteTestBase):
 
-    @patch('courses.tasks.send_instructor_invite_email_task.delay')
-    def test_owner_can_send_invite(self, _mock_delay):
+    def test_owner_can_send_invite(self):
+        # Invite email is sent via dispatch(INVITE_SENT) on transaction.on_commit,
+        # which never fires inside this TestCase's outer transaction — no patch needed.
         response = self.client.post(self._create_url(), {'email': self.invitee.email}, format='json')
 
         self.assertEqual(response.status_code, status.HTTP_201_CREATED)
@@ -412,8 +412,7 @@ class DeclineInviteTests(InviteTestBase):
         self.invite.status = CourseInstructorInvite.STATUS_DECLINED
         self.invite.save(update_fields=['status', 'updated_at'])
         self.client.force_authenticate(user=self.owner)
-        with patch('courses.tasks.send_instructor_invite_email_task.delay'):
-            response = self.client.post(self._create_url(), {'email': self.invitee.email}, format='json')
+        response = self.client.post(self._create_url(), {'email': self.invitee.email}, format='json')
         self.assertEqual(response.status_code, status.HTTP_201_CREATED)
 
 

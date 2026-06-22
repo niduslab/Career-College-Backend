@@ -21,6 +21,11 @@ class NotificationEventType(models.TextChoices):
     VERIFICATION_APPROVED    = 'verification.approved',    'Verification Approved'
     VERIFICATION_REJECTED    = 'verification.rejected',    'Verification Rejected'
     VERIFICATION_ACTION_REQ  = 'verification.action_required', 'Verification Action Required'
+    INST_VERIFICATION_SUBMITTED  = 'institution_verification.submitted',  'Institution Verification Submitted'
+    INST_VERIFICATION_APPROVED   = 'institution_verification.approved',   'Institution Verification Approved'
+    INST_VERIFICATION_REJECTED   = 'institution_verification.rejected',   'Institution Verification Rejected'
+    INST_VERIFICATION_ACTION_REQ = 'institution_verification.action_required', 'Institution Verification Action Required'
+    EXPERT_ONBOARDED         = 'expert.onboarded',         'Expert Onboarded'
     MESSAGE_RECEIVED         = 'message.received',         'Message Received'
 
 

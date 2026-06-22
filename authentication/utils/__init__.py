@@ -1,4 +1,4 @@
-from authentication.utils.email_utils import send_otp_email
+from authentication.utils.email_utils import send_credentials_email, send_otp_email
 from authentication.utils.exceptions import (
     GoogleOAuthAccountConflictError,
     GoogleOAuthBlockedUserError,
@@ -11,6 +11,7 @@ from authentication.utils.password_validators import validate_custom_password_st
 
 __all__ = [
     'send_otp_email',
+    'send_credentials_email',
     'GoogleOAuthError',
     'GoogleOAuthConfigError',
     'GoogleOAuthCodeExchangeError',

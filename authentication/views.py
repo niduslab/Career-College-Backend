@@ -23,6 +23,10 @@ from authentication.all_views import (
     PublicLearnerListView,
     PublicInstructorListView,
     PublicInstitutionListView,
+    InstitutionExpertListCreateView,
+    InstitutionExpertDetailView,
+    InstitutionDepartmentListCreateView,
+    InstitutionDepartmentDetailView,
 )
 
 __all__ = [
@@ -50,4 +54,8 @@ __all__ = [
     'PublicLearnerListView',
     'PublicInstructorListView',
     'PublicInstitutionListView',
+    'InstitutionExpertListCreateView',
+    'InstitutionExpertDetailView',
+    'InstitutionDepartmentListCreateView',
+    'InstitutionDepartmentDetailView',
 ]

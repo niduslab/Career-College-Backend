@@ -66,3 +66,65 @@ def send_otp_email(user, otp_code, purpose='registration'):
             exc_info=True,
         )
         return False
+
+
+def send_credentials_email(user, password, institution_name=None):
+    """
+    Email an institution-onboarded expert their login credentials (email +
+    preset password) so they can log in immediately.
+
+    Used in place of the OTP activation flow: the verified institution vouches
+    for the expert, so no email-ownership proof is required.
+
+    Returns True on success, False on failure (logged, never raised).
+    """
+    subject = 'Your Career College Instructor Account'
+    login_url = f"{settings.FRONTEND_URL}/login"
+
+    html_message = render_to_string(
+        'emails/expert_credentials.html',
+        {
+            'full_name': user.full_name,
+            'email': user.email,
+            'password': password,
+            'login_url': login_url,
+            'institution_name': institution_name,
+        },
+    )
+
+    affiliation = f" by {institution_name}" if institution_name else ""
+    plain_message = f"""
+    Welcome to Career College!
+
+    Hello {user.full_name},
+
+    An instructor account has been created for you{affiliation}. You can log in
+    right away using the credentials below:
+
+    Email: {user.email}
+    Password: {password}
+
+    Log in here: {login_url}
+
+    For your security, please change your password after your first login.
+
+    Best regards,
+    Career College Team
+    """
+
+    try:
+        send_mail(
+            subject=subject,
+            message=plain_message,
+            from_email=settings.DEFAULT_FROM_EMAIL,
+            recipient_list=[user.email],
+            html_message=html_message,
+            fail_silently=False,
+        )
+        return True
+    except Exception as e:
+        logger.error(
+            f"Failed to send credentials email to {user.email}: {e}",
+            exc_info=True,
+        )
+        return False

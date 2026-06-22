@@ -25,3 +25,11 @@ def selfie_path(instance, filename):
 
 def resume_path(instance, filename):
     return _slugify_upload(instance, filename, 'id_verification/resumes')
+
+
+def institution_accreditation_path(instance, filename):
+    return _slugify_upload(instance, filename, 'institution_verification/accreditation')
+
+
+def institution_authorization_path(instance, filename):
+    return _slugify_upload(instance, filename, 'institution_verification/authorization')

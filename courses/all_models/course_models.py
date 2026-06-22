@@ -191,8 +191,10 @@ class NidusCourse(models.Model):
 
     def clean(self):
         super().clean()
-        if self.created_by and self.created_by.user_type != 'instructor':
-            raise ValidationError({'created_by': 'Only instructors can create courses.'})
+        if self.created_by and self.created_by.user_type not in ('instructor', 'partner_institution'):
+            raise ValidationError(
+                {'created_by': 'Only instructors or partner institutions can create courses.'}
+            )
 
         if self.status != self.CourseStatus.REJECTED and self.rejection_reason:
             raise ValidationError({'rejection_reason': 'Rejection reason is only valid for rejected courses.'})

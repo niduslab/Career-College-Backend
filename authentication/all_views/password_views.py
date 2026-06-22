@@ -11,7 +11,7 @@ from authentication.serializers import (
     ForgotPasswordSerializer,
     ResetPasswordSerializer,
 )
-from authentication.utils import send_otp_email
+from authentication.tasks import send_otp_email_task
 from django.conf import settings
 
 logger = logging.getLogger(__name__)
@@ -50,9 +50,12 @@ class ForgotPasswordView(APIView):
         try:
             user = serializer.save()
             if user:
-                email_sent = send_otp_email(user, user.otp_code, purpose='password_reset')
-                if not email_sent:
-                    logger.error(f'Password reset OTP email failed for user {user.id}')
+                # Sent asynchronously; response is generic regardless (avoids
+                # user enumeration), so a send failure is only logged.
+                try:
+                    send_otp_email_task.delay(user.pk, user.otp_code, 'password_reset')
+                except Exception as e:
+                    logger.error(f'Failed to enqueue password reset OTP for user {user.id}: {e}')
         except serializers.ValidationError as exc:
             return Response({'success': False, 'errors': exc.detail}, status=status.HTTP_400_BAD_REQUEST)
 

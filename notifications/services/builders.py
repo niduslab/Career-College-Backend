@@ -164,6 +164,55 @@ def _verification_action_required(recipient, ctx):
     )
 
 
+def _inst_verification_submitted(recipient, ctx):
+    return _build(
+        title='Institution verification submitted',
+        body=f'{ctx["institution_name"]} submitted a credential-verification request.',
+        data={'verification_id': ctx['verification_id']},
+    )
+
+
+def _inst_verification_approved(recipient, ctx):
+    return _build(
+        title='Institution verified',
+        body='Your institution has been verified. You can now onboard experts and publish courses.',
+        data={},
+    )
+
+
+def _inst_verification_rejected(recipient, ctx):
+    reason = ctx.get('rejection_reason', '')
+    body = 'Your institution verification was rejected. Please re-submit with valid documents.'
+    if reason:
+        body += f' Reason: {reason}'
+    return _build(
+        title='Institution verification rejected',
+        body=body,
+        data={},
+    )
+
+
+def _inst_verification_action_required(recipient, ctx):
+    note = ctx.get('admin_note', '')
+    body = 'Additional action is required for your institution verification.'
+    if note:
+        body += f' Note: {note}'
+    return _build(
+        title='Action required for institution verification',
+        body=body,
+        data={},
+    )
+
+
+def _expert_onboarded(recipient, ctx):
+    return _build(
+        title='You have been added as an expert',
+        body=f'{ctx["institution_name"]} added you as an expert. '
+             'Verify your email to activate your account and start authoring courses.',
+        data={'institution_name': ctx['institution_name']},
+    )
+
+
 def _message_received(recipient, ctx):
     preview = ctx.get('body_preview', '')
     if len(preview) > 120:
@@ -197,6 +246,11 @@ _BUILDERS = {
     _ET.VERIFICATION_APPROVED:   _verification_approved,
     _ET.VERIFICATION_REJECTED:   _verification_rejected,
     _ET.VERIFICATION_ACTION_REQ: _verification_action_required,
+    _ET.INST_VERIFICATION_SUBMITTED:  _inst_verification_submitted,
+    _ET.INST_VERIFICATION_APPROVED:   _inst_verification_approved,
+    _ET.INST_VERIFICATION_REJECTED:   _inst_verification_rejected,
+    _ET.INST_VERIFICATION_ACTION_REQ: _inst_verification_action_required,
+    _ET.EXPERT_ONBOARDED:        _expert_onboarded,
     _ET.MESSAGE_RECEIVED:        _message_received,
 }
 

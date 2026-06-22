@@ -12,6 +12,7 @@ from rest_framework_simplejwt.tokens import RefreshToken
 
 from authentication.utils import validate_custom_password_strength
 from authentication.models import (
+    Department,
     Education,
     InstructorProfile,
     LearnerProfile,
@@ -760,3 +761,82 @@ class InstitutionListSerializer(serializers.ModelSerializer):
             'institution_name', 'slug', 'logo', 'tagline',
             'institution_type', 'country', 'is_verified',
         ]
+
+
+# ── Expert management (partner institution) ──────────────────
+
+class ExpertCreateSerializer(serializers.Serializer):
+    """Input for an institution onboarding a new expert (instructor)."""
+
+    full_name = serializers.CharField(max_length=255)
+    email = serializers.EmailField()
+    bio = serializers.CharField(required=False, allow_blank=True, default='')
+    headline = serializers.CharField(
+        max_length=255, required=False, allow_blank=True, default='',
+    )
+    department_id = serializers.IntegerField(required=False, allow_null=True)
+    specialization = serializers.ListField(
+        child=serializers.CharField(max_length=100),
+        required=False, default=list,
+    )
+
+    def validate_full_name(self, value):
+        name = value.strip()
+        if len(name) < 2:
+            raise serializers.ValidationError('Full name must be at least 2 characters.')
+        return name
+
+
+class ExpertUpdateSerializer(serializers.Serializer):
+    """Input for editing an affiliated expert's profile + activation state."""
+
+    bio = serializers.CharField(required=False, allow_blank=True)
+    headline = serializers.CharField(max_length=255, required=False, allow_blank=True)
+    department_id = serializers.IntegerField(required=False, allow_null=True)
+    specialization = serializers.ListField(
+        child=serializers.CharField(max_length=100), required=False,
+    )
+    is_active = serializers.BooleanField(required=False)
+
+
+class DepartmentSerializer(serializers.ModelSerializer):
+    """Read/write representation of an institution department. Input is just `name`."""
+
+    class Meta:
+        model = Department
+        fields = ['id', 'name', 'is_active', 'created_at', 'updated_at']
+        read_only_fields = ['id', 'is_active', 'created_at', 'updated_at']
+
+
+class ExpertListSerializer(serializers.ModelSerializer):
+    """Read representation of an institution's expert."""
+
+    id = serializers.IntegerField(read_only=True)
+    user_id = serializers.IntegerField(source='user.id', read_only=True)
+    full_name = serializers.CharField(source='user.full_name', read_only=True)
+    email = serializers.EmailField(source='user.email', read_only=True)
+    slug = serializers.CharField(source='user.name_slug', read_only=True)
+    is_email_verified = serializers.BooleanField(
+        source='user.is_email_verified', read_only=True,
+    )
+    department = DepartmentSerializer(read_only=True)
+    course_count = serializers.SerializerMethodField()
+
+    class Meta:
+        model = InstructorProfile
+        fields = [
+            'id', 'user_id', 'full_name', 'email', 'slug', 'profile_photo',
+            'headline', 'bio', 'department', 'specialization',
+            'is_verified', 'is_email_verified',
+            'affiliation_status', 'onboarding_source', 'affiliated_at',
+            'course_count',
+        ]
+
+    def get_course_count(self, obj):
+        # Prefer the annotation from institution_experts_qs (avoids N+1 on the
+        # list endpoint); fall back to a direct count for un-annotated instances
+        # (e.g. the single object returned by the create endpoint).
+        annotated = getattr(obj, '_course_count', None)
+        if annotated is not None:
+            return annotated
+        return obj.user.instructed_nidus_courses.count()

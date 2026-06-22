@@ -1,4 +1,5 @@
 from django.db import models
+from django.db.models.functions import Lower
 from django.contrib.auth.models import AbstractUser, BaseUserManager
 from django.core.exceptions import ValidationError
 from django.utils import timezone
@@ -584,6 +585,11 @@ class InstructorProfile(models.Model):
     country = models.CharField(max_length=100, blank=True, default='')
 
     # ── Professional details ──
+    department = models.ForeignKey(
+        'Department', on_delete=models.SET_NULL,
+        null=True, blank=True, related_name='instructors',
+        help_text='Department within the affiliated institution (institution-defined).'
+    )
     specialization = models.JSONField(
         default=list, blank=True,
         help_text='Areas of expertise, e.g. ["Deep Learning", "NLP"]'
@@ -783,3 +789,30 @@ class PartnerInstitutionProfile(models.Model):
     def location(self):
         parts = [p for p in (self.city, self.state, self.country) if p]
         return ', '.join(parts)
+
+
+class Department(models.Model):
+    """A department defined by a partner institution; experts are assigned to one."""
+
+    institution = models.ForeignKey(
+        PartnerInstitutionProfile, on_delete=models.CASCADE,
+        related_name='departments',
+    )
+    name = models.CharField(max_length=255)
+    is_active = models.BooleanField(default=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = 'departments'
+        ordering = ['name']
+        constraints = [
+            # One department name per institution, case-insensitive.
+            models.UniqueConstraint(
+                Lower('name'), 'institution',
+                name='uniq_department_name_per_institution',
+            ),
+        ]
+
+    def __str__(self):
+        return f'{self.name} ({self.institution.institution_name})'

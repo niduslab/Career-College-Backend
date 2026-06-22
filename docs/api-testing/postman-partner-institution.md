@@ -1,11 +1,12 @@
-# Postman Guide — Partner Institution (Verification · Experts · Course Roster)
+# Postman Guide — Partner Institution (Verification · Experts · Departments · Course Roster)
 
 Manual API testing for the partner-institution Phase-1 feature set:
 
 1. **Institution identity verification** — submit credentials, admin approves → `is_verified=True`.
 2. **Expert management** — verified institution auto-provisions + manages experts (instructors).
-3. **Course creation** — verified institution creates a course.
-4. **Instructor assignment** — institution directly adds/removes its experts to a course roster.
+3. **Department management** — verified institution defines its own departments; experts are assigned to one.
+4. **Course creation** — verified institution creates a course.
+5. **Instructor assignment** — institution directly adds/removes its experts to a course roster.
 
 ---
 
@@ -19,16 +20,23 @@ Set these in your Postman environment before running the collection.
 | `institution_token` | `Bearer eyJ...` | JWT for the partner institution admin (`user_type=partner_institution`) |
 | `other_institution_token` | `Bearer eyJ...` | JWT for a second, unrelated partner institution |
 | `admin_token` | `Bearer eyJ...` | JWT for a platform admin (`user_type=admin` / `is_staff`) |
-| `expert_token` | `Bearer eyJ...` | JWT for a provisioned expert (after they verify email + set a password) |
+| `expert_token` | `Bearer eyJ...` | JWT for a provisioned expert (log in directly with the emailed credentials — no OTP/verify step) |
 | `learner_token` | `Bearer eyJ...` | JWT for any learner — used for negative authz tests |
 | `verification_id` | _(filled during tests)_ | PK of an `InstitutionVerification` |
 | `expert_id` | _(filled during tests)_ | PK of the expert's `InstructorProfile` |
+| `department_id` | _(filled during tests)_ | PK of a `Department` owned by the institution |
 | `expert_user_id` | _(filled during tests)_ | PK of the expert's `User` (used for roster add/remove) |
 | `course_pk` | _(filled during tests)_ | PK of a course owned by the institution |
 
 > **Account setup:** register a partner institution via `POST {{base_url}}/auth/register/` with
 > `user_type=partner_institution`, `institution_name`, `institution_type`, then verify the OTP.
 > The institution starts **unverified** (`is_verified=False`) — that is the precondition for Group 1.
+>
+> **Celery worker required:** all auth emails (registration/resend/password-reset OTP **and** the
+> expert credentials email in Group 3) are sent asynchronously by the Celery worker. Start it before
+> testing — `celery -A career_college_backend worker -l info -Q celery,notifications` — or no email
+> (including the registration OTP you need here) is ever delivered. With the dev console email backend
+> the message prints to the worker's terminal.
 
 ---
 
@@ -283,29 +291,36 @@ Content-Type: application/json
     "email": "jane.expert@example.com",
     "bio": "10 years in applied ML.",
     "headline": "Senior ML Engineer",
+    "department_id": 3,
     "specialization": ["NLP", "Computer Vision"]
 }
 ```
 
-**Expected:** `201 Created`, `message: "Expert onboarded. An activation email has been sent."`.
+> `department_id` is optional — it must reference an **active department of your own
+> institution** (create one first via Group 3.5). A foreign or unknown id → `422`.
+
+**Expected:** `201 Created`, `message: "Expert onboarded. Login credentials have been emailed."`.
 The system creates a `User(user_type=instructor)` + `InstructorProfile` with
-`affiliation_status=active`, `onboarding_source=institution`, `is_verified=true`, and sends an
-activation OTP email (printed to the console with the dev email backend).
+`affiliation_status=active`, `onboarding_source=institution`, `is_verified=true`, **`is_email_verified=true`**,
+and a **preset password**. A credentials email (login email + password) is sent asynchronously via Celery —
+printed to the console with the dev email backend; **the Celery worker must be running** or it is never sent.
 
 ```json
 {
     "success": true,
-    "message": "Expert onboarded. An activation email has been sent.",
+    "message": "Expert onboarded. Login credentials have been emailed.",
     "data": {
         "id": 12,
+        "user_id": 47,
         "full_name": "Jane Expert",
         "email": "jane.expert@example.com",
         "slug": "jane-expert",
         "headline": "Senior ML Engineer",
         "bio": "10 years in applied ML.",
+        "department": { "id": 3, "name": "Computer Science", "is_active": true },
         "specialization": ["NLP", "Computer Vision"],
         "is_verified": true,
-        "is_email_verified": false,
+        "is_email_verified": true,
         "affiliation_status": "active",
         "onboarding_source": "institution",
         "affiliated_at": "2026-06-20T10:00:00Z",
@@ -317,13 +332,19 @@ activation OTP email (printed to the console with the dev email backend).
 **Postman Test:**
 ```javascript
 pm.test("201 created", () => pm.response.to.have.status(201));
-pm.environment.set("expert_id", pm.response.json().data.id);
-// expert_user_id is the User PK — fetch it from Django admin or the list endpoint if needed.
+const d = pm.response.json().data;
+pm.environment.set("expert_id", d.id);            // InstructorProfile PK (expert detail/patch)
+pm.environment.set("expert_user_id", d.user_id);  // User PK (roster assignment in Group 5)
 ```
 
-> **Expert activation:** the expert verifies the OTP (`POST /auth/otp/verify/`) then sets a password
-> via the forgot/reset flow (`POST /auth/password/forgot/` → `POST /auth/password/reset/`). After that
-> they can log in and obtain `expert_token`.
+> **Two different IDs:** `id` is the `InstructorProfile` PK (used by the
+> `partner/experts/<id>/` detail/patch endpoints); `user_id` is the `User` PK and is
+> what Group 5 roster assignment expects as `expert_user_id`. Passing `id` where
+> `expert_user_id` is required → `422 "not an active expert"`.
+
+> **Expert activation:** none required. The expert logs in directly at `POST /auth/login/` with the
+> emailed email + preset password to obtain `expert_token` (account is created `is_email_verified=true`).
+> They can change the password later via the forgot/reset flow if they wish.
 
 ---
 
@@ -415,6 +436,82 @@ Authorization: {{other_institution_token}}
 ```
 
 **Expected:** `404 Not Found` (numeric ID — existence not leaked).
+
+---
+
+## Group 3.5: Department Management
+
+> Precondition: institution **verified**. All endpoints require
+> `IsVerifiedPartnerInstitution` and are scoped to the caller's own institution.
+> Departments are the institution-defined list an expert's `department_id` must point at.
+
+### 3.5.1 Create a department
+
+```
+POST {{base_url}}/auth/partner/departments/
+Authorization: {{institution_token}}
+Content-Type: application/json
+
+{ "name": "Computer Science" }
+```
+
+**Expected:** `201 Created`, `data: { id, name, is_active: true, ... }`. Save `data.id` → `department_id`.
+
+```javascript
+pm.test("201 created", () => pm.response.to.have.status(201));
+pm.environment.set("department_id", pm.response.json().data.id);
+```
+
+### 3.5.2 Duplicate name (case-insensitive) — 422
+
+```
+POST {{base_url}}/auth/partner/departments/
+Authorization: {{institution_token}}
+
+{ "name": "computer science" }
+```
+
+**Expected:** `422 Unprocessable Entity`, `message: "A department with this name already exists."`.
+
+### 3.5.3 List departments
+
+```
+GET {{base_url}}/auth/partner/departments/
+Authorization: {{institution_token}}
+```
+
+**Expected:** `200 OK`, paginated. Active only by default; pass `?active_only=false` to include deactivated.
+
+### 3.5.4 Rename a department
+
+```
+PATCH {{base_url}}/auth/partner/departments/{{department_id}}/
+Authorization: {{institution_token}}
+
+{ "name": "Computer Science & Engineering" }
+```
+
+**Expected:** `200 OK`. Rename is safe — all assigned experts reflect the new name (FK).
+
+### 3.5.5 Deactivate (soft-delete) a department
+
+```
+DELETE {{base_url}}/auth/partner/departments/{{department_id}}/
+Authorization: {{institution_token}}
+```
+
+**Expected:** `200 OK`, `message: "Department deactivated."`. The row stays in the DB
+(`is_active=false`), assigned experts keep their FK, and it drops out of the default list.
+Reactivate with `PATCH { "is_active": true }`.
+
+### 3.5.6 Another institution's department — 404
+
+```
+GET {{base_url}}/auth/partner/departments/{{department_id}}/
+Authorization: {{other_institution_token}}
+```
+
+**Expected:** `404 Not Found` (numeric id — existence not leaked).
 
 ---
 
@@ -644,9 +741,11 @@ Submit the course for review (`POST {{base_url}}/courses/{{course_pk}}/submit/`)
 | Submit incomplete verification | 400 |
 | Reject without reason / request_action without reason | 400 |
 | `expire` action on institution verification | 422 |
-| Unverified institution on expert/course endpoint | 403 |
+| Unverified institution on expert/course/department endpoint | 403 |
 | Duplicate expert email | 422 |
-| Another institution's expert (numeric ID) | 404 |
+| Duplicate department name (case-insensitive) | 422 |
+| Another institution's expert / department (numeric ID) | 404 |
+| Expert assigned a foreign/unknown `department_id` | 422 |
 | Course created by unverified institution | 403 |
 | Missing / non-numeric `expert_user_id` | 400 |
 | Assign non-affiliated or inactive expert | 422 |
@@ -665,8 +764,11 @@ Submit the course for review (`POST {{base_url}}/courses/{{course_pk}}/submit/`)
 2.3  Admin pick_up                → under_review
 2.6  Admin approve                → institution is_verified=true
 
+─ departments ─
+3.5.1  Create department          → save department_id
+
 ─ experts ─
-3.1  Onboard expert               → save expert_id (+ expert_user_id)
+3.1  Onboard expert (department_id) → save expert_id (+ expert_user_id)
 3.3  List experts                 → course_count present
 3.6  Deactivate / reactivate
 
@@ -681,6 +783,8 @@ Submit the course for review (`POST {{base_url}}/courses/{{course_pk}}/submit/`)
 2.5  Reject w/o reason → 400
 2.7  expire action → 422
 3.2  Duplicate email → 422
+3.5.2  Duplicate department name → 422
+3.5.6  Other institution's department → 404
 3.8  Other institution's expert → 404
 4.2  Unverified create → 403
 5.4  Non-numeric id → 400

@@ -6,7 +6,7 @@ from rest_framework import serializers, status
 from rest_framework.permissions import AllowAny
 from rest_framework.throttling import AnonRateThrottle
 from authentication.serializers import VerifyOTPSerializer, ResendOTPSerializer
-from authentication.utils import send_otp_email
+from authentication.tasks import send_otp_email_task
 from django.conf import settings
 
 logger = logging.getLogger(__name__)
@@ -96,9 +96,11 @@ class ResendOTPView(APIView):
             purpose = serializer.validated_data.get('purpose', 'registration')
             otp_code = user.otp_code
 
-            email_sent = send_otp_email(user, otp_code, purpose=purpose)
-            if not email_sent:
-                logger.error(f'OTP resend email failed for {user.email} purpose={purpose}')
+            # Sent asynchronously; only a broker-enqueue failure is synchronous.
+            try:
+                send_otp_email_task.delay(user.pk, otp_code, purpose)
+            except Exception as e:
+                logger.error(f'Failed to enqueue OTP resend for {user.email} purpose={purpose}: {e}')
                 return Response({
                     'success': False,
                     'message': 'OTP generated but failed to send email. Please try again later.'

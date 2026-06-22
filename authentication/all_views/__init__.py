@@ -30,6 +30,8 @@ from authentication.all_views.profile_views import (
 from authentication.all_views.partner_views import (
     InstitutionExpertListCreateView,
     InstitutionExpertDetailView,
+    InstitutionDepartmentListCreateView,
+    InstitutionDepartmentDetailView,
 )
 
 __all__ = [
@@ -58,5 +60,7 @@ __all__ = [
     'PublicInstitutionListView',
     'InstitutionExpertListCreateView',
     'InstitutionExpertDetailView',
+    'InstitutionDepartmentListCreateView',
+    'InstitutionDepartmentDetailView',
     'TokenRefreshView',
 ]

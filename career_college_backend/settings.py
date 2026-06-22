@@ -1,7 +1,11 @@
+import sys
 from datetime import timedelta
 from pathlib import Path
 
 import environ
+
+# True when running the Django test suite (e.g. `manage.py test`).
+TESTING = 'test' in sys.argv
 
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
 BASE_DIR = Path(__file__).resolve().parent.parent
@@ -236,6 +240,15 @@ CELERY_TASK_ROUTES = {
     'notifications.tasks.send_notification_email_task': {'queue': 'notifications'},
     'notifications.tasks.purge_old_notifications_task': {'queue': 'notifications'},
 }
+
+# Run tasks inline during the test suite so `.delay()` never hits the real
+# broker (tests would otherwise enqueue tasks that a dev worker later drains
+# against the wrong DB). Set at module level so Celery picks it up at
+# `config_from_object` time — `override_settings` is too late (the app is
+# already configured by then).
+if TESTING:
+    CELERY_TASK_ALWAYS_EAGER = True
+    CELERY_TASK_EAGER_PROPAGATES = True
 CELERY_BEAT_SCHEDULE = {
     'reap-stuck-coding-submissions': {
         'task': 'courses.tasks.reap_stuck_coding_submissions_task',

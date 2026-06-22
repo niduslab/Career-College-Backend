@@ -119,17 +119,21 @@ python manage.py runserver
 
 API is now available at `http://127.0.0.1:8000/`.
 
-### 7. Start the Celery worker (required for video transcoding, assignment grading, and coding-exercise execution)
+### 7. Start the Celery worker (required for transactional email, video transcoding, assignment grading, and coding-exercise execution)
+
+> All auth emails (OTP for registration/resend/password-reset, and institution-onboarded expert credentials) are sent **asynchronously** by the worker. With no worker running, those emails are never delivered.
 
 Open a second terminal, activate the venv, then:
 
 ```bash
 # Windows (solo pool avoids multiprocessing issues)
-celery -A career_college_backend worker --loglevel=info --pool=solo
+celery -A career_college_backend worker --loglevel=info --pool=solo -Q celery,notifications
 
 # macOS / Linux
-celery -A career_college_backend worker --loglevel=info
+celery -A career_college_backend worker --loglevel=info -Q celery,notifications
 ```
+
+> `-Q celery,notifications` is required: auth/transactional emails and the coding/video tasks run on the default `celery` queue, while notification emails are routed to a separate `notifications` queue (`CELERY_TASK_ROUTES` in `settings.py`). A bare worker consumes only `celery` and would silently never deliver notification emails.
 
 ### 8. Start Celery beat (required for the coding-submission zombie reaper)
 
@@ -407,6 +411,17 @@ All authenticated endpoints require: `Authorization: Bearer <access_token>`
 | GET | `linkedin/callback/` | Receive authorization code from LinkedIn |
 | POST | `linkedin/exchange-token/` | Exchange code for local JWT session |
 
+#### Partner Institution (institution admin)
+
+All require a **verified** partner institution (`IsVerifiedPartnerInstitution`); scoped to the caller's own institution; numeric IDs → 404 on no-access. See [docs/api-testing/postman-partner-institution.md](docs/api-testing/postman-partner-institution.md).
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| GET/POST | `partner/experts/` | List / onboard experts (auto-provision instructor + emailed credentials) |
+| GET/PATCH | `partner/experts/{id}/` | Expert detail / edit (profile, `department_id`, activate-deactivate) |
+| GET/POST | `partner/departments/` | List / create institution departments |
+| GET/PATCH/DELETE | `partner/departments/{id}/` | Department detail / rename or toggle active / soft-deactivate |
+
 ---
 
 ### Identity Verification — `/api/v1/verification/`
@@ -679,9 +694,9 @@ python manage.py test authentication.tests  # single module
 # Django system checks
 python manage.py check
 
-# Celery worker
-celery -A career_college_backend worker --loglevel=info --pool=solo  # Windows
-celery -A career_college_backend worker --loglevel=info              # macOS/Linux
+# Celery worker (-Q covers the default queue + the routed notifications queue)
+celery -A career_college_backend worker --loglevel=info --pool=solo -Q celery,notifications  # Windows
+celery -A career_college_backend worker --loglevel=info -Q celery,notifications              # macOS/Linux
 
 # Seed course categories
 python manage.py seed_course_categories
@@ -710,7 +725,8 @@ career_college_backend/
 │   ├── models.py                  User, LearnerProfile, InstructorProfile, PartnerInstitutionProfile
 │   ├── serializers.py
 │   ├── signals.py                 Auto-create profile on user creation
-│   └── services/                  OAuth provisioning helpers
+│   ├── tasks.py                   Celery email tasks (async OTP + expert credentials)
+│   └── services/                  OAuth + expert (institution-onboarded) provisioning helpers
 ├── courses/                       Course and enrollment app
 │   ├── all_views/
 │   │   ├── course_views.py        Course list / create / detail
@@ -765,6 +781,7 @@ career_college_backend/
 ## Architecture Notes
 
 - **Custom user model** — `authentication.User`, email-based (no username field). `user_type` field: `learner`, `instructor`, `partner_institution`, `admin`.
+- **Transactional email** — OTP (registration / resend / password reset) and institution-onboarded expert credentials are sent asynchronously via Celery tasks in `authentication/tasks.py`; views enqueue and return immediately while the worker handles SMTP + retries. A 503 from register/resend means the broker enqueue failed, not the SMTP send. Institution-onboarded experts are created with `is_email_verified=True` + a preset password emailed to them — no OTP step, loginable immediately.
 - **SectionContent** — single source of truth for curriculum ordering within a section. Holds a `GenericForeignKey` to `Lecture`, `Quiz`, `CodingExercise`, or `Assignment`. Deleting any content object cascades and removes its `SectionContent` slot.
 - **Status transitions** — `NidusCourse.transition_to()` is the only entry point for status changes. Never set `status` directly on a course instance.
 - **Video pipeline** — raw upload → Celery → FFmpeg → 5 HLS renditions. `VideoAsset.status` tracks progress. Only one active asset per lecture at a time.

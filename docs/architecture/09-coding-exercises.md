@@ -1,8 +1,6 @@
-# 10) Coding Exercises
+# 09) Coding Exercises
 
-Coding exercises are interactive programming problems instructors author as curriculum items. This document covers both **Part 1 (instructor authoring CRUD)** and **Part 2 (learner execution: Run / Submit + Docker sandbox)**.
-
-For the end-to-end Run/Submit pipeline, Docker sandbox limits, harness contract, and failure modes, see [`docs/submission-flow.md`](../submission-flow.md). For the architectural rationale behind the **one container per submission** optimisation see [`docs/comparison.md`](../comparison.md).
+Coding exercises are interactive programming problems instructors author as curriculum items. This document is the **authoritative** reference and covers both **Part 1 (instructor authoring CRUD)** and **Part 2 (learner execution: Run / Submit + Docker sandbox)** — the end-to-end pipeline, sandbox limits, harness contract, failure modes, and the rationale for the **one container per submission** optimisation.
 
 ## Run vs. Submit — at a glance
 
@@ -206,7 +204,7 @@ The unified `POST /sections/{section_id}/contents/` endpoint creates both the do
 
 # Part 2 — Learner Execution (Run / Submit)
 
-The execution surface adds two new persisted models and six new learner-facing endpoints. Authoritative pipeline doc is [`docs/submission-flow.md`](../submission-flow.md); this section summarises the integration points specific to the Career-College codebase.
+The execution surface adds two new persisted models and six new learner-facing endpoints, integrated into the Career-College codebase as described below.
 
 ## Two execution modes
 
@@ -256,9 +254,9 @@ One row per executed test case. `test_case` is `on_delete=SET_NULL` so result ro
 
 ## Sandbox & runner contract
 
-The Docker sandbox + per-language harness lives in `courses/services/code_runner.py`. Authoritative details in [`docs/submission-flow.md`](../submission-flow.md). Highlights specific to this project:
+The Docker sandbox + per-language harness lives in `courses/services/code_runner.py`. Details:
 
-- **One container per submission**, not per test case. Each language's harness loops over `INPUT_0..INPUT_{N-1}` env vars internally with per-test try/except, emitting sentinel-delimited per-test results on stdout. This eliminates `(N-1)` container startups + `(N-1)` compiles for C++/Java; see [`docs/comparison.md`](../comparison.md) §17 for the rationale.
+- **One container per submission**, not per test case. Each language's harness loops over `INPUT_0..INPUT_{N-1}` env vars internally with per-test try/except, emitting sentinel-delimited per-test results on stdout. This eliminates `(N-1)` container startups + `(N-1)` compiles for C++/Java — the rationale for the one-container model.
 - **Sandbox constants**: `runtime='runsc'` (gVisor; falls back to `runc` via `RUNNER_RUNTIME` for local dev), `network_disabled=True`, `mem_limit=128m`, `memswap_limit=128m`, `nano_cpus=500_000_000` (0.5 cores), `pids_limit=64` (fork-bomb cap), `ulimits=[fsize=10MB, nproc=64, nofile=128, cpu=10s]`, `read_only=True`, `tmpfs={'/tmp': 'size=32m,exec'}`, `cap_drop=['ALL']`, `security_opt=['no-new-privileges:true']`, `detach=True, remove=False` (manual cleanup in `finally`). Wall-clock budget enforced via `container.wait(timeout=...)` + `container.kill()` on overshoot.
 - **gVisor (`runsc`) runtime**: provides user-space syscall interception so a kernel exploit inside the learner container cannot directly pivot to the host kernel. Required on multi-tenant or shared hosts; install instructions in [`README.md` → Development Setup → Step 10](../../README.md#10-install-gvisor-runsc-on-production--shared-hosts). Note: does **not** mitigate the Docker-out-of-Docker daemon-socket risk — that requires moving the runner to a dedicated host or switching to Kata Containers / Firecracker.
 - **Learner-code contract**: a top-level `solve(input_string)` function (Python / JavaScript) or `void solve(const std::string&)` (C++) / `static void solve(String)` (Java) — one string parameter; return the answer or write it to stdout. Multi-argument parsing is the learner's job.
@@ -326,7 +324,7 @@ End-to-end smoke verification against real Docker lives in `scripts/smoke_code_r
 
 ## System Explanation (Why This Design)
 
-**Why one container per submission instead of one per test case?** The standalone platform `docs/submission-flow.md` was derived from used `1 test = 1 container`. For C++ and Java this means N compile cycles per submission, plus N × ~300 ms container startup overhead. The comparison doc §17 calls this out as the highest-leverage optimisation; we apply it here. Sandbox isolation is preserved (the container still has the full 128 MB / 0.5 CPU / no-network / read-only contract); only the batching changes.
+**Why one container per submission instead of one per test case?** A naive `1 test = 1 container` model means, for C++ and Java, N compile cycles per submission plus N × ~300 ms container startup overhead. Batching all tests into one container is the highest-leverage optimisation, so we apply it here. Sandbox isolation is preserved (the container still has the full 128 MB / 0.5 CPU / no-network / read-only contract); only the batching changes.
 
 **Why omit hidden test rows entirely instead of redacting fields?** Earlier design kept the row visible with input/expected/actual blanked and status visible. User-requested change: strip rows entirely so the learner can't even see hidden-test row count. Aggregate counts still leak existence (learner can compute `total_tests - len(visible_results)` = hidden count) but no per-test signal. Cheaper to audit too — one `filter(is_hidden=False)` in the serializer vs a conditional `to_representation` branch.
 

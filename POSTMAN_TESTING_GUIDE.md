@@ -3320,7 +3320,7 @@ After a `failed` or `grading_failed` verdict the learner can retry the grader (4
 ## 42. Coding Exercise Detail + Run + Submit
 
 The learner side of coding exercises follows the architecture documented in
-[docs/submission-flow.md](docs/submission-flow.md). There are **two**
+[docs/architecture/09-coding-exercises.md](docs/architecture/09-coding-exercises.md). There are **two**
 execution paths with different persistence semantics:
 
 | Mode | Endpoint | Persisted? | Test cases run | Returns | Poll via |

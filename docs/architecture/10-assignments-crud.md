@@ -1,4 +1,4 @@
-# 11) Assignments CRUD (Instructor Side)
+# 10) Assignments CRUD (Instructor Side)
 
 This document explains how assignment operations work from an instructor's perspective, then maps each action to what happens internally in models, views, serializers, and services.
 
@@ -294,13 +294,17 @@ object defining one or more criteria:
 ```json
 {
   "criteria": [
-    { "type": "keyword", "value": "HTTP", "weight": 1.0 },
-    { "type": "regex", "value": "REST.*stateless", "weight": 0.5 },
-    { "type": "min_length", "value": 50, "weight": 0.3 },
-    { "type": "any_of", "value": ["REST", "RESTful"], "weight": 0.5 }
+    { "type": "keyword", "value": "HTTP", "points": 2, "feedback_on_match": "Good.", "feedback_on_miss": "Mention HTTP." },
+    { "type": "regex", "value": "REST.*stateless", "points": 3 },
+    { "type": "min_length", "value": 50, "points": 1 },
+    { "type": "any_of", "value": ["REST", "RESTful"], "points": 2 }
   ]
 }
 ```
+
+Each criterion carries an integer **`points`** (awarded in full when the criterion matches, zero
+otherwise) and optional **`feedback_on_match`** / **`feedback_on_miss`** strings surfaced to the
+learner per criterion.
 
 **Supported criterion types:**
 
@@ -308,16 +312,14 @@ object defining one or more criteria:
 |------|-------|-------------|
 | `keyword` | string | Answer contains the keyword (case-insensitive) |
 | `regex` | pattern | Answer matches the regex pattern |
-| `min_length` | int | `len(answer_text) >= value` |
-| `max_length` | int | `len(answer_text) <= value` |
+| `min_length` | int | `len(answer_text.strip()) >= value` |
+| `max_length` | int | `len(answer_text.strip()) <= value` |
 | `any_of` | list of strings | Answer contains at least one item from the list |
 | `all_of` | list of strings | Answer contains all items from the list |
 
-Score formula:
+Score formula — sum of awarded points, clamped to `max_score`:
 ```
-score = sum(criterion.weight for each passing criterion)
-        / sum(all criterion weights)
-        * max_score
+score = min( sum(criterion.points for each matching criterion), max_score )
 ```
 
 The grader is **defensive**: an unknown criterion type or a matcher that raises an exception

@@ -1,6 +1,10 @@
 # Career College Backend
 
-A Django REST Framework backend for a course marketplace platform. Instructors create and publish courses with mixed content (lectures, quizzes, coding exercises, assignments), upload videos that are async-transcoded to HLS, and must pass identity verification before they can author content. Learners browse and enroll in published courses.
+A Django REST Framework backend for a course marketplace platform. The platform has four user roles — **learner**, **instructor**, **partner institution**, and **admin**.
+
+**Instructors and verified partner institutions** create and publish courses with mixed content (lectures, quizzes, coding exercises, assignments), upload videos that are async-transcoded to HLS, and must pass identity / institution verification before they can author content. Partner institutions additionally onboard their own teaching staff ("experts"), organise them into departments, and staff their courses' instructor rosters directly.
+
+**Learners** browse and enroll in published courses, consume curriculum (video/article lectures, quizzes, assignments, coding exercises), earn completion certificates, leave reviews & ratings, and message instructors. Notifications (in-app + email) and messaging are delivered in real time over a multiplexed WebSocket.
 
 ---
 
@@ -25,9 +29,9 @@ A Django REST Framework backend for a course marketplace platform. Instructors c
 
 | App | URL prefix | Responsibility |
 |-----|-----------|----------------|
-| `authentication` | `/api/v1/auth/` | Registration, OTP, JWT, OAuth (Google/LinkedIn), profiles |
-| `courses` | `/api/v1/courses/` | Public catalog, learner enrollment, my-courses dashboard, plus instructor course authoring/curriculum |
-| `id_verification` | `/api/v1/verification/` | Instructor identity verification state machine |
+| `authentication` | `/api/v1/auth/` | Registration, OTP, JWT, OAuth (Google/LinkedIn), profiles, partner-institution experts & departments |
+| `courses` | `/api/v1/courses/` | Public catalog, learner enrollment, my-courses dashboard, course authoring/curriculum (instructor + partner institution), certificates, reviews & ratings |
+| `id_verification` | `/api/v1/verification/` | Instructor identity **and** partner-institution credential verification state machines |
 | `messaging` | `/api/v1/messaging/` | Learner ↔ instructor direct messaging (REST + WebSocket) |
 | `notifications` | `/api/v1/notifications/` | In-app notification feed, email preferences, dispatcher |
 | `realtime` | `/ws/` | ASGI WebSocket consumer multiplexing the `notifications` and `messaging` streams |
@@ -369,6 +373,19 @@ Tests must **never** hit real Docker. Patch `courses.services.code_runner.CodeRu
 
 See [docs/architecture/17-messaging-system.md](docs/architecture/17-messaging-system.md) for the data model, WS protocol, and frontend client contract.
 
+### 9. Partner institution onboarding & course staffing
+
+1. Register a `partner_institution` account; verify email.
+2. `POST /api/v1/verification/institution/create/` → draft; `PATCH .../{id}/update/` fills `registration_number`, `issuing_authority`, `accreditation_document`; `POST .../{id}/submit/` → `submitted` (notifies admins).
+3. Admin approves via `POST /api/v1/verification/admin/institution/{id}/review/` `{"action": "approve"}` → `PartnerInstitutionProfile.is_verified = True`. The `IsVerifiedPartnerInstitution` gate now passes.
+4. Define departments: `POST /api/v1/auth/partner/departments/`.
+5. Onboard experts: `POST /api/v1/auth/partner/experts/` — auto-provisions an `instructor` account (`is_verified=True`, `is_email_verified=True`) and emails login credentials. No OTP/identity step — the institution vouches.
+6. Create a course through the same `POST /api/v1/courses/create/` instructors use (`partner_institution` set automatically; instructor roster left empty). Add curriculum as in Workflow 2–3.
+7. Staff the roster: `POST /api/v1/courses/{pk}/institution-instructors/` (body `expert_user_id`) adds an active expert directly — no invite/accept. Assigned experts edit content via the normal authoring endpoints.
+8. Submit for review (`POST /api/v1/courses/{id}/submit/`) — same lifecycle as instructor-authored courses.
+
+See [docs/architecture/18-partner-institutions.md](docs/architecture/18-partner-institutions.md) for the verification state machine, expert provisioning, departments, and roster rules.
+
 ---
 
 ## API Endpoints
@@ -424,9 +441,9 @@ All require a **verified** partner institution (`IsVerifiedPartnerInstitution`);
 
 ---
 
-### Identity Verification — `/api/v1/verification/`
+### Identity & Institution Verification — `/api/v1/verification/`
 
-#### Instructor
+#### Instructor (identity)
 
 | Method | Endpoint | Description |
 |--------|----------|-------------|
@@ -436,13 +453,33 @@ All require a **verified** partner institution (`IsVerifiedPartnerInstitution`);
 | GET | `my/` | List own verification submissions |
 | GET | `my/{id}/` | Detail view of own submission |
 
-#### Admin
+#### Admin (identity)
 
 | Method | Endpoint | Description |
 |--------|----------|-------------|
 | GET | `admin/list/` | List all submissions |
 | GET | `admin/{id}/` | Detail view |
 | POST | `admin/{id}/review/` | Approve, reject, or request action |
+
+#### Partner Institution (credential verification)
+
+Institution-facing — gated `IsEmailVerified` + a `user_type == 'partner_institution'` guard (**not** `IsVerifiedPartnerInstitution`; verification is the gate being cleared). Numeric IDs → 404 on no-access. No `expired` state. See [docs/architecture/18-partner-institutions.md](docs/architecture/18-partner-institutions.md).
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| POST | `institution/create/` | Create a draft institution verification |
+| PATCH | `institution/{id}/update/` | Fill credential fields (`registration_number`, `issuing_authority`, `accreditation_document`, …) |
+| POST | `institution/{id}/submit/` | Submit for admin review |
+| GET | `institution/my/` | List own institution verifications |
+| GET | `institution/my/{id}/` | Detail view of own submission |
+
+#### Admin (institution)
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| GET | `admin/institution/list/` | List all institution submissions (filter `?status=`) |
+| GET | `admin/institution/{id}/` | Detail view (incl. `admin_notes`) |
+| POST | `admin/institution/{id}/review/` | Approve (→ institution `is_verified=True`), reject, or request action. `expire` → 422 |
 
 ---
 
@@ -618,6 +655,15 @@ All require a **verified** partner institution (`IsVerifiedPartnerInstitution`);
 
 For the learner-side Run / Submit / poll / retry endpoints, see *Learner Consumption* above and the workflow walk-through in *Key Workflows → 6. Coding-exercise execution*.
 
+#### Partner Institution Course Roster
+
+Gated `IsVerifiedPartnerInstitution`; only the owning institution; numeric pk → 404. Direct add/remove of an **active affiliated expert** (no invite/accept), only while the course `is_editable()`. See [docs/architecture/18-partner-institutions.md](docs/architecture/18-partner-institutions.md).
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| POST | `{pk}/institution-instructors/` | Add an active expert to the course roster (body: `expert_user_id`) |
+| DELETE | `{pk}/institution-instructors/{expert_user_id}/` | Remove an expert from the course roster |
+
 ---
 
 ### Messaging — `/api/v1/messaging/`
@@ -646,6 +692,19 @@ Multiplexed over the shared `PlatformConsumer`. Connect with `ws://host/ws/?toke
 | server → client | `marked_read` | Ack to the caller |
 | server → client | `unread_summary` | Pushed on connect: per-conversation unread counts + `unread_conversations` total |
 | server → client | `error` | `{detail}` — connection stays open |
+
+---
+
+### Notifications — `/api/v1/notifications/`
+
+All endpoints require `IsAuthenticated` + `IsEmailVerified`. In-app notifications are also pushed in real time over the `notifications` WebSocket stream (`/ws/`). See [docs/architecture/16-notification-system.md](docs/architecture/16-notification-system.md).
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| GET | `` (root) | Paginated notification feed for the caller (newest first) |
+| GET | `unread-count/` | `{unread: N}` — unread-notification badge count |
+| POST | `mark-read/` | Mark notifications read (specific ids, or all) |
+| GET/PATCH | `preferences/` | View or update per-category email notification preferences |
 
 ---
 
@@ -761,9 +820,9 @@ career_college_backend/
 │   ├── consumers.py               PlatformConsumer — multiplexes streams, routes channel events
 │   └── streams/                   Per-stream handlers (notifications_stream, messaging_stream)
 ├── core/                          Shared: permissions, pagination, middleware
-├── docs/architecture/             17 architecture design documents
-├── docs/submission-flow.md        Coding-exercise Run/Submit pipeline + sandbox design
-├── docs/comparison.md             Comparison vs Udemy-style platform (drives the 1-container-per-submission optimisation)
+├── docs/architecture/             18 architecture design documents + guide README
+├── docs/api-testing/              Postman/wscat testing guides (certificate, coinstructor, messaging, notifications, partner-institution, …)
+├── docs/future_implementations/   Design notes for planned features (auto-caption generation)
 ├── scripts/                       Manual smoke tests (real Docker; not in test suite)
 │   ├── smoke_code_runner.py       End-to-end Run for all 4 languages
 │   └── smoke_runtime_error.py     Per-test try/except isolation check
@@ -790,7 +849,7 @@ career_college_backend/
 - **Permissions** — all custom permission classes live in `core/permissions.py`. Never define them inside app directories. `IsLearnerUser` gates learner-only enrollment/dashboard endpoints.
 - **`solution_code`** on `CodingExerciseLanguageConfig` and **`model_answer`** on `AssignmentQuestion` are instructor-only and must never appear in learner-facing serializers.
 - **Hidden test cases** (`CodingTestCase.is_hidden = True`) are for grading only. Per-row data is omitted entirely from learner responses; aggregate counts still include them.
-- **Coding runner contract**: learner code must define a top-level `solve(...)` function taking one string argument. The harness substitutes test inputs through `INPUT_{i}` env vars, captures per-test stdout/stderr/runtime via sentinel markers, and aggregates results Python-side. Single container per submission — see [docs/submission-flow.md](docs/submission-flow.md).
+- **Coding runner contract**: learner code must define a top-level `solve(...)` function taking one string argument. The harness substitutes test inputs through `INPUT_{i}` env vars, captures per-test stdout/stderr/runtime via sentinel markers, and aggregates results Python-side. Single container per submission — see [docs/architecture/09-coding-exercises.md](docs/architecture/09-coding-exercises.md).
 - **Coding execution sandbox**: one Docker container per submission with `runtime='runsc'` (gVisor; configurable via `RUNNER_RUNTIME`), `network_disabled`, 128 MB RAM, 0.5 CPU (`nano_cpus=500_000_000`), `pids_limit=64`, `ulimits` (fsize 10 MB, nproc 64, nofile 128, cpu 10 s), read-only root FS, 32 MB tmpfs at `/tmp`, all capabilities dropped, `no-new-privileges`. Wall-clock budget enforced via `container.wait(timeout=...)` + `container.kill()`. Demo-only — Docker-out-of-Docker; the daemon socket is shared with the host.
 - **Coding submission idempotency**: `evaluate_coding_submission_task` is `acks_late=True` and short-circuits on terminal status, so worker-death redelivery is safe. A Celery-beat reaper (`reap_stuck_coding_submissions_task`, 60 s) flips `queued`/`grading` rows older than 5 min to `error`.
 - **Certificates** — issued automatically when `progress_percent` reaches 100% for the first time (`recalculate_progress` → `transaction.on_commit` → `_issue_certificate_and_notify`). `Certificate` is identified by a UUID4 (non-guessable); `issue_certificate` uses `get_or_create` so Celery redelivery is idempotent. PDF generated on-the-fly by reportlab (`courses/certificate_pdf.py`); no file stored on disk.
@@ -802,15 +861,43 @@ career_college_backend/
 
 ## Documentation
 
+### General
+
 | File | Contents |
 |------|----------|
 | [POSTMAN_TESTING_GUIDE.md](POSTMAN_TESTING_GUIDE.md) | Complete API testing guide — auth, courses, learner consumption (lectures, quizzes, assignments, coding), certificates, reviews & ratings |
 | [FRONTEND_ERROR_RESPONSE_FORMAT.md](FRONTEND_ERROR_RESPONSE_FORMAT.md) | Error response shape spec |
-| [docs/architecture/](docs/architecture/) | Architecture design documents |
-| [docs/architecture/17-messaging-system.md](docs/architecture/17-messaging-system.md) | Messaging data model, REST + WebSocket protocol, unread semantics, frontend client contract |
-| [docs/architecture/messaging-write-path-rationale.md](docs/architecture/messaging-write-path-rationale.md) | Why both REST and WebSocket write paths are kept |
+| [docs/future_implementations/AUTO_CAPTION_GENERATION.md](docs/future_implementations/AUTO_CAPTION_GENERATION.md) | Design notes for a planned auto-caption feature (not yet built) |
+| [docs/api-testing/postman-certificate.md](docs/api-testing/postman-certificate.md) | Postman testing guide for the certificate issuance + verify/download endpoints |
+| [docs/api-testing/postman-coinstructor-invite.md](docs/api-testing/postman-coinstructor-invite.md) | Postman testing guide for the co-instructor invite/accept flow |
+| [docs/api-testing/postman-course-owner-protection.md](docs/api-testing/postman-course-owner-protection.md) | Postman testing guide for course-owner vs co-instructor roster protection |
 | [docs/api-testing/postman-messaging.md](docs/api-testing/postman-messaging.md) | Postman / wscat testing guide for the messaging REST + WS endpoints |
+| [docs/api-testing/postman-notification-system.md](docs/api-testing/postman-notification-system.md) | Postman testing guide for the notification feed + email preferences |
 | [docs/api-testing/postman-partner-institution.md](docs/api-testing/postman-partner-institution.md) | Postman testing guide for partner-institution verification, expert management, course creation + roster assignment |
-| [docs/submission-flow.md](docs/submission-flow.md) | Coding-exercise Run/Submit pipeline, sandbox model, redaction layers, failure modes |
-| [docs/comparison.md](docs/comparison.md) | Comparison vs Udemy-style platform; rationale for the 1-container-per-submission optimisation |
 | [CLAUDE.md](CLAUDE.md) | AI assistant coding instructions |
+
+### Architecture (`docs/architecture/`)
+
+Read in order; [docs/architecture/README.md](docs/architecture/README.md) is the guide map.
+
+| File | Contents |
+|------|----------|
+| [README.md](docs/architecture/README.md) | Backend architecture guide — recommended reading order + scope |
+| [01-system-overview.md](docs/architecture/01-system-overview.md) | Architecture diagram, project layout, request lifecycle, design patterns |
+| [02-auth-and-accounts.md](docs/architecture/02-auth-and-accounts.md) | Registration, OTP, JWT, OAuth flows |
+| [03-profiles.md](docs/architecture/03-profiles.md) | Profile models, auto-creation signal, public/private endpoints |
+| [04-courses-and-curriculum.md](docs/architecture/04-courses-and-curriculum.md) | Course models, SectionContent ordering, reorder algorithm |
+| [05-lectures-and-video-pipeline.md](docs/architecture/05-lectures-and-video-pipeline.md) | Video upload, FFmpeg transcoding, HLS pipeline, WatchProgress |
+| [06-quizzes.md](docs/architecture/06-quizzes.md) | Quiz authoring, attempt models, learner submission flow |
+| [07-id-verification.md](docs/architecture/07-id-verification.md) | Identity verification state machine, admin review |
+| [08-core-infrastructure.md](docs/architecture/08-core-infrastructure.md) | Permissions, pagination, Celery tasks, JWT config, logging |
+| [09-coding-exercises.md](docs/architecture/09-coding-exercises.md) | Coding exercise authoring + Run/Submit execution + Docker sandbox |
+| [10-assignments-crud.md](docs/architecture/10-assignments-crud.md) | Assignment CRUD + async auto-grading + RubricGrader |
+| [11-course-lifecycle.md](docs/architecture/11-course-lifecycle.md) | Course status state machine, completeness checks, admin review |
+| [12-enrollment.md](docs/architecture/12-enrollment.md) | Enrollment, progress calculation, learner consumption endpoints |
+| [13-multi-instructor-collaboration.md](docs/architecture/13-multi-instructor-collaboration.md) | Owner vs co-instructor roles, roster protection, guard_owner utility |
+| [14-certificate-system.md](docs/architecture/14-certificate-system.md) | Completion certificate issuance flow, PDF generation, public share URLs |
+| [15-review-rating-system.md](docs/architecture/15-review-rating-system.md) | Review/rating data model, vote atomicity, denormalized catalog fields, access policy |
+| [16-notification-system.md](docs/architecture/16-notification-system.md) | Notification dispatcher, event types, WebSocket delivery |
+| [17-messaging-system.md](docs/architecture/17-messaging-system.md) | Messaging data model, REST + WebSocket protocol, unread semantics, frontend client contract |
+| [18-partner-institutions.md](docs/architecture/18-partner-institutions.md) | Institution verification, expert onboarding, departments, course creation + roster assignment |

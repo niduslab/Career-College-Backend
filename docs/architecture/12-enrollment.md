@@ -1,4 +1,4 @@
-# 13 — Learner Enrollment
+# 12 — Learner Enrollment
 
 ## Overview
 
@@ -72,7 +72,7 @@ The enrollment system connects learners to published courses. It serves as the a
 | GET | `/api/v1/courses/learn/coding-exercises/submissions/{submission_id}/` | Polling target. Hidden test rows are omitted entirely from `test_results`; aggregate counts (`total_tests` / `passed_tests` / `score`) still include them. |
 | POST | `/api/v1/courses/learn/coding-exercises/submissions/{submission_id}/retry/` | Re-enqueue evaluation for a submission stuck in `error`. Reuses the row so `submitted_at` is preserved. Only `error` is retryable (use `/submit/` for fresh attempts after `failed`/`passed`). |
 
-Assignment manual-override / instructor moderation surface is parked for Phase 3. The coding-exercise execution pipeline + sandbox model is documented in [`docs/submission-flow.md`](../submission-flow.md); see also [`docs/architecture/09-coding-exercises.md`](./09-coding-exercises.md) Part 2.
+Assignment manual-override / instructor moderation surface is parked for Phase 3. The coding-exercise execution pipeline + sandbox model is documented in [`09-coding-exercises.md`](./09-coding-exercises.md) Part 2.
 
 ## Enrollment Flow
 
@@ -160,12 +160,12 @@ The "learner curriculum view", "learner lecture view", and "watch progress endpo
 ### Done — Phase 2 consumption (assignment + coding)
 
 - **Assignment auto-grading** — `AssignmentSubmission` + `AssignmentSubmissionAnswer` models, `AssignmentQuestion.rubric` field, `RubricGrader`, `grade_assignment_submission_task`, and the four `/learn/assignments/...` endpoints. Full rationale in `LEARNER_ASSIGNMENT_CONSUMPTION_DESIGN.md`.
-- **Coding-exercise execution** — `CodingSubmission` + `CodingSubmissionTestResult` models, Docker sandbox runner (`courses/services/code_runner.py`, one container per submission), per-language batched harness, `evaluate_coding_run_task` + `evaluate_coding_submission_task` + `reap_stuck_coding_submissions_task` (Celery beat), and six `/learn/coding-exercises/...` endpoints. Full pipeline doc: [`docs/submission-flow.md`](../submission-flow.md). Optimisation rationale (one container per submission vs per test case): [`docs/comparison.md`](../comparison.md) §17. Implementation overview: [`docs/architecture/09-coding-exercises.md`](./09-coding-exercises.md) Part 2.
+- **Coding-exercise execution** — `CodingSubmission` + `CodingSubmissionTestResult` models, Docker sandbox runner (`courses/services/code_runner.py`, one container per submission), per-language batched harness, `evaluate_coding_run_task` + `evaluate_coding_submission_task` + `reap_stuck_coding_submissions_task` (Celery beat), and six `/learn/coding-exercises/...` endpoints. Full pipeline doc, sandbox model, and one-container-per-submission rationale: [`09-coding-exercises.md`](./09-coding-exercises.md) Part 2.
 
 ### Not yet built
 
 - **Assignment manual override / moderation surface** — instructor-side endpoints to view, override, or comment on submissions. Phase-3 addition; not required for the auto-grading-only v1.
-- **Coding sandbox hardening** — Docker-out-of-Docker is demo-only. Replace with gVisor / Firecracker / remote workers for untrusted execution. See [`docs/comparison.md`](../comparison.md) §17 for migration paths.
+- **Coding sandbox hardening** — Docker-out-of-Docker is demo-only. Replace with gVisor / Firecracker / remote workers for untrusted execution. See [`09-coding-exercises.md`](./09-coding-exercises.md) for the sandbox model and migration paths.
 - **Caching on the consumption surface** — Redis or HTTP cache for the slim `/my-courses/{slug}/` and `/learn/{slug}/curriculum/` responses. Lower priority now that the response is small; revisit if traffic warrants.
 - **Payment integration** — A `payments` app that creates `enrollment_type='paid'` enrollments on checkout.
 - **Certificates** — PDF generation triggered when `completed_at` is set.

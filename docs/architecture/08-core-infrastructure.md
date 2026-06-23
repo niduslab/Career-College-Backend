@@ -28,6 +28,8 @@ it still belongs in `core/`.
 | `IsEmailVerified` | `user.is_email_verified == True` | Almost all authenticated endpoints |
 | `IsInstructorUser` | `user.user_type == 'instructor'` | Instructor-only reads (profile, verification listing) |
 | `IsVerifiedInstructor` | `user.user_type == 'instructor'` AND `InstructorProfile.is_verified == True` | Course create, course authoring endpoints |
+| `IsVerifiedPartnerInstitution` | `user.user_type == 'partner_institution'` AND `PartnerInstitutionProfile.is_verified AND is_active` | Expert/department management, partner-institution course roster |
+| `IsVerifiedCourseCreator` | Passes for `IsVerifiedInstructor` **OR** `IsVerifiedPartnerInstitution` | All course authoring endpoints (instructor + institution) |
 | `IsCourseInstructor` | Object-level: `user in course.instructors.all()` | Course detail/edit for multi-instructor courses |
 | `IsLearnerUser` | `user.user_type == 'learner'` | Enrollment writes, progress POST, quiz submit, assignment submit |
 
@@ -35,7 +37,7 @@ it still belongs in `core/`.
 
 ```python
 class CourseCreateAPIView(APIView):
-    permission_classes = [IsAuthenticated, IsEmailVerified, IsVerifiedInstructor]
+    permission_classes = [IsAuthenticated, IsEmailVerified, IsVerifiedCourseCreator]
 ```
 
 Permission classes are evaluated in order. The first failure raises a `PermissionDenied` (403)

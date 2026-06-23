@@ -1,6 +1,8 @@
-# Backend Onboarding Guide
+# Backend Architecture Guide
 
-This folder is a quick-start map for new backend developers.
+This folder is the design reference for the backend — one document per subsystem, covering data
+models, processes, end-to-end workflows, and the reasoning behind each design. Read top to bottom for
+a full tour, or jump to the subsystem you're working on.
 
 ## Read in this order
 
@@ -17,16 +19,16 @@ This folder is a quick-start map for new backend developers.
 11. `11-course-lifecycle.md` — course status state machine, completeness checks, admin review
 12. `12-enrollment.md` — enrollment, progress calculation, learner consumption endpoints
 13. `13-multi-instructor-collaboration.md` — owner vs co-instructor roles, roster protection, guard_owner utility
-
-## Cross-cutting design docs (outside this folder)
-
-- [`../submission-flow.md`](../submission-flow.md) — Coding-exercise Run/Submit pipeline, Docker sandbox, per-language harness contract, redaction layers, failure modes.
-- [`../comparison.md`](../comparison.md) — Comparison vs Udemy-style platform; rationale for the one-container-per-submission optimisation and the hardening gaps still on the table.
+14. `14-certificate-system.md` — completion certificate issuance, on-the-fly PDF generation, public share URLs
+15. `15-review-rating-system.md` — review/rating model, vote atomicity, denormalized catalog fields, access policy
+16. `16-notification-system.md` — notification dispatcher, event types, WebSocket delivery
+17. `17-messaging-system.md` — learner ↔ instructor messaging, REST + WebSocket protocol, unread semantics
+18. `18-partner-institutions.md` — institution verification, expert onboarding, departments, course creation + roster assignment
 
 ## Scope
 
 - API base: `/api/v1/`
-- Main apps: `authentication`, `courses`, `id_verification`, `core`
+- Main apps: `authentication`, `courses`, `id_verification`, `messaging`, `notifications`, `realtime`, `core`
 - This guide explains:
   - Database model fields (key entities)
   - System processes (request/flow behavior)

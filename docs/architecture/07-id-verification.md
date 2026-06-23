@@ -4,6 +4,10 @@ Instructor identity verification is a state-machine workflow. An instructor cann
 until their identity is approved by an admin. Approval sets `InstructorProfile.is_verified = True`,
 which enables the `IsVerifiedInstructor` permission class.
 
+> **Partner institutions** have a parallel credential-verification flow (`InstitutionVerification`,
+> in the same `id_verification/models.py`) that mirrors this state machine but targets a
+> `PartnerInstitutionProfile`. See [18-partner-institutions.md](18-partner-institutions.md).
+
 ## Key files
 
 | File | Purpose |

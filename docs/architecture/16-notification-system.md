@@ -9,7 +9,7 @@
 
 1. [What This System Does (Plain English)](#1-what-this-system-does-plain-english)
 2. [How Notifications Reach You](#2-how-notifications-reach-you)
-3. [All 21 Notification Events](#3-all-21-notification-events)
+3. [All 24 Notification Events](#3-all-24-notification-events)
 4. [Architecture Overview (Technical)](#4-architecture-overview-technical)
 5. [App Structure](#5-app-structure)
 6. [WebSocket — Real-Time Push](#6-websocket--real-time-push)
@@ -41,7 +41,7 @@ For events that matter even when you're not on the site — your course got appr
 
 ### The key design principle: one dispatcher, not many scattered functions
 
-All 21 event types go through a single function called `dispatch()`. When anything happens on the platform, the code says:
+All 24 event types go through a single function called `dispatch()`. When anything happens on the platform, the code says:
 
 ```python
 dispatch(event_type, recipients, context)
@@ -83,7 +83,11 @@ The `dispatch()` function catches all exceptions and logs them. It never propaga
 
 ---
 
-## 3. All 21 Notification Events
+## 3. All 24 Notification Events
+
+> The authoritative list is the `NotificationEventType` enum in `notifications/models.py` (24
+> members). Quiz submission, assignment grading, and coding evaluation do **not** emit notifications
+> — they are deliberately excluded (see the test `quiz.submitted notifications must not be created`).
 
 ### Learner events (things that happen to you as a student)
 
@@ -91,9 +95,6 @@ The `dispatch()` function catches all exceptions and logs them. It never propaga
 |---|---|---|---|
 | You enrolled in a course | After successful enrollment | ✓ | ✓ |
 | You finished a lecture | When your video reaches 100% | ✓ | — |
-| You submitted a quiz | After quiz answers are saved | ✓ | — |
-| Your assignment was graded | After AI grader finishes (passed or failed) | ✓ | — |
-| Your coding exercise was evaluated | After Docker runner finishes | ✓ | — |
 | You completed the whole course | When progress hits 100% (certificate issued) | ✓ | ✓ |
 
 ### Instructor / course creator events (things that happen on your courses)
@@ -121,6 +122,22 @@ The `dispatch()` function catches all exceptions and logs them. It never propaga
 | Your verification was rejected | After admin rejects | ✓ | ✓ |
 | Admin requested more information | After admin sets action_required | ✓ | ✓ |
 
+### Partner-institution events
+
+| What happened | When it fires | Bell feed | Email |
+|---|---|---|---|
+| An institution submitted a credential-verification request | After submission | ✓ | ✓ (admins get this) |
+| Your institution verification was approved | After admin approves | ✓ | ✓ |
+| Your institution verification was rejected | After admin rejects | ✓ | ✓ |
+| Admin requested more information (institution) | After admin sets action_required | ✓ | ✓ |
+| You were onboarded as an expert | After an institution provisions your account | ✓ | — (credentials sent in a separate email) |
+
+### Messaging events
+
+| What happened | When it fires | Bell feed | Email |
+|---|---|---|---|
+| You received a new message | After a message commits (recipient only) | ✓ | optional |
+
 ---
 
 ## 4. Architecture Overview (Technical)
@@ -132,7 +149,7 @@ The system is split into two apps deliberately:
 - **`realtime/`** — owns the WebSocket infrastructure only. No domain logic. No knowledge of what a "notification" is.
 - **`notifications/`** — owns the domain logic: what events exist, what messages they produce, email templates, the bell feed REST API, user preferences.
 
-They are separate because a future **`messaging/`** feature (instructor–learner chat) will also need the WebSocket infrastructure from `realtime/` — but it must not depend on `notifications/`. Keeping them separate means `messaging` can reuse `realtime` without creating circular imports.
+They are separate because the **`messaging/`** feature (instructor–learner chat, now implemented — see [17-messaging-system.md](17-messaging-system.md)) also needs the WebSocket infrastructure from `realtime/` — but it must not depend on `notifications/`. Keeping them separate lets `messaging` reuse `realtime` without circular imports.
 
 ### High-level flow
 
@@ -197,7 +214,7 @@ realtime/                              ← WebSocket infrastructure only
 └── streams/
     ├── base.py                        # BaseStreamHandler parent class
     ├── notifications_stream.py        # Handles the "notifications" stream
-    └── messaging_stream.py           # Stub for future messaging feature
+    └── messaging_stream.py           # Messaging stream handler (implemented — see 17)
 
 notifications/
 ├── __init__.py
@@ -241,7 +258,7 @@ One row per recipient per event. The bell feed queries this table.
 | Column | Type | Purpose |
 |---|---|---|
 | `recipient` | FK to User | Who this notification belongs to |
-| `event_type` | string | Which of the 21 events this is |
+| `event_type` | string | Which of the 24 events this is |
 | `title` | string | Short heading (e.g. "Assignment graded") |
 | `body` | text | One-sentence description |
 | `data` | JSON | Deep-link payload for the frontend (course_slug, submission_id, etc.) |
@@ -362,12 +379,9 @@ The moment a user's WebSocket connects and authenticates, the notification strea
 { "stream": "error",         "payload": { "detail": "Unknown stream: foo." } }
 ```
 
-### Messaging stream (stub)
+### Messaging stream
 
-`MessagingStreamHandler` is registered in `PlatformConsumer` but all its methods are empty no-ops. The wire protocol for the messaging stream is stable from day one. When the messaging feature is built:
-- Implement `on_connect`, `on_disconnect`, `on_receive` in `messaging_stream.py`.
-- Add any new channel-layer event types to `_CHANNEL_EVENT_DISPATCH` in `consumers.py`.
-- No changes needed to `PlatformConsumer` itself.
+`MessagingStreamHandler` (in `messaging_stream.py`) is registered in `PlatformConsumer` and fully implemented: it handles `send_message` / `mark_read` inbound frames and pushes `new_message` / `message_sent` / `marked_read` / `unread_summary` to clients. Its channel-layer event types are wired into `_CHANNEL_EVENT_DISPATCH` in `consumers.py`, with no changes to `PlatformConsumer` itself. See [17-messaging-system.md](17-messaging-system.md) for the full protocol.
 
 ### Adding a completely new stream in the future
 

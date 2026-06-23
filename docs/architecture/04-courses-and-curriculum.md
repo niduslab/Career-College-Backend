@@ -32,7 +32,7 @@ The top-level course entity.
 **Relations:**
 - `created_by` (FK → `User`)
 - `instructors` (M2M → `User`) — all instructors who own/edit this course
-- `partner_institutions` (M2M → `PartnerInstitutionProfile`)
+- `partner_institution` (FK → `PartnerInstitutionProfile`, nullable, `SET_NULL`) — set automatically at creation when the creator is a partner institution; never writable via the API
 - `category` (FK → `CourseCategory`)
 
 **Metadata:**
@@ -54,10 +54,11 @@ See `11-course-lifecycle.md` for the full state machine and completeness checks.
 
 A course has two instructor-related fields with different semantics:
 
-- `created_by` — the **owner**. Set once at creation, immutable via the API. Only the owner can modify the instructor list or partner institutions.
+- `created_by` — the **owner**. Set once at creation, immutable via the API. Only the owner can modify the instructor list.
 - `instructors` — **all co-authors** (M2M). Any instructor in this set can read and edit course content (sections, lectures, quizzes, assignments, videos). The owner is always a member of this set.
+- `partner_institution` — the owning institution (FK), set automatically at creation and never writable via the API. Partner-institution roster changes flow through the dedicated `institution-instructors` endpoints, not the course PATCH.
 
-Roster changes (adding/removing co-instructors, changing partner institutions) are restricted to the owner inside `NidusCourseCreateUpdateSerializer.update()`. A co-instructor PATCH that includes these fields has them silently ignored — the other fields in the payload still apply.
+Roster changes (adding/removing co-instructors) are restricted to the owner inside `NidusCourseCreateUpdateSerializer.update()`. A co-instructor PATCH that includes the `instructors` field has it silently ignored — the other fields in the payload still apply.
 
 See `13-multi-instructor-collaboration.md` for the full role table, enforcement details, and future extensions.
 

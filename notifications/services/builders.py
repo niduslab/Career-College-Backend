@@ -71,6 +71,27 @@ def _course_archived(recipient, ctx):
     )
 
 
+def _course_marked_finished(recipient, ctx):
+    return _build(
+        title='Course ready for your review',
+        body=f'{ctx["expert_name"]} marked "{ctx["course_title"]}" as finished. '
+             'Review it and submit to the platform admin, or send it back for changes.',
+        data={'course_id': ctx['course_id']},
+    )
+
+
+def _course_sent_back(recipient, ctx):
+    reason = ctx.get('rejection_reason', '')
+    body = f'{ctx["institution_name"]} sent "{ctx["course_title"]}" back for changes.'
+    if reason:
+        body += f' Reason: {reason}'
+    return _build(
+        title='Course sent back for changes',
+        body=body,
+        data={'course_slug': ctx['course_slug']},
+    )
+
+
 def _video_ready(recipient, ctx):
     return _build(
         title='Video ready',
@@ -235,6 +256,8 @@ _BUILDERS = {
     _ET.COURSE_APPROVED:         _course_approved,
     _ET.COURSE_REJECTED:         _course_rejected,
     _ET.COURSE_ARCHIVED:         _course_archived,
+    _ET.COURSE_MARKED_FINISHED:  _course_marked_finished,
+    _ET.COURSE_SENT_BACK:        _course_sent_back,
     _ET.VIDEO_READY:             _video_ready,
     _ET.VIDEO_FAILED:            _video_failed,
     _ET.INVITE_SENT:             _invite_sent,

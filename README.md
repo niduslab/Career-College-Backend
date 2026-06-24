@@ -874,6 +874,7 @@ career_college_backend/
 | [docs/api-testing/postman-messaging.md](docs/api-testing/postman-messaging.md) | Postman / wscat testing guide for the messaging REST + WS endpoints |
 | [docs/api-testing/postman-notification-system.md](docs/api-testing/postman-notification-system.md) | Postman testing guide for the notification feed + email preferences |
 | [docs/api-testing/postman-partner-institution.md](docs/api-testing/postman-partner-institution.md) | Postman testing guide for partner-institution verification, expert management, course creation + roster assignment |
+| [docs/api-testing/postman-expert-course-editing.md](docs/api-testing/postman-expert-course-editing.md) | Postman testing guide for an institution-assigned expert logging in and editing/submitting their course |
 | [CLAUDE.md](CLAUDE.md) | AI assistant coding instructions |
 
 ### Architecture (`docs/architecture/`)

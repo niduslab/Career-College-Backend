@@ -248,14 +248,19 @@ Two corollaries:
 
 | From | To | Who |
 |------|----|-----|
-| `draft` | `under_review` | Instructor (via `/submit/`) |
+| `draft` | `under_review` | **Individual** instructor (via `/submit/`) — direct to admin |
+| `draft` | `institution_review` | Expert on an **institution-owned** course (via `/finish/`) |
+| `institution_review` | `under_review` | Owning partner institution (via `/institution-review/` `action: submit`) |
+| `institution_review` | `rejected` | Owning partner institution (via `/institution-review/` `action: send_back` + `rejection_reason`) |
 | `under_review` | `published` | Admin (via `/review/` with `action: approve`) |
 | `under_review` | `rejected` | Admin (via `/review/` with `action: reject`) |
-| `rejected` | `draft` | Instructor (via `/rework/`) |
+| `rejected` | `draft` | Instructor/expert (via `/rework/`) |
 | `published` | `archived` | Instructor or Admin (via `/archive/`) |
 | `archived` | `draft` | Instructor or Admin (via `/archive/` → rework) |
 
-`draft → under_review` runs `_validate_course_completeness()`: checks title/description, at least one section, each section has content, all videos `status=ready`, all quizzes have questions with correct answers.
+**Two-stage submission for institution-owned courses** (`partner_institution` set): the expert calls `/finish/` (→ `institution_review`, content then frozen), and the institution forwards to the admin (`/institution-review/` `submit`) or returns it to the expert (`send_back`). Individual-instructor courses (no `partner_institution`) keep the direct `/submit/` → `under_review` path. `transition_to()` enforces this by ownership: leaving `draft`, an institution course may only go to `institution_review` and an individual course only to `under_review` (cross-routing → `ValidationError`). Expert `/finish/` is scoped to `instructors` (institution user → 404); `/institution-review/` is `IsVerifiedPartnerInstitution`-gated and scoped to the owning institution. See `docs/future_implementations/INSTITUTION_COURSE_SUBMISSION_FLOW.md`.
+
+Leaving `draft` (to either `under_review` or `institution_review`) runs `_validate_course_completeness()`: checks title/description, at least one section, each section has content, all videos `status=ready`, all quizzes have questions with correct answers. `institution_review` is **not** editable (content frozen, like `under_review`).
 
 **Never set `status` directly on `NidusCourse` outside of `transition_to()`.**
 

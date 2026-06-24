@@ -54,6 +54,9 @@ class ForgotPasswordView(APIView):
                 # user enumeration), so a send failure is only logged.
                 try:
                     send_otp_email_task.delay(user.pk, user.otp_code, 'password_reset')
+                    
+                    TODO: remove this line when testing is done
+                    print(f"Forgot password OTP : {user.otp_code} ")
                 except Exception as e:
                     logger.error(f'Failed to enqueue password reset OTP for user {user.id}: {e}')
         except serializers.ValidationError as exc:

@@ -82,6 +82,7 @@ class NidusCourse(models.Model):
 
     class CourseStatus(models.TextChoices):
         DRAFT = 'draft', 'Draft'
+        INSTITUTION_REVIEW = 'institution_review', 'Institution Review'
         UNDER_REVIEW = 'under_review', 'Under Review'
         PUBLISHED = 'published', 'Published'
         REJECTED = 'rejected', 'Rejected'
@@ -228,7 +229,8 @@ class NidusCourse(models.Model):
 
     # ── Status transition state machine ─────────────────────────────────────
     VALID_TRANSITIONS = {
-        'draft': ('under_review',),
+        'draft': ('under_review', 'institution_review'),
+        'institution_review': ('under_review', 'rejected'),
         'under_review': ('published', 'rejected'),
         'rejected': ('draft',),
         'published': ('archived',),
@@ -250,8 +252,25 @@ class NidusCourse(models.Model):
                 f'Allowed: {", ".join(allowed) if allowed else "none (terminal state)"}.'
             )
 
-        # ── Submission completeness check ──
-        if new_status == 'under_review':
+        # ── Ownership routing when leaving draft ──
+        # Institution-owned courses must pass through institution review first
+        # (expert /finish/); individual-instructor courses go straight to admin
+        # (/submit/). This keeps the two submission paths from crossing over.
+        if self.status == 'draft':
+            if self.partner_institution_id and new_status == 'under_review':
+                raise ValidationError(
+                    'Institution-owned courses go to institution review first. '
+                    'The expert should use /finish/ instead of /submit/.'
+                )
+            if not self.partner_institution_id and new_status == 'institution_review':
+                raise ValidationError(
+                    'Only institution-owned courses use the institution-review stage.'
+                )
+
+        # ── Submission completeness check (draft exit only) ──
+        # Runs when leaving draft for either review stage; the course is frozen
+        # afterwards, so institution_review → under_review needs no re-check.
+        if self.status == 'draft' and new_status in ('under_review', 'institution_review'):
             self._validate_course_completeness()
 
         # ── Rejection requires a reason ──

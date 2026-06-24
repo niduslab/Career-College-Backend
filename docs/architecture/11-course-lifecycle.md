@@ -19,7 +19,9 @@ This document covers the full journey of a course from first creation through ad
 
 ## State machine overview
 
-A course moves through five statuses. Every transition is guarded inside `NidusCourse.transition_to()` — no other code path changes `status`.
+A course moves through six statuses. Every transition is guarded inside `NidusCourse.transition_to()` — no other code path changes `status`.
+
+**Individual-instructor courses** (no `partner_institution`) go straight to the admin:
 
 ```
                     submit               approve
@@ -31,19 +33,40 @@ A course moves through five statuses. Every transition is guarded inside `NidusC
            rework
 ```
 
+**Institution-owned courses** (`partner_institution` set) pass through a two-stage submission — the expert finishes, the institution forwards to (or returns from) the admin:
+
+```
+            finish                  submit (institution)      approve
+  draft  ──────────►  institution_review  ──────────────►  under_review  ──────►  published
+    ▲                        │                                   │
+    │           send_back    │ (+ reason)                 reject │
+    │                        ▼                                   ▼
+    └──── rework ────────  rejected  ◄───────────────────────────┘
+```
+
 ### `VALID_TRANSITIONS` (in `courses/models.py`)
 
 ```python
 VALID_TRANSITIONS = {
-    'draft':        ('under_review',),
-    'under_review': ('published', 'rejected'),
-    'rejected':     ('draft',),
-    'published':    ('archived',),
-    'archived':     ('draft',),
+    'draft':              ('under_review', 'institution_review'),
+    'institution_review': ('under_review', 'rejected'),
+    'under_review':       ('published', 'rejected'),
+    'rejected':           ('draft',),
+    'published':          ('archived',),
+    'archived':           ('draft',),
 }
 ```
 
-Any attempt to move to a status not in this map raises `ValidationError` immediately.
+Any attempt to move to a status not in this map raises `ValidationError` immediately. **Ownership routing on draft-exit:** an institution-owned course may leave `draft` only to `institution_review` (via `/finish/`); an individual course only to `under_review` (via `/submit/`). Cross-routing raises `ValidationError`. `institution_review` is **not** editable (content frozen, like `under_review`).
+
+| Endpoint | From → To | Who |
+|----------|-----------|-----|
+| `POST {pk}/submit/` | `draft → under_review` | individual instructor (institution course → 422) |
+| `POST {pk}/finish/` | `draft → institution_review` | expert on institution course (scoped to `instructors`) |
+| `POST {pk}/institution-review/` `{submit}` | `institution_review → under_review` | owning institution (`IsVerifiedPartnerInstitution`) |
+| `POST {pk}/institution-review/` `{send_back}` | `institution_review → rejected` | owning institution (reason required) |
+| `POST {pk}/review/` | `under_review → published\|rejected` | admin |
+| `POST {pk}/rework/` | `rejected → draft` | instructor/expert |
 
 ---
 

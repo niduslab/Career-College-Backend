@@ -23,19 +23,24 @@ def get_publishable_courses() -> QuerySet[NidusCourse]:
 
 
 def get_course_sections(course: NidusCourse) -> QuerySet[CourseSection]:
-    # select_related('course') so CourseSectionSerializer.course_title doesn't N+1.
+    # select_related joins course_title + author fields to avoid N+1.
     return (
         CourseSection.objects
         .filter(course=course)
-        .select_related('course')
+        .select_related('course', 'created_by', 'last_edited_by')
         .order_by('position', 'id')
     )
 
 
 def get_section_lectures(section: CourseSection) -> QuerySet[Lecture]:
-    # position no longer lives on Lecture; fall back to stable pk ordering.
-    # Canonical curriculum order is via SectionContent.
-    return Lecture.objects.filter(section=section).prefetch_related('video_assets').order_by('id')
+    # Order by pk; canonical curriculum order is via SectionContent.
+    return (
+        Lecture.objects
+        .filter(section=section)
+        .select_related('created_by', 'last_edited_by')
+        .prefetch_related('video_assets')
+        .order_by('id')
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -52,6 +57,7 @@ def create_section_content_for_object(
     content_object,
     item_type: str,
     position: int = None,
+    created_by=None,
 ) -> SectionContent:
     if position is None:
         position = get_next_section_content_position(section)
@@ -62,6 +68,8 @@ def create_section_content_for_object(
         content_type=ct,
         object_id=content_object.pk,
         position=position,
+        created_by=created_by,
+        last_edited_by=created_by,
     )
 
 
@@ -124,7 +132,7 @@ def reorder_section_content(section_content: SectionContent, new_position: int) 
 
 
 # ---------------------------------------------------------------------------
-# Video pipeline (unchanged)
+# Video pipeline
 # ---------------------------------------------------------------------------
 
 def replace_lecture_video_and_enqueue_transcoding(lecture: Lecture, uploaded_file) -> VideoAsset:

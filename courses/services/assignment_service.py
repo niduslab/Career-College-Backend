@@ -49,6 +49,7 @@ def update_assignment(assignment_id, user, validated_data) -> Assignment:
     for field in allowed_fields:
         if field in validated_data:
             setattr(assignment, field, validated_data[field])
+    assignment.last_edited_by = user
     assignment.save()
     return assignment
 

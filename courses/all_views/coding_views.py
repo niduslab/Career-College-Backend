@@ -21,7 +21,7 @@ from courses.serializers import (
     CodingExerciseSerializer,
     CodingTestCaseSerializer,
 )
-from courses.utils import guard_editable
+from courses.utils import guard_editable, save_authored
 
 logger = logging.getLogger(__name__)
 
@@ -57,7 +57,7 @@ class CodingExerciseDetailAPIView(APIView):
                 status=status.HTTP_400_BAD_REQUEST,
             )
         try:
-            exercise = serializer.save()
+            exercise = save_authored(serializer, request.user)
         except Exception:
             logger.exception('Coding exercise update failed for user %s', request.user.id)
             return Response(

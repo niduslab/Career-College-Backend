@@ -10,6 +10,8 @@ _EVENT_TEMPLATE_MAP = {
     _ET.COURSE_SUBMITTED:        'notifications/emails/course_submitted.html',
     _ET.COURSE_APPROVED:         'notifications/emails/course_approved.html',
     _ET.COURSE_REJECTED:         'notifications/emails/course_rejected.html',
+    _ET.COURSE_MARKED_FINISHED:  'notifications/emails/course_marked_finished.html',
+    _ET.COURSE_SENT_BACK:        'notifications/emails/course_sent_back.html',
     _ET.INVITE_SENT:             'notifications/emails/invite_sent.html',
     _ET.INVITE_ACCEPTED:         'notifications/emails/invite_accepted.html',
     _ET.INVITE_DECLINED:         'notifications/emails/invite_declined.html',
@@ -17,6 +19,10 @@ _EVENT_TEMPLATE_MAP = {
     _ET.VERIFICATION_APPROVED:   'notifications/emails/verification_approved.html',
     _ET.VERIFICATION_REJECTED:   'notifications/emails/verification_rejected.html',
     _ET.VERIFICATION_ACTION_REQ: 'notifications/emails/verification_action_required.html',
+    _ET.INST_VERIFICATION_SUBMITTED:  'notifications/emails/institution_verification_submitted.html',
+    _ET.INST_VERIFICATION_APPROVED:   'notifications/emails/institution_verification_approved.html',
+    _ET.INST_VERIFICATION_REJECTED:   'notifications/emails/institution_verification_rejected.html',
+    _ET.INST_VERIFICATION_ACTION_REQ: 'notifications/emails/institution_verification_action_required.html',
 }
 
 

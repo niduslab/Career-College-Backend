@@ -10,6 +10,8 @@ class NotificationEventType(models.TextChoices):
     COURSE_APPROVED          = 'course.approved',          'Course Approved'
     COURSE_REJECTED          = 'course.rejected',          'Course Rejected'
     COURSE_ARCHIVED          = 'course.archived',          'Course Archived'
+    COURSE_MARKED_FINISHED   = 'course.marked_finished',   'Course Marked Finished'
+    COURSE_SENT_BACK         = 'course.sent_back',         'Course Sent Back'
     VIDEO_READY              = 'video.transcoding_completed', 'Video Transcoding Completed'
     VIDEO_FAILED             = 'video.transcoding_failed', 'Video Transcoding Failed'
     INVITE_SENT              = 'invite.sent',              'Invite Sent'

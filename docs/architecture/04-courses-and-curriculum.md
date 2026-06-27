@@ -76,11 +76,27 @@ Normalized 1-to-many off `NidusCourse`. Support independent autosave from a cour
 
 ## Section and curriculum models
 
+### Content authorship — `AuthoredModel`
+
+`CourseSection`, `SectionContent`, `Lecture`, `Quiz`, `Assignment`, and `CodingExercise` all inherit
+`AuthoredModel` (abstract, `courses/all_models/course_models.py`, extends `TimestampedModel`). It adds
+`created_by` and `last_edited_by` (both FK → `User`, `SET_NULL`, nullable) on top of `created_at` /
+`updated_at`. This records **which expert/instructor authored and last touched each content row** —
+the basis for partner-institution monitoring (who built what across a shared course roster).
+
+Stamping is centralised in `courses/utils.py` → `save_authored(serializer, user, **extra)`:
+`created_by` on create, `last_edited_by` on every save. The sub-row models (`QuizQuestion`,
+`QuizAnswer`, `CodingExerciseLanguageConfig`, `CodingTestCase`) are **not** authored — their parent
+already carries the attribution. The read serializers expose both fields as a nested
+`InstructorBriefSerializer` (`id`, `full_name`, `email`); list loaders `select_related` them to avoid
+N+1. **New authored content models must inherit `AuthoredModel`, not `TimestampedModel`.**
+
 ### `CourseSection`
 
 - `course` (FK → `NidusCourse`)
 - `title`, `description`
 - `position` — integer ordering within the course
+- `created_by`, `last_edited_by` (via `AuthoredModel`)
 - **Unique constraint:** `(course, position)`
 
 ### `SectionContent` — the curriculum backbone

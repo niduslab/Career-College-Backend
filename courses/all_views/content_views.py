@@ -1,4 +1,5 @@
 from django.db import IntegrityError, transaction
+from django.db.models import Q
 from django.shortcuts import get_object_or_404
 from rest_framework import status
 from rest_framework.parsers import FormParser, JSONParser, MultiPartParser
@@ -45,11 +46,11 @@ from courses.services import (
     get_section_lectures,
     reorder_section_content,
 )
-from courses.utils import guard_editable
+from courses.utils import guard_editable, save_authored
 
 
 # =============================================================================
-# Section views (unchanged)
+# Section views
 # =============================================================================
 
 class CourseSectionListAPIView(APIView):
@@ -86,7 +87,7 @@ class CourseSectionCreateAPIView(APIView):
                 status=status.HTTP_400_BAD_REQUEST,
             )
         try:
-            section = serializer.save(course=course)
+            section = save_authored(serializer, request.user, course=course)
         except IntegrityError:
             return Response(
                 {'success': False, 'message': 'A section already exists at this position.'},
@@ -123,7 +124,7 @@ class CourseSectionDetailAPIView(APIView):
                 status=status.HTTP_400_BAD_REQUEST,
             )
         try:
-            section = serializer.save()
+            section = save_authored(serializer, request.user)
         except IntegrityError:
             return Response(
                 {'success': False, 'message': 'A section already exists at this position.'},
@@ -144,7 +145,7 @@ class CourseSectionDetailAPIView(APIView):
                 status=status.HTTP_400_BAD_REQUEST,
             )
         try:
-            section = serializer.save()
+            section = save_authored(serializer, request.user)
         except IntegrityError:
             return Response(
                 {'success': False, 'message': 'A section already exists at this position.'},
@@ -189,11 +190,10 @@ class LectureDetailAPIView(APIView):
     parser_classes = [JSONParser, FormParser, MultiPartParser]
 
     def _get_owned_lecture(self, request, lecture_id):
-        return get_object_or_404(
-            Lecture.objects.select_related('section__course').prefetch_related('video_assets'),
-            pk=lecture_id,
-            section__course__instructors=request.user,
+        queryset = Lecture.objects.select_related('section__course').prefetch_related('video_assets').filter(
+            Q(section__course__instructors=request.user) | Q(section__course__created_by=request.user)
         )
+        return get_object_or_404(queryset, pk=lecture_id)
 
     def get(self, request, lecture_id):
         lecture = self._get_owned_lecture(request, lecture_id)
@@ -211,7 +211,7 @@ class LectureDetailAPIView(APIView):
                 status=status.HTTP_400_BAD_REQUEST,
             )
         try:
-            lecture = serializer.save()
+            lecture = save_authored(serializer, request.user)
         except ValueError as exc:
             return Response({'success': False, 'message': str(exc)}, status=status.HTTP_400_BAD_REQUEST)
         return Response(
@@ -231,7 +231,7 @@ class LectureDetailAPIView(APIView):
                 status=status.HTTP_400_BAD_REQUEST,
             )
         try:
-            lecture = serializer.save()
+            lecture = save_authored(serializer, request.user)
         except ValueError as exc:
             return Response({'success': False, 'message': str(exc)}, status=status.HTTP_400_BAD_REQUEST)
         return Response(
@@ -272,6 +272,7 @@ class SectionContentListCreateAPIView(APIView):
         contents = list(
             SectionContent.objects
             .filter(section=section)
+            .select_related('created_by', 'last_edited_by')
             .order_by('position', 'id')
         )
 
@@ -359,9 +360,10 @@ class SectionContentListCreateAPIView(APIView):
             )
         try:
             with transaction.atomic():
-                lecture = serializer.save()
+                lecture = save_authored(serializer, request.user)
                 sc = create_section_content_for_object(
-                    section, lecture, SectionContent.ItemType.LECTURE, position
+                    section, lecture, SectionContent.ItemType.LECTURE, position,
+                    created_by=request.user,
                 )
         except IntegrityError:
             if position is not None and SectionContent.objects.filter(section=section, position=position).exists():
@@ -396,9 +398,10 @@ class SectionContentListCreateAPIView(APIView):
             )
         try:
             with transaction.atomic():
-                quiz = serializer.save()
+                quiz = save_authored(serializer, request.user)
                 sc = create_section_content_for_object(
-                    section, quiz, SectionContent.ItemType.QUIZ, position
+                    section, quiz, SectionContent.ItemType.QUIZ, position,
+                    created_by=request.user,
                 )
         except IntegrityError:
             return Response(
@@ -426,9 +429,15 @@ class SectionContentListCreateAPIView(APIView):
             )
         try:
             with transaction.atomic():
-                assignment = Assignment.objects.create(section=section, **serializer.validated_data)
+                assignment = Assignment.objects.create(
+                    section=section,
+                    created_by=request.user,
+                    last_edited_by=request.user,
+                    **serializer.validated_data,
+                )
                 sc = create_section_content_for_object(
-                    section, assignment, SectionContent.ItemType.ASSIGNMENT, position
+                    section, assignment, SectionContent.ItemType.ASSIGNMENT, position,
+                    created_by=request.user,
                 )
         except IntegrityError:
             return Response(
@@ -461,9 +470,15 @@ class SectionContentListCreateAPIView(APIView):
             )
         try:
             with transaction.atomic():
-                exercise = CodingExercise.objects.create(section=section, **serializer.validated_data)
+                exercise = CodingExercise.objects.create(
+                    section=section,
+                    created_by=request.user,
+                    last_edited_by=request.user,
+                    **serializer.validated_data,
+                )
                 sc = create_section_content_for_object(
-                    section, exercise, SectionContent.ItemType.CODING, position
+                    section, exercise, SectionContent.ItemType.CODING, position,
+                    created_by=request.user,
                 )
         except IntegrityError:
             return Response(
@@ -491,11 +506,10 @@ class SectionContentReorderAPIView(APIView):
     parser_classes = [JSONParser, FormParser, MultiPartParser]
 
     def _get_owned_content(self, request, content_id):
-        return get_object_or_404(
-            SectionContent.objects.select_related('section__course'),
-            pk=content_id,
-            section__course__instructors=request.user,
+        queryset = SectionContent.objects.select_related('section__course').filter(
+            Q(section__course__instructors=request.user) | Q(section__course__created_by=request.user)
         )
+        return get_object_or_404(queryset, pk=content_id)
 
     def patch(self, request, content_id):
         sc = self._get_owned_content(request, content_id)
@@ -562,7 +576,7 @@ class QuizDetailAPIView(APIView):
                 {'success': False, 'message': 'Validation failed.', 'errors': serializer.errors},
                 status=status.HTTP_400_BAD_REQUEST,
             )
-        quiz = serializer.save()
+        quiz = save_authored(serializer, request.user)
         return Response(
             {'success': True, 'message': 'Quiz updated successfully.', 'data': QuizSerializer(quiz).data},
             status=status.HTTP_200_OK,
@@ -713,11 +727,11 @@ class QuizAnswerDetailAPIView(APIView):
     parser_classes = [JSONParser, FormParser, MultiPartParser]
 
     def _get_owned_answer(self, request, answer_id):
-        return get_object_or_404(
-            QuizAnswer.objects.select_related('question__quiz__section__course'),
-            pk=answer_id,
-            question__quiz__section__course__instructors=request.user,
+        queryset = QuizAnswer.objects.select_related('question__quiz__section__course').filter(
+            Q(question__quiz__section__course__instructors=request.user)
+            | Q(question__quiz__section__course__created_by=request.user)
         )
+        return get_object_or_404(queryset, pk=answer_id)
 
     def get(self, request, answer_id):
         answer = self._get_owned_answer(request, answer_id)
@@ -748,7 +762,7 @@ class QuizAnswerDetailAPIView(APIView):
 
 
 # =============================================================================
-# Course item base classes (unchanged)
+# Course item base classes
 # =============================================================================
 
 class CourseItemListCreateBaseAPIView(APIView):

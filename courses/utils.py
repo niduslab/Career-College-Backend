@@ -18,6 +18,18 @@ def guard_editable(course):
     return None
 
 
+def save_authored(serializer, user, **extra):
+    """Save an AuthoredModel via its serializer, stamping authorship.
+
+    `created_by` on create (no bound instance), `last_edited_by` on every save.
+    Extra kwargs pass through to `serializer.save()`.
+    """
+    if serializer.instance is None:
+        extra['created_by'] = user
+    extra['last_edited_by'] = user
+    return serializer.save(**extra)
+
+
 def guard_owner(course, user):
     """Return a 403 Response if user is not the course owner, else None."""
     if course.created_by != user:

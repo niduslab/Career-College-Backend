@@ -29,6 +29,8 @@ from courses.views import (
     CodingTestCaseListCreateAPIView,
     CourseAdminReviewView,
     CourseArchiveView,
+    CourseInstitutionReviewView,
+    CourseMarkFinishedView,
     CourseRestoreView,
     CourseAudienceDetailAPIView,
     CourseAudienceListCreateAPIView,
@@ -155,6 +157,8 @@ urlpatterns = [
     # Course status transitions
     # -------------------------------------------------------------------------
     path('<int:pk>/submit/', CourseSubmitForReviewView.as_view(), name='course-submit'),
+    path('<int:pk>/finish/', CourseMarkFinishedView.as_view(), name='course-finish'),
+    path('<int:pk>/institution-review/', CourseInstitutionReviewView.as_view(), name='course-institution-review'),
     path('<int:pk>/review/', CourseAdminReviewView.as_view(), name='course-review'),
     path('<int:pk>/rework/', CourseReworkView.as_view(), name='course-rework'),
     path('<int:pk>/archive/', CourseArchiveView.as_view(), name='course-archive'),

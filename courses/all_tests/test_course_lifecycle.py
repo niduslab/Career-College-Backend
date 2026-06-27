@@ -127,6 +127,27 @@ class CourseLifecycleTestBase(APITestCase):
 # CourseSubmitTests
 # ---------------------------------------------------------------------------
 
+class CourseSectionAccessTests(APITestCase):
+    def test_course_creator_can_list_sections_without_instructor_membership(self):
+        user = User.objects.create_user(
+            email='creator@example.com',
+            password='pw12345!',
+            full_name='Creator User',
+            user_type='instructor',
+            is_email_verified=True,
+        )
+        course = NidusCourse.objects.create(created_by=user, title='Owned Course', description='A course owned by creator.')
+
+        self.client.force_authenticate(user=user)
+        url = reverse('courses:section-list', kwargs={'course_id': course.pk})
+
+        response = self.client.get(url)
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertTrue(response.data['success'])
+        self.assertEqual(response.data['data'], [])
+
+
 class CourseSubmitTests(CourseLifecycleTestBase):
     """POST /{pk}/submit/ — draft → under_review."""
 

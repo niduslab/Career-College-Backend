@@ -72,6 +72,14 @@ python manage.py reindex_section_content_positions --dry-run
 
 The `SectionContent` model (in `courses/`) is the **single source of truth for ordering** within a section. It holds a `GenericForeignKey` that points to a `Lecture`, `Quiz`, or `CodingExercise`. When adding new content types, create the model and then create a `SectionContent` row linking it into the section — do not add ordering directly to content models. Each content model must have a `GenericRelation` to `SectionContent` so that deleting the object cascades and removes its curriculum slot automatically. Reordering logic lives in `courses/services/section_service.py` → `reorder_section_content()`.
 
+### Content Authorship: AuthoredModel
+
+`AuthoredModel` (abstract, in `courses/all_models/course_models.py`, extends `TimestampedModel`) adds `created_by` + `last_edited_by` (both FK→User, `SET_NULL`, nullable, `related_name='+'`) to every content model an expert/instructor authors: `CourseSection`, `SectionContent`, `Lecture`, `Quiz`, `Assignment`, `CodingExercise`. Powers partner-institution monitoring — which expert authored / last touched a content row (SRS 7.2.1, 7.7.3). **New authored content models must inherit `AuthoredModel`, not `TimestampedModel`.**
+
+Stamping is centralised in `courses/utils.py` → `save_authored(serializer, user, **extra)`: sets `created_by` only on create (no bound instance), `last_edited_by` on every save, and passes extra kwargs through to `serializer.save()`. Every content create/update view path uses it. Non-serializer create paths (`Assignment`/`CodingExercise` `objects.create`, `create_section_content_for_object(..., created_by=user)`, `assignment_service.update_assignment`) set the fields directly. `QuizQuestion`, `QuizAnswer`, `CodingExerciseLanguageConfig`, `CodingTestCase` are **not** `AuthoredModel` (sub-rows of an already-authored parent). Never trust a client-supplied author — always stamp from `request.user`.
+
+The read serializers (`CourseSectionSerializer`, `LectureSerializer`, `SectionContentSerializer`, `QuizSerializer`, `CodingExerciseSerializer`, `AssignmentSerializer`) expose `created_by` + `last_edited_by` as nested `InstructorBriefSerializer` (`id`, `full_name`, `email`), read-only. List loaders `select_related('created_by', 'last_edited_by')` (`get_course_sections`, `get_section_lectures`, and the `SectionContent` list query) so the author fields don't N+1.
+
 ### Course Detail Endpoints
 
 Four distinct course detail surfaces, split by audience and concern. Do not collapse them into one conditional endpoint:

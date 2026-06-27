@@ -131,6 +131,8 @@ The `dispatch()` function catches all exceptions and logs them. It never propaga
 | Your institution verification was rejected | After admin rejects | ✓ | ✓ |
 | Admin requested more information (institution) | After admin sets action_required | ✓ | ✓ |
 | You were onboarded as an expert | After an institution provisions your account | ✓ | — (credentials sent in a separate email) |
+| An expert marked your institution's course as finished | After expert calls `/finish/` (`COURSE_MARKED_FINISHED`) | ✓ | ✓ (institution gets this) |
+| Your institution sent a course back for changes | After institution `/institution-review/` `send_back` (`COURSE_SENT_BACK`) | ✓ | ✓ (expert gets this) |
 
 ### Messaging events
 
@@ -239,6 +241,8 @@ notifications/
     ├── course_submitted.html
     ├── course_approved.html
     ├── course_rejected.html
+    ├── course_marked_finished.html
+    ├── course_sent_back.html
     ├── invite_sent.html
     ├── invite_accepted.html
     ├── invite_declined.html
@@ -246,6 +250,10 @@ notifications/
     ├── verification_approved.html
     ├── verification_rejected.html
     ├── verification_action_required.html
+    ├── institution_verification_submitted.html
+    ├── institution_verification_approved.html
+    ├── institution_verification_rejected.html
+    ├── institution_verification_action_required.html
     └── video_transcoding_failed.html
 ```
 
@@ -448,6 +456,8 @@ celery -A career_college_backend worker -Q notifications -c 4 -l info
 
 All email templates extend `base_notification.html` which provides the Career College header, footer, and branding. Each event has its own template file under `notifications/templates/notifications/emails/`.
 
+> **An event only emails if it is registered in `_EVENT_TEMPLATE_MAP` (`notifications/email_utils.py`) AND has its HTML template file.** If the map entry is missing, `render_notification_email()` returns `(None, None, None)` and `send_notification_email_task` logs `no template for event_type=…, skipping` then exits — the bell feed + WS push still fire, so a missing template is silent. Registering a new event that should email therefore takes **four** touches: enum (`models.py`), builder (`builders.py`), category (`preference_service.py`), and template (`email_utils.py` map + HTML file). Events that are intentionally WS-only (see table above) simply have no map entry.
+
 ### Events that send email vs. WS-only
 
 | Email + WS | WS only (no email) |
@@ -457,7 +467,9 @@ All email templates extend `base_notification.html` which provides the Career Co
 | course.submitted_for_review | video.transcoding_completed |
 | course.approved | video.transcoding_failed |
 | course.rejected | review.received |
-| invite.sent | learner.enrolled |
+| course.marked_finished | learner.enrolled |
+| course.sent_back | |
+| invite.sent | |
 | invite.accepted | |
 | invite.declined | |
 | verification.submitted | |

@@ -5,14 +5,12 @@ from django.db import models
 from django.db.models import Q
 
 from courses.all_models.content_models import SectionContent
-from courses.all_models.course_models import CourseSection, TimestampedModel
+from courses.all_models.course_models import AuthoredModel, CourseSection, TimestampedModel
 
 
-# ============================================================
-# Coding exercises — instructor-authored programming problems 
-# ============================================================
+# Coding exercises — instructor-authored programming problems
 
-class CodingExercise(TimestampedModel):
+class CodingExercise(AuthoredModel):
     """Coding problem attached to a section; ordered via SectionContent."""
 
     class Difficulty(models.TextChoices):
@@ -122,11 +120,9 @@ class CodingTestCase(models.Model):
         return f'TestCase {self.position} for exercise {self.exercise_id}'
 
 
-# =============================================================================
-# NEW: Quiz system — MCQ-based assessments integrated via SectionContent
-# =============================================================================
+# Quiz system — MCQ-based assessments via SectionContent
 
-class Quiz(TimestampedModel):
+class Quiz(AuthoredModel):
     """Practice quiz belonging to a section."""
 
     section = models.ForeignKey(
@@ -246,18 +242,15 @@ class QuizAnswer(models.Model):
         return f'{self.answer_text}{marker}'
 
 
-# =============================================================================
-# Quiz attempts — learner submission records for the Phase-2 consumption surface.
-# Each call to POST /api/v1/courses/learn/quizzes/{id}/submit/ creates a new
-# QuizAttempt with one QuizAttemptAnswer per question in the quiz. The
-# `is_correct` flag on QuizAttemptAnswer is denormalized at submit time so
-# that re-rendering an old attempt's verdict doesn't depend on the answer
-# key still matching — instructor edits to QuizAnswer.is_correct after a
-# learner has attempted the quiz won't retroactively rewrite the attempt.
-# =============================================================================
+# Quiz attempts — learner submission records.
 
 class QuizAttempt(TimestampedModel):
-    """A single learner's submission of a quiz."""
+    """A learner's submission of a quiz.
+
+    Each submit creates a new attempt + one QuizAttemptAnswer per question;
+    `is_correct` is denormalized onto the answer row at submit time so later
+    answer-key edits don't rewrite historical verdicts.
+    """
 
     user = models.ForeignKey(
         settings.AUTH_USER_MODEL,
@@ -330,12 +323,9 @@ class QuizAttemptAnswer(models.Model):
         return f'Attempt {self.attempt_id} Q{self.question_id} [{verdict}]'
 
 
-# =============================================================================
-# Assignments — instructor-authored open-ended questions with model answers.
-# Ordered via SectionContent like Lecture / Quiz / CodingExercise.
-# =============================================================================
+# Assignments — instructor-authored open-ended questions, ordered via SectionContent.
 
-class Assignment(TimestampedModel):
+class Assignment(AuthoredModel):
     """Open-ended assignment attached to a section; ordered via SectionContent."""
 
     section = models.ForeignKey(
@@ -346,10 +336,6 @@ class Assignment(TimestampedModel):
     title = models.CharField(max_length=255)
     description = models.TextField(blank=True, default='')
     instructions = models.TextField(blank=True, default='')
-    # total_score is the instructor-declared "this assignment is worth N points"
-    # value. It's independent of sum(question.points) — the questions are a
-    # sub-allocation guide, but total_score is the authoritative denominator
-    # the learner sees and the value passing_score is measured against.
     total_score = models.PositiveIntegerField(default=0)
     passing_score = models.PositiveIntegerField(default=0)
     section_content = GenericRelation(
@@ -417,30 +403,16 @@ class AssignmentQuestion(models.Model):
         return f'Q{self.position}: {self.question_text[:80]}'
 
 
-# =============================================================================
 # Assignment submissions — learner attempts at an assignment.
-#
-# Submission flow (Phase-2 learner consumption):
-#   1. Learner POSTs answers to /learn/assignments/<id>/submit/.
-#   2. Service creates an AssignmentSubmission(status=submitted) plus one
-#      AssignmentSubmissionAnswer per question, copying question.rubric and
-#      question.points into the answer row as a frozen snapshot.
-#   3. transaction.on_commit dispatches grade_assignment_submission_task to
-#      Celery; the task transitions status submitted -> grading, evaluates
-#      each answer against its rubric_snapshot, and ends in passed | failed
-#      | grading_failed.
-#   4. recalculate_progress fires (via on_commit inside the task) only when
-#      the final status is passed.
-#
-# The rubric_snapshot + per-criterion result fields make historical
-# submissions immune to later edits of AssignmentQuestion.rubric or
-# AssignmentQuestion.points -- mirrors how QuizAttemptAnswer.is_correct
-# denormalizes the live answer key.
-# =============================================================================
-
 
 class AssignmentSubmission(TimestampedModel):
-    """A single learner's submission of an Assignment."""
+    """A learner's submission of an Assignment.
+
+    Graded out-of-band by grade_assignment_submission_task: submitted -> grading
+    -> passed | failed | grading_failed. Answer rows snapshot rubric + points so
+    historical submissions survive later question edits. See
+    docs/architecture in CLAUDE.md (Learner Consumption Endpoints).
+    """
 
     class Status(models.TextChoices):
         SUBMITTED = 'submitted', 'Submitted'
@@ -484,10 +456,6 @@ class AssignmentSubmission(TimestampedModel):
             models.Index(fields=['assignment', 'status'], name='idx_asub_assign_status'),
         ]
         constraints = [
-            # One in-flight submission per (user, assignment). Postgres-only;
-            # SQLite silently ignores partial conditions. Service layer also
-            # checks .exists() before INSERT as belt-and-braces for non-prod
-            # environments running on SQLite.
             models.UniqueConstraint(
                 fields=['user', 'assignment'],
                 condition=Q(status__in=['submitted', 'grading']),
@@ -546,37 +514,14 @@ class AssignmentSubmissionAnswer(models.Model):
         )
 
 
-# =============================================================================
 # Coding submissions — learner attempts at a CodingExercise.
-#
-# Two endpoints feed code into execution:
-#   - POST /learn/coding-exercises/<id>/run/   (transient; result lives in
-#     the Celery result backend; visible test cases only)
-#   - POST /learn/coding-exercises/<id>/submit/  (persisted as the rows below;
-#     every test case runs; hidden test data is redacted at the serializer)
-#
-# Submit flow:
-#   1. Service creates a CodingSubmission(status=queued) snapshotting
-#      total_tests, then dispatches evaluate_coding_submission_task via
-#      transaction.on_commit.
-#   2. Celery task transitions queued -> grading, calls the CodeRunner which
-#      executes EVERY test case inside a SINGLE Docker container (the "one
-#      container per submission" optimisation — see docs/comparison.md §17),
-#      writes one CodingSubmissionTestResult per test case, then transitions
-#      to passed | failed | error.
-#   3. recalculate_progress fires (via on_commit inside the task) only when
-#      the final status is passed.
-#
-# Test-row fields snapshot input_data / expected_output / actual_output AND
-# is_hidden so:
-#   - the redaction serializer never re-reads the underlying CodingTestCase
-#     (which may have been edited or deleted),
-#   - historical results survive test-case lifecycle changes.
-# =============================================================================
-
 
 class CodingSubmission(TimestampedModel):
-    """A single learner's submission of a CodingExercise."""
+    """A learner's persisted submission of a CodingExercise.
+
+    Graded out-of-band by evaluate_coding_submission_task: queued -> grading ->
+    passed | failed | error. See docs/architecture/09-coding-exercises.md.
+    """
 
     class Status(models.TextChoices):
         QUEUED = 'queued', 'Queued'

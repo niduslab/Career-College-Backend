@@ -8,7 +8,7 @@ from django.core.exceptions import ValidationError
 from django.db import models
 
 from core.validators import validate_video_file
-from courses.all_models.course_models import CourseSection, TimestampedModel
+from courses.all_models.course_models import AuthoredModel, CourseSection, TimestampedModel
 
 
 def video_asset_upload_path(instance, filename):
@@ -35,11 +35,9 @@ def video_asset_upload_path(instance, filename):
 video_asset_upload_path.__module__ = 'courses.models'
 
 
-# =============================================================================
-# NEW: SectionContent — single ordering layer for all mixed content in a section
-# =============================================================================
+# SectionContent — single ordering layer for all mixed content in a section
 
-class SectionContent(TimestampedModel):
+class SectionContent(AuthoredModel):
     """
     Ordered slot linking a CourseSection to any content item (Lecture, Quiz, etc.).
     Owns the position/ordering concern so that Lecture, Quiz, and future content
@@ -99,11 +97,9 @@ class SectionContent(TimestampedModel):
         return f'Section {self.section_id} @ position {self.position} ({self.item_type})'
 
 
-# =============================================================================
-# MODIFIED: Lecture — position removed; ordering now delegated to SectionContent
-# =============================================================================
+# Lecture — ordering delegated to SectionContent
 
-class Lecture(TimestampedModel):
+class Lecture(AuthoredModel):
     """Content item inside a section. Supports video and article lectures."""
 
     class LectureType(models.TextChoices):
@@ -116,7 +112,6 @@ class Lecture(TimestampedModel):
         related_name='lectures',
     )
     title = models.CharField(max_length=255)
-    # position removed — ordering is owned by SectionContent
     lecture_type = models.CharField(
         max_length=20,
         choices=LectureType.choices,
@@ -129,10 +124,7 @@ class Lecture(TimestampedModel):
     stream_master_playlist = models.CharField(max_length=500, blank=True, default='')
     stream_renditions = models.JSONField(default=list, blank=True)
     transcoding_error = models.TextField(blank=True, default='')
-    # Marketing flag: when True, the lecture's video playlist is exposed in the
-    # public catalog detail so unenrolled visitors can preview it before buying.
     is_preview = models.BooleanField(default=False, db_index=True)
-    # Cascade-deletes SectionContent rows when this lecture is deleted.
     section_content = GenericRelation(
         SectionContent,
         content_type_field='content_type',
@@ -144,10 +136,8 @@ class Lecture(TimestampedModel):
         db_table = 'lectures'
         verbose_name = 'Lecture'
         verbose_name_plural = 'Lectures'
-        # position dropped from ordering; SectionContent.position is authoritative
         ordering = ['section_id', 'id']
         constraints = [
-            # uniq_lecture_section_position removed alongside the position field
             models.CheckConstraint(
                 check=(
                     (
@@ -163,7 +153,6 @@ class Lecture(TimestampedModel):
             ),
         ]
         indexes = [
-            # idx_lecture_section_position removed alongside the position field
             models.Index(fields=['lecture_type', 'section'], name='idx_lecture_type_section'),
         ]
 

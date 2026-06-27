@@ -1,5 +1,6 @@
 from rest_framework import serializers
 
+from courses.all_serializers.course_serializers import InstructorBriefSerializer
 from courses.models import (
     CourseSection,
     Lecture,
@@ -50,20 +51,22 @@ class VideoAssetSerializer(serializers.ModelSerializer):
 
 
 # ---------------------------------------------------------------------------
-# Section serializers (unchanged)
+# Section serializers
 # ---------------------------------------------------------------------------
 
 class CourseSectionSerializer(serializers.ModelSerializer):
     course_id = serializers.IntegerField(read_only=True)
     course_title = serializers.CharField(source='course.title', read_only=True)
+    created_by = InstructorBriefSerializer(read_only=True)
+    last_edited_by = InstructorBriefSerializer(read_only=True)
 
     class Meta:
         model = CourseSection
         fields = [
             'id', 'course_id', 'course_title', 'title', 'description',
-            'position', 'created_at', 'updated_at',
+            'position', 'created_by', 'last_edited_by', 'created_at', 'updated_at',
         ]
-        read_only_fields = ['id', 'course_id', 'course_title', 'created_at', 'updated_at']
+        read_only_fields = ['id', 'course_id', 'course_title', 'created_by', 'last_edited_by', 'created_at', 'updated_at']
 
 
 class CourseSectionCreateUpdateSerializer(serializers.ModelSerializer):
@@ -87,6 +90,8 @@ class LectureSerializer(serializers.ModelSerializer):
     stream_master_playlist = serializers.SerializerMethodField()
     stream_renditions = serializers.SerializerMethodField()
     active_video_asset = serializers.SerializerMethodField()
+    created_by = InstructorBriefSerializer(read_only=True)
+    last_edited_by = InstructorBriefSerializer(read_only=True)
 
     class Meta:
         model = Lecture
@@ -94,7 +99,7 @@ class LectureSerializer(serializers.ModelSerializer):
             'id', 'section_id', 'title',
             'lecture_type', 'article_content', 'is_preview',
             'stream_master_playlist', 'stream_renditions', 'transcoding_error',
-            'active_video_asset', 'created_at', 'updated_at',
+            'active_video_asset', 'created_by', 'last_edited_by', 'created_at', 'updated_at',
         ]
         read_only_fields = fields
 
@@ -189,10 +194,15 @@ class LectureCreateUpdateSerializer(serializers.ModelSerializer):
 
 class SectionContentSerializer(serializers.ModelSerializer):
     content = serializers.SerializerMethodField()
+    created_by = InstructorBriefSerializer(read_only=True)
+    last_edited_by = InstructorBriefSerializer(read_only=True)
 
     class Meta:
         model = SectionContent
-        fields = ['id', 'section', 'item_type', 'object_id', 'position', 'content', 'created_at', 'updated_at']
+        fields = [
+            'id', 'section', 'item_type', 'object_id', 'position', 'content',
+            'created_by', 'last_edited_by', 'created_at', 'updated_at',
+        ]
         read_only_fields = fields
 
     def get_content(self, obj):

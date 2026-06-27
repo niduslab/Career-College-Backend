@@ -2,6 +2,7 @@ import re
 
 from rest_framework import serializers
 
+from courses.all_serializers.course_serializers import InstructorBriefSerializer
 from courses.models import (
     Assignment,
     AssignmentQuestion,
@@ -15,8 +16,6 @@ from courses.models import (
 )
 
 
-# Criterion type -> shape contract. Each entry is (value_validator,
-# describing what `value` must be). Adding a new criterion type is
 # additive: add an entry here AND a matcher in RubricGrader.
 _RUBRIC_CRITERION_VALUE_VALIDATORS = {
     'keyword': lambda v: isinstance(v, str) and bool(v.strip()),
@@ -88,13 +87,15 @@ def _validate_rubric_criteria(rubric, expected_points_sum):
 class QuizSerializer(serializers.ModelSerializer):
     section_id = serializers.IntegerField(read_only=True)
     question_count = serializers.SerializerMethodField()
+    created_by = InstructorBriefSerializer(read_only=True)
+    last_edited_by = InstructorBriefSerializer(read_only=True)
 
     class Meta:
         model = Quiz
         fields = [
             'id', 'section_id', 'title', 'description',
             'question_count',
-            'created_at', 'updated_at',
+            'created_by', 'last_edited_by', 'created_at', 'updated_at',
         ]
         read_only_fields = fields
 
@@ -251,13 +252,15 @@ class CodingExerciseSerializer(serializers.ModelSerializer):
     section_id = serializers.IntegerField(read_only=True)
     language_configs = CodingExerciseLanguageConfigSerializer(many=True, read_only=True)
     test_cases = CodingTestCaseSerializer(many=True, read_only=True)
+    created_by = InstructorBriefSerializer(read_only=True)
+    last_edited_by = InstructorBriefSerializer(read_only=True)
 
     class Meta:
         model = CodingExercise
         fields = [
             'id', 'section_id', 'title', 'description', 'problem_statement',
             'difficulty', 'default_language', 'supported_languages', 'time_limit_ms',
-            'language_configs', 'test_cases', 'created_at', 'updated_at',
+            'language_configs', 'test_cases', 'created_by', 'last_edited_by', 'created_at', 'updated_at',
         ]
         read_only_fields = fields
 
@@ -375,13 +378,15 @@ class AssignmentSerializer(serializers.ModelSerializer):
     # "you've allocated X of Y declared points to questions." Distinct from
     # `total_score` (the instructor-declared total worth).
     max_score = serializers.SerializerMethodField()
+    created_by = InstructorBriefSerializer(read_only=True)
+    last_edited_by = InstructorBriefSerializer(read_only=True)
 
     class Meta:
         model = Assignment
         fields = [
             'id', 'section_id', 'title', 'description', 'instructions',
             'total_score', 'passing_score', 'max_score', 'questions',
-            'created_at', 'updated_at',
+            'created_by', 'last_edited_by', 'created_at', 'updated_at',
         ]
         read_only_fields = fields
 

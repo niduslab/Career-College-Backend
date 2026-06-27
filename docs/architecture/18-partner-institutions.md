@@ -267,6 +267,18 @@ endpoints — `Q(instructors=user) | Q(created_by=user)` already covers them.
 
 `InstitutionCourseError(message, http_status)` mirrors `InviteError` / `ExpertError`.
 
+### Content authorship (monitoring)
+
+Because several experts share one course roster, every content row records who built it. All authored
+content models (`CourseSection`, `SectionContent`, `Lecture`, `Quiz`, `Assignment`, `CodingExercise`)
+inherit `AuthoredModel` → `created_by` + `last_edited_by` (see
+[04-courses-and-curriculum.md](04-courses-and-curriculum.md#content-authorship--authoredmodel)). The
+read serializers expose both as nested `InstructorBriefSerializer`, so an institution can see which
+expert authored / last edited each item — the per-row basis for SRS §7.2.1 "monitor expert course
+creation activity". A planned institution-scoped rollup endpoint
+([EXPERT_CONTENT_ACTIVITY_ROLLUP.md](../future_implementations/EXPERT_CONTENT_ACTIVITY_ROLLUP.md))
+will aggregate these into per-expert content counts.
+
 ### Endpoints
 
 Gated `IsVerifiedPartnerInstitution`; numeric pk → 404 on no-access.

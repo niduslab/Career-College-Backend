@@ -248,6 +248,22 @@ def _message_received(recipient, ctx):
     )
 
 
+def _webinar_published(recipient, ctx):
+    return _build(
+        title='Webinar published',
+        body=f'"{ctx["webinar_title"]}" is now published and live in the catalog.',
+        data={'webinar_slug': ctx['webinar_slug']},
+    )
+
+
+def _webinar_registered(recipient, ctx):
+    return _build(
+        title=f'Registered for {ctx["webinar_title"]}',
+        body=f'You are registered for "{ctx["webinar_title"]}". We will remind you before it starts.',
+        data={'webinar_slug': ctx['webinar_slug']},
+    )
+
+
 _BUILDERS = {
     _ET.ENROLLMENT_CREATED:      _enrollment_created,
     _ET.LECTURE_COMPLETED:       _lecture_completed,
@@ -275,6 +291,8 @@ _BUILDERS = {
     _ET.INST_VERIFICATION_ACTION_REQ: _inst_verification_action_required,
     _ET.EXPERT_ONBOARDED:        _expert_onboarded,
     _ET.MESSAGE_RECEIVED:        _message_received,
+    _ET.WEBINAR_PUBLISHED:       _webinar_published,
+    _ET.WEBINAR_REGISTERED:      _webinar_registered,
 }
 
 

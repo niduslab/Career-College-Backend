@@ -10,6 +10,7 @@ urlpatterns = [
     path('api/v1/courses/', include('courses.urls', namespace='courses')),
     path('api/v1/notifications/', include('notifications.urls', namespace='notifications')),
     path('api/v1/messaging/', include('messaging.urls', namespace='messaging')),
+    path('api/v1/webinars/', include('webinars.urls', namespace='webinars')),
 ]
 
 if settings.DEBUG:

@@ -115,7 +115,9 @@ SIMPLE_JWT = {
 
 Token delivery: JSON response body **and** optionally HttpOnly cookies. Cookie helpers are in
 `authentication/utils/cookie_helpers.py`. Set `JWT_COOKIE_SECURE=False` in `.env` for local
-HTTP development.
+HTTP development. Cookies are read back on protected requests by `CookieJWTAuthentication`
+(`authentication/authentication.py`), registered ahead of the header-based `JWTAuthentication`
+so browser clients authenticate from the `access_token` cookie without an `Authorization` header.
 
 ---
 
@@ -189,7 +191,8 @@ logger.exception("Unexpected error during quiz submission")  # includes tracebac
 ```python
 REST_FRAMEWORK = {
     'DEFAULT_AUTHENTICATION_CLASSES': [
-        'rest_framework_simplejwt.authentication.JWTAuthentication',
+        'authentication.authentication.CookieJWTAuthentication',   # reads HttpOnly access_token cookie
+        'rest_framework_simplejwt.authentication.JWTAuthentication',  # header (Bearer) — Postman/API clients
     ],
     'DEFAULT_PERMISSION_CLASSES': [
         'rest_framework.permissions.IsAuthenticated',

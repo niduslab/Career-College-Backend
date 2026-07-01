@@ -1,0 +1,93 @@
+import logging
+
+from django.db import IntegrityError, transaction
+from django.utils import timezone
+
+from webinars.models import Webinar, WebinarRegistration
+
+from .webinar_service import WebinarError
+
+logger = logging.getLogger(__name__)
+
+
+def _active_registration_count(webinar):
+    return WebinarRegistration.objects.filter(webinar=webinar, is_active=True).count()
+
+
+@transaction.atomic
+def register_for_webinar(user, webinar):
+    """
+    Register a learner for a published webinar.
+
+    Free registration only (payment is not integrated). Reactivates a cancelled
+    row, enforces capacity, and dispatches WEBINAR_REGISTERED on commit.
+    Raises WebinarError on any business-rule violation.
+    """
+    if user.user_type != 'learner':
+        raise WebinarError('Only learners can register for webinars.', http_status=422)
+
+    if not webinar.is_published:
+        raise WebinarError('Registration is only allowed for published webinars.', http_status=422)
+
+    # When the webinar is capacity-limited, lock its row so the capacity check
+    # and the insert/reactivate below are serialized across concurrent
+    # registrations — otherwise two first-time registrants (neither holds a row
+    # to lock) can both pass the count check and over-subscribe.
+    if webinar.max_capacity is not None:
+        Webinar.objects.select_for_update().filter(pk=webinar.pk).first()
+
+    existing = (
+        WebinarRegistration.objects
+        .select_for_update()
+        .filter(user=user, webinar=webinar)
+        .first()
+    )
+
+    if existing and existing.is_active:
+        raise WebinarError('You are already registered for this webinar.', http_status=422)
+
+    # Capacity check (only counts active registrations). A reactivating user
+    # who already holds a row does not consume a new slot beyond the count.
+    if webinar.max_capacity is not None:
+        active = _active_registration_count(webinar)
+        if active >= webinar.max_capacity:
+            raise WebinarError('This webinar has reached its capacity.', http_status=422)
+
+    if existing:
+        existing.is_active = True
+        existing.save(update_fields=['is_active', 'updated_at'])
+        registration = existing
+        logger.info('Webinar registration reactivated: user=%s webinar=%s', user.pk, webinar.pk)
+    else:
+        try:
+            registration = WebinarRegistration.objects.create(
+                user=user,
+                webinar=webinar,
+                is_active=True,
+            )
+        except IntegrityError as exc:
+            raise WebinarError('You are already registered for this webinar.', http_status=422) from exc
+        logger.info('Webinar registration created: user=%s webinar=%s', user.pk, webinar.pk)
+
+    _dispatch_registration_notification(user, webinar)
+    return registration
+
+
+def _dispatch_registration_notification(user, webinar):
+    _user_id = user.pk
+    _webinar_title = webinar.title
+    _webinar_slug = webinar.slug
+
+    def _notify():
+        from authentication.models import User
+        from notifications.models import NotificationEventType
+        from notifications.services.dispatcher import dispatch
+        recipient = User.objects.filter(pk=_user_id).first()
+        if recipient:
+            dispatch(
+                NotificationEventType.WEBINAR_REGISTERED,
+                [recipient],
+                context={'webinar_title': _webinar_title, 'webinar_slug': _webinar_slug},
+            )
+
+    transaction.on_commit(_notify)

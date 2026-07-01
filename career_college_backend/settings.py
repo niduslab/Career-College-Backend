@@ -62,6 +62,7 @@ INSTALLED_APPS = [
     'realtime.apps.RealtimeConfig',
     'notifications.apps.NotificationsConfig',
     'messaging.apps.MessagingConfig',
+    'webinars.apps.WebinarsConfig',
 ]
 
 MIDDLEWARE = [

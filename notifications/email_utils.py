@@ -23,6 +23,8 @@ _EVENT_TEMPLATE_MAP = {
     _ET.INST_VERIFICATION_APPROVED:   'notifications/emails/institution_verification_approved.html',
     _ET.INST_VERIFICATION_REJECTED:   'notifications/emails/institution_verification_rejected.html',
     _ET.INST_VERIFICATION_ACTION_REQ: 'notifications/emails/institution_verification_action_required.html',
+    _ET.WEBINAR_PUBLISHED:       'notifications/emails/webinar_published.html',
+    _ET.WEBINAR_REGISTERED:      'notifications/emails/webinar_registered.html',
 }
 
 

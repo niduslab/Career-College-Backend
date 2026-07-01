@@ -24,11 +24,12 @@ a full tour, or jump to the subsystem you're working on.
 16. `16-notification-system.md` — notification dispatcher, event types, WebSocket delivery
 17. `17-messaging-system.md` — learner ↔ instructor messaging, REST + WebSocket protocol, unread semantics
 18. `18-partner-institutions.md` — institution verification, expert onboarding, departments, course creation + roster assignment
+19. `19-webinars.md` — institution-owned webinars, presenter roles, publish state machine, catalog + registration
 
 ## Scope
 
 - API base: `/api/v1/`
-- Main apps: `authentication`, `courses`, `id_verification`, `messaging`, `notifications`, `realtime`, `core`
+- Main apps: `authentication`, `courses`, `id_verification`, `messaging`, `notifications`, `realtime`, `webinars`, `core`
 - This guide explains:
   - Database model fields (key entities)
   - System processes (request/flow behavior)

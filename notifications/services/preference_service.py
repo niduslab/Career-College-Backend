@@ -28,6 +28,8 @@ EVENT_TO_CATEGORY: dict[str, str] = {
     NotificationEventType.INST_VERIFICATION_ACTION_REQ: NotificationCategory.VERIFICATION,
     NotificationEventType.EXPERT_ONBOARDED:        NotificationCategory.COLLABORATION,
     NotificationEventType.MESSAGE_RECEIVED:        NotificationCategory.MESSAGING,
+    NotificationEventType.WEBINAR_REGISTERED:      NotificationCategory.COURSE_ACTIVITY,
+    NotificationEventType.WEBINAR_PUBLISHED:       NotificationCategory.COURSE_MANAGEMENT,
 }
 
 

@@ -2,9 +2,9 @@
 
 A Django REST Framework backend for a course marketplace platform. The platform has four user roles — **learner**, **instructor**, **partner institution**, and **admin**.
 
-**Instructors and verified partner institutions** create and publish courses with mixed content (lectures, quizzes, coding exercises, assignments), upload videos that are async-transcoded to HLS, and must pass identity / institution verification before they can author content. Partner institutions additionally onboard their own teaching staff ("experts"), organise them into departments, and staff their courses' instructor rosters directly.
+**Instructors and verified partner institutions** create and publish courses with mixed content (lectures, quizzes, coding exercises, assignments), upload videos that are async-transcoded to HLS, and must pass identity / institution verification before they can author content. Partner institutions additionally onboard their own teaching staff ("experts"), organise them into departments, staff their courses' instructor rosters directly, and run live webinars (an assigned expert publishes; the platform handles catalog + registration while delivery links out to Zoom/Meet/Jitsi).
 
-**Learners** browse and enroll in published courses, consume curriculum (video/article lectures, quizzes, assignments, coding exercises), earn completion certificates, leave reviews & ratings, and message instructors. Notifications (in-app + email) and messaging are delivered in real time over a multiplexed WebSocket.
+**Learners** browse and enroll in published courses, consume curriculum (video/article lectures, quizzes, assignments, coding exercises), earn completion certificates, leave reviews & ratings, register for live webinars, and message instructors. Notifications (in-app + email) and messaging are delivered in real time over a multiplexed WebSocket.
 
 ---
 
@@ -35,6 +35,7 @@ A Django REST Framework backend for a course marketplace platform. The platform 
 | `messaging` | `/api/v1/messaging/` | Learner ↔ instructor direct messaging (REST + WebSocket) |
 | `notifications` | `/api/v1/notifications/` | In-app notification feed, email preferences, dispatcher |
 | `realtime` | `/ws/` | ASGI WebSocket consumer multiplexing the `notifications` and `messaging` streams |
+| `webinars` | `/api/v1/webinars/` | Institution-owned live webinars (external meeting link), publish state machine, public catalog + learner registration |
 | `core` | — | Shared permissions, pagination, middleware |
 
 ---
@@ -386,6 +387,17 @@ See [docs/architecture/17-messaging-system.md](docs/architecture/17-messaging-sy
 
 See [docs/architecture/18-partner-institutions.md](docs/architecture/18-partner-institutions.md) for the verification state machine, expert provisioning, departments, and roster rules.
 
+### 10. Webinars (institution-owned live sessions)
+
+1. A verified partner institution creates a webinar via `POST /api/v1/webinars/create/` — metadata + an external meeting link (`meeting_url`), scheduled time, capacity, and (optionally) `guest_speakers` (external, no account) and `institutional_speaker_ids` (platform experts credited, credit-only). Status starts `draft`.
+2. Assign a host: `POST /api/v1/webinars/{pk}/host/` (body `expert_user_id`) — an active affiliated expert who will publish and lead.
+3. The **host expert** publishes directly: `POST /api/v1/webinars/{pk}/publish/` → `published`. No admin or institution review gate. A completeness check runs (title, description, future `scheduled_at`, `duration_minutes`, `meeting_url`, host assigned). The institution owner is *not* the host, so it cannot publish (→ 404).
+4. Published webinars appear in the public catalog: `GET /api/v1/webinars/catalog/` and `catalog/{slug}/` (no `meeting_url`).
+5. Learners register: `POST /api/v1/webinars/{slug}/register/`. Capacity is enforced; a `WEBINAR_REGISTERED` notification fires. The join link is exposed only to registrants at `GET /api/v1/webinars/my-webinars/{slug}/`.
+6. Lifecycle: `POST {pk}/archive/` (`published → archived`, owner/host/admin) and `POST {pk}/rework/` (`archived → draft`, owner/host). Editing is institution-only (the host can read but not PATCH).
+
+See [docs/architecture/19-webinars.md](docs/architecture/19-webinars.md) for presenter roles, the publish state machine, serializers, and notification wiring.
+
 ---
 
 ## API Endpoints
@@ -708,6 +720,45 @@ All endpoints require `IsAuthenticated` + `IsEmailVerified`. In-app notification
 
 ---
 
+### Webinars — `/api/v1/webinars/`
+
+Institution-owned live webinars. Slug endpoints → 403 on no-access; numeric-ID endpoints → 404. `meeting_url` is registrant-only (never in the catalog). See [docs/architecture/19-webinars.md](docs/architecture/19-webinars.md).
+
+#### Public Catalog
+
+| Method | Endpoint | Auth | Description |
+|--------|----------|------|-------------|
+| GET | `catalog/` | No | List published webinars, soonest first. `?category=<id>`, `?upcoming=true` |
+| GET | `catalog/{slug}/` | No | Published webinar detail (no `meeting_url`) |
+
+#### Learner Registration
+
+| Method | Endpoint | Auth | Description |
+|--------|----------|------|-------------|
+| POST | `{slug}/register/` | Learner | Register for a published webinar. 201; duplicate → 422; capacity reached → 422 |
+| GET | `my-webinars/` | Learner | Own active registrations (paginated) |
+| GET | `my-webinars/{slug}/` | Learner | Registrant detail — exposes `meeting_url`. 403 if not registered |
+
+#### Authoring (Partner Institution)
+
+| Method | Endpoint | Auth | Description |
+|--------|----------|------|-------------|
+| GET | `` (root) | Verified course creator | Own webinars (owner **or** assigned host), paginated |
+| POST | `create/` | Verified partner institution | Create a webinar draft |
+| GET | `{pk}/` | Verified course creator (owner or host) | Webinar detail |
+| PATCH | `{pk}/` | Verified partner institution (owner) | Edit metadata (host cannot PATCH → 404) |
+| POST/DELETE | `{pk}/host/` | Verified partner institution | Assign / clear the host expert (body: `expert_user_id`) |
+
+#### Status Transitions
+
+| Method | Endpoint | Who | Transition |
+|--------|----------|-----|-----------|
+| POST | `{pk}/publish/` | Assigned host expert | `draft → published` (completeness check; institution user → 404) |
+| POST | `{pk}/archive/` | Owner / host / admin | `published → archived` |
+| POST | `{pk}/rework/` | Owner / host | `archived → draft` |
+
+---
+
 ## Response Format
 
 All endpoints return the same envelope:
@@ -819,8 +870,14 @@ career_college_backend/
 ├── realtime/                      ASGI WebSocket layer
 │   ├── consumers.py               PlatformConsumer — multiplexes streams, routes channel events
 │   └── streams/                   Per-stream handlers (notifications_stream, messaging_stream)
+├── webinars/                      Institution-owned live webinars
+│   ├── all_models/                Webinar (status machine) + WebinarRegistration
+│   ├── all_serializers/           Authoring, catalog (no meeting_url), registrant (with meeting_url)
+│   ├── all_views/                 webinar / status / host / catalog / registration views
+│   ├── services/                  webinar_service (host + speakers), registration_service (capacity lock)
+│   └── all_tests/                 End-to-end flow, editing scope, transitions, capacity, notifications
 ├── core/                          Shared: permissions, pagination, middleware
-├── docs/architecture/             18 architecture design documents + guide README
+├── docs/architecture/             19 architecture design documents + guide README
 ├── docs/api-testing/              Postman/wscat testing guides (certificate, coinstructor, messaging, notifications, partner-institution, …)
 ├── docs/future_implementations/   Design notes for planned features (auto-caption generation)
 ├── scripts/                       Manual smoke tests (real Docker; not in test suite)
@@ -856,6 +913,7 @@ career_college_backend/
 - **Reviews & ratings** — `CourseReview` is one-per-enrollment (enforced by `OneToOneField(enrollment)`). `ReviewVote` tracks helpful/not-helpful per reviewer. `avg_rating` and `review_count` are denormalized onto `NidusCourse` (updated via `transaction.on_commit` after every review write) so catalog sort/filter (`?sort=rating`, `?rating_min=`, `?min_reviews=`) stays a single-table scan. Vote flips use `select_for_update` + `F()` expressions for atomicity.
 - **Messaging** — one `Conversation` per `(learner, instructor, course)` triad; only learners initiate. The send-gate (active enrollment / current instructor membership) lives in `messaging_service.send_message()` and is enforced identically on the REST and WebSocket paths. Unread state is two timestamp cursors (`learner_last_read_at` / `instructor_last_read_at`), so marking a thread read is a single UPDATE rather than N per-message flags. After a message commits, a `new_message` channel event is pushed **only to the recipient's** group (the sender already has it), plus a `message.received` notification via `transaction.on_commit`.
 - **Realtime / WebSocket** — a single ASGI `PlatformConsumer` at `/ws/` multiplexes per-feature streams (`{"stream": "...", "payload": {...}}`); JWT is passed as a `?token=` query param and validated on connect. Cross-process delivery uses the Redis channel layer (`group_send` to `messaging_user_{id}` / notification groups). Adding a stream = register a handler class in `realtime/streams/`.
+- **Webinars** — institution-owned live sessions that link out to an external provider (`meeting_url`), not a curriculum tree. Three presenter roles: `host_expert` (FK, publishes), `institutional_speakers` (M2M, credit-only), `guest_speakers` (JSON, no account). Three-state machine (`draft → published → archived`) with **no approval gate** — the assigned host publishes directly via `transition_to()`. GET is owner-or-host; PATCH is institution-only (host reads but cannot edit). `meeting_url` is registrant-only — enforced by dedicated serializers (catalog omits it, registrant serializer includes it), never conditional stripping. Registration enforces capacity under a `select_for_update` lock on the webinar row. `WEBINAR_PUBLISHED` / `WEBINAR_REGISTERED` notifications each need four-point wiring (event type, builder, `EVENT_TO_CATEGORY`, `_EVENT_TEMPLATE_MAP`).
 
 ---
 
@@ -875,6 +933,7 @@ career_college_backend/
 | [docs/api-testing/postman-notification-system.md](docs/api-testing/postman-notification-system.md) | Postman testing guide for the notification feed + email preferences |
 | [docs/api-testing/postman-partner-institution.md](docs/api-testing/postman-partner-institution.md) | Postman testing guide for partner-institution verification, expert management, course creation + roster assignment |
 | [docs/api-testing/postman-expert-course-editing.md](docs/api-testing/postman-expert-course-editing.md) | Postman testing guide for an institution-assigned expert logging in and editing/submitting their course |
+| [docs/api-testing/postman-webinars.md](docs/api-testing/postman-webinars.md) | Postman testing guide for webinar authoring, host assignment, publish, catalog, and learner registration |
 | [CLAUDE.md](CLAUDE.md) | AI assistant coding instructions |
 
 ### Architecture (`docs/architecture/`)
@@ -902,3 +961,4 @@ Read in order; [docs/architecture/README.md](docs/architecture/README.md) is the
 | [16-notification-system.md](docs/architecture/16-notification-system.md) | Notification dispatcher, event types, WebSocket delivery |
 | [17-messaging-system.md](docs/architecture/17-messaging-system.md) | Messaging data model, REST + WebSocket protocol, unread semantics, frontend client contract |
 | [18-partner-institutions.md](docs/architecture/18-partner-institutions.md) | Institution verification, expert onboarding, departments, course creation + roster assignment |
+| [19-webinars.md](docs/architecture/19-webinars.md) | Institution-owned webinars — presenter roles, publish state machine, catalog + registration, notification wiring |

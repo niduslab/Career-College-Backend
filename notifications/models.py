@@ -29,6 +29,8 @@ class NotificationEventType(models.TextChoices):
     INST_VERIFICATION_ACTION_REQ = 'institution_verification.action_required', 'Institution Verification Action Required'
     EXPERT_ONBOARDED         = 'expert.onboarded',         'Expert Onboarded'
     MESSAGE_RECEIVED         = 'message.received',         'Message Received'
+    WEBINAR_PUBLISHED        = 'webinar.published',        'Webinar Published'
+    WEBINAR_REGISTERED       = 'webinar.registered',       'Webinar Registration Confirmed'
 
 
 class NotificationCategory(models.TextChoices):

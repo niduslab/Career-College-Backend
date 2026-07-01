@@ -36,6 +36,7 @@ A Django REST Framework backend for a course marketplace platform. The platform 
 | `notifications` | `/api/v1/notifications/` | In-app notification feed, email preferences, dispatcher |
 | `realtime` | `/ws/` | ASGI WebSocket consumer multiplexing the `notifications` and `messaging` streams |
 | `webinars` | `/api/v1/webinars/` | Institution-owned live webinars (external meeting link), publish state machine, public catalog + learner registration |
+| `analytics` | `/api/v1/analytics/` | Read-only partner-institution analytics dashboard (KPI summary, trends, top-courses); aggregates across apps, owns no models |
 | `core` | — | Shared permissions, pagination, middleware |
 
 ---
@@ -57,7 +58,7 @@ git clone <repo-url>
 cd Career-College-Backend
 
 python -m venv .venv
-.\.venv\Scripts\Activate.ps1   # Windows PowerShell
+.\venv\Scripts\Activate.ps1   # Windows PowerShell
 # source .venv/bin/activate    # macOS / Linux
 ```
 
@@ -398,6 +399,15 @@ See [docs/architecture/18-partner-institutions.md](docs/architecture/18-partner-
 
 See [docs/architecture/19-webinars.md](docs/architecture/19-webinars.md) for presenter roles, the publish state machine, serializers, and notification wiring.
 
+### 11. Partner institution analytics dashboard
+
+1. A verified institution loads `GET /api/v1/analytics/partner/summary/` — one payload of KPI cards: course counts + status breakdown + weighted avg rating, enrollment totals/growth/active-learners/completion-rate, certificates issued, webinar status + upcoming/live/completed + registrations, roster size, and a composite engagement score.
+2. Charts fetch trends lazily: `analytics/partner/enrollments/trend/`, `webinars/trend/`, `certificates/trend/` — each `?granularity=monthly|weekly&periods=N` (zero-filled contiguous series).
+3. `analytics/partner/top-courses/?sort=enrollments|rating|completion&limit=N` ranks the institution's courses.
+4. Everything is read-only and scoped to the caller's own institution (no resource id in the URL → the only failure mode is 403). `revenue` is disabled (no payments model) and webinar attendance is flagged off until the live-day join flow ships.
+
+See [docs/architecture/20-analytics-dashboard.md](docs/architecture/20-analytics-dashboard.md) for metrics, query strategy, and the revenue/attendance caveats.
+
 ---
 
 ## API Endpoints
@@ -450,6 +460,8 @@ All require a **verified** partner institution (`IsVerifiedPartnerInstitution`);
 | GET/PATCH | `partner/experts/{id}/` | Expert detail / edit (profile, `department_id`, activate-deactivate) |
 | GET/POST | `partner/departments/` | List / create institution departments |
 | GET/PATCH/DELETE | `partner/departments/{id}/` | Department detail / rename or toggle active / soft-deactivate |
+
+> Institution analytics moved to its own app — see the **Analytics** section below.
 
 ---
 
@@ -756,6 +768,20 @@ Institution-owned live webinars. Slug endpoints → 403 on no-access; numeric-ID
 | POST | `{pk}/publish/` | Assigned host expert | `draft → published` (completeness check; institution user → 404) |
 | POST | `{pk}/archive/` | Owner / host / admin | `published → archived` |
 | POST | `{pk}/rework/` | Owner / host | `archived → draft` |
+
+---
+
+### Analytics — `/api/v1/analytics/`
+
+Read-only partner-institution analytics dashboard. Its own app; owns no models — aggregates over courses, webinars, enrollments, certificates, and the expert roster. All endpoints require a **verified** partner institution (`IsVerifiedPartnerInstitution`) and are scoped to the caller's own institution (no resource id in the URL → the only no-access response is 403). See [docs/architecture/20-analytics-dashboard.md](docs/architecture/20-analytics-dashboard.md) and [docs/api-testing/postman-analytics.md](docs/api-testing/postman-analytics.md).
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| GET | `partner/summary/` | Dashboard KPI cards: courses, enrollments, certificates, webinars, roster, engagement score. Revenue disabled (no payments model); webinar attendance flagged off until the live-day join flow ships |
+| GET | `partner/enrollments/trend/` | Enrollment time series (`?granularity=monthly\|weekly&periods=N`, zero-filled contiguous) |
+| GET | `partner/webinars/trend/` | Webinar-registration time series |
+| GET | `partner/certificates/trend/` | Certificate-issuance time series |
+| GET | `partner/top-courses/` | Ranked courses (`?sort=enrollments\|rating\|completion&limit=N`) |
 
 ---
 

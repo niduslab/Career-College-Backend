@@ -288,6 +288,7 @@ Do not duplicate these in individual apps. If you find yourself writing a permis
 - Access token: 12 h lifetime, `Bearer` header
 - Refresh token: 7-day lifetime, rotation + blacklist enabled
 - Tokens returned as JSON body **and** optionally as HttpOnly cookies (see `authentication/utils/cookie_helpers.py`)
+- Protected endpoints authenticate from **either** the `Authorization: Bearer` header **or** the `access_token` cookie. `CookieJWTAuthentication` (`authentication/authentication.py`) is registered first in `DEFAULT_AUTHENTICATION_CLASSES`, then header-based `JWTAuthentication`. Cookie name is `JWT_ACCESS_COOKIE_NAME` (default `access_token`) — keep the auth class and `cookie_helpers.py` reading the same setting.
 - Token refresh: `POST /api/v1/auth/token/refresh/`
 - OAuth: authorization-code flow for Google and LinkedIn; callback URLs configured via env vars
 

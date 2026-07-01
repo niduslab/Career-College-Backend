@@ -24,7 +24,7 @@ class WebinarError(Exception):
         self.http_status = http_status
 
 
-# ── Catalog ──────────────────────────────────────────────────────────────────
+# Catalog 
 
 def get_catalog_webinars():
     """Published webinars for the public catalog, soonest first."""
@@ -52,7 +52,7 @@ def filter_catalog_webinars(queryset, params):
     return queryset
 
 
-# ── Host assignment ────────────────────────────────────────────────────────--
+#  Host assignment
 
 def assign_webinar_host(webinar, institution_profile, expert_user_id):
     """Assign one of the institution's active experts as the webinar host."""

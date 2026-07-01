@@ -29,11 +29,6 @@ webinar_thumbnail_upload_path.__module__ = 'webinars.models'
 class Webinar(AuthoredModel):
     """
     A live webinar published by a partner institution.
-
-    Parallels ``NidusCourse`` (same review state machine), but it is metadata +
-    an external meeting link rather than a curriculum tree. Presenters live on
-    this one model: a single assigned ``host_expert`` (a platform user) plus an
-    inline ``guest_speakers`` list for external presenters with no account.
     """
 
     class WebinarStatus(models.TextChoices):
@@ -47,7 +42,7 @@ class Webinar(AuthoredModel):
         JITSI = 'jitsi', 'Jitsi'
         OTHER = 'other', 'Other'
 
-    # ── Ownership / presenters ──
+    # Ownership / presenters 
     partner_institution = models.ForeignKey(
         PartnerInstitutionProfile,
         on_delete=models.SET_NULL,
@@ -112,7 +107,7 @@ class Webinar(AuthoredModel):
         validators=[MinValueValidator(0)],
     )
 
-    # ── Live delivery (external provider) ──
+    # Live delivery (external provider) 
     meeting_provider = models.CharField(
         max_length=10,
         choices=MeetingProvider.choices,
@@ -124,7 +119,7 @@ class Webinar(AuthoredModel):
         help_text='External meeting join link. Exposed only to registrants.',
     )
 
-    # ── Review lifecycle ──
+    # Review lifecycle 
     status = models.CharField(
         max_length=20,
         choices=WebinarStatus.choices,
@@ -177,15 +172,13 @@ class Webinar(AuthoredModel):
 
         super().save(*args, **kwargs)
 
-    # ── Editable statuses ────────────────────────────────────────────────────
+    # Editable statuses 
     EDITABLE_STATUSES = frozenset(('draft', 'archived'))
 
     def is_editable(self):
         return self.status in self.EDITABLE_STATUSES
 
-    # ── Status transition state machine ──────────────────────────────────────
-    # Webinars publish in one step: the assigned host expert takes the webinar
-    # straight from draft to published — no institution or admin approval gate.
+    # Status transition state machine 
     VALID_TRANSITIONS = {
         'draft': ('published',),
         'published': ('archived',),
@@ -206,11 +199,11 @@ class Webinar(AuthoredModel):
                 f'Allowed: {", ".join(allowed) if allowed else "none (terminal state)"}.'
             )
 
-        # ── Completeness check (publishing only) ──
+        # Completeness check (publishing only) 
         if new_status == 'published':
             self._validate_webinar_completeness()
 
-        # ── Apply transition ──
+        # Apply transition 
         self.status = new_status
         self.save()
 

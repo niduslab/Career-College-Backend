@@ -100,9 +100,6 @@ class WebinarDetailView(APIView):
     permission_classes = [IsAuthenticated, IsEmailVerified, IsVerifiedCourseCreator]
 
     def _get_webinar(self, request, pk, owner_only=False):
-        # GET is visible to the owning institution OR the assigned host; editing
-        # is institution-only (owner_only), so a host expert cannot mutate
-        # metadata — webinar authoring stays with the institution.
         scope = Q(created_by=request.user)
         if not owner_only:
             scope |= Q(host_expert=request.user)

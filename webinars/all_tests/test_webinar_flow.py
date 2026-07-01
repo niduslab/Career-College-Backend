@@ -103,7 +103,7 @@ class WebinarFlowTests(APITestCase):
     def _publish_url(self, pk):
         return reverse('webinars:webinar-publish', kwargs={'pk': pk})
 
-    # ---- 1. creation -------------------------------------------------------
+    # 1. creation
 
     def test_institution_creates_webinar_with_guests(self):
         self.client.force_authenticate(self.institution_user)
@@ -145,7 +145,7 @@ class WebinarFlowTests(APITestCase):
         r = self.client.post(self._create_url(), {'title': 'Nope', 'description': 'd'}, format='json')
         self.assertEqual(r.status_code, status.HTTP_403_FORBIDDEN)
 
-    # ---- 2. host assignment ------------------------------------------------
+    # 2. host assignment 
 
     def test_assign_host_success(self):
         webinar = self._make_webinar(with_host=False)
@@ -167,7 +167,7 @@ class WebinarFlowTests(APITestCase):
         r = self.client.post(self._host_url(webinar.pk), {'expert_user_id': self.foreign_expert.id}, format='json')
         self.assertEqual(r.status_code, status.HTTP_404_NOT_FOUND)
 
-    # ---- 3. host direct publish (completeness + scoping) -------------------
+    # 3. host direct publish (completeness + scoping)
 
     def test_publish_incomplete_returns_400(self):
         # Has a host (so the endpoint scope passes) but no meeting_url.
@@ -193,7 +193,7 @@ class WebinarFlowTests(APITestCase):
         r = self.client.post(self._publish_url(webinar.pk))
         self.assertEqual(r.status_code, status.HTTP_404_NOT_FOUND)
 
-    # ---- 5. catalog --------------------------------------------------------
+    # 5. catalog 
 
     def test_catalog_hides_meeting_url(self):
         webinar = self._make_webinar(status_value='published')
@@ -242,7 +242,7 @@ class WebinarFlowTests(APITestCase):
         r = self.client.post(reg_url)
         self.assertEqual(r.status_code, status.HTTP_422_UNPROCESSABLE_ENTITY)
 
-    # ---- 7. access policy --------------------------------------------------
+    # 7. access policy 
 
     def test_unpublished_catalog_slug_404(self):
         webinar = self._make_webinar()  # draft
@@ -264,7 +264,7 @@ class WebinarFlowTests(APITestCase):
         r = self.client.get(detail_url)
         self.assertEqual(r.status_code, status.HTTP_404_NOT_FOUND)
 
-    # ---- 8. institutional speakers -----------------------------------------
+    # 8. institutional speakers
 
     def _detail_url(self, pk):
         return reverse('webinars:webinar-detail', kwargs={'pk': pk})
@@ -305,7 +305,7 @@ class WebinarFlowTests(APITestCase):
         self.assertEqual(r.status_code, status.HTTP_200_OK)
         self.assertEqual(webinar.institutional_speakers.count(), 0)
 
-    # ---- 9. editing scope: host reads, institution edits -------------------
+    # ---- 9. editing scope: host reads, institution edits 
 
     def test_host_cannot_patch_webinar(self):
         webinar = self._make_webinar()  # host = self.expert
@@ -327,7 +327,7 @@ class WebinarFlowTests(APITestCase):
         webinar.refresh_from_db()
         self.assertEqual(webinar.title, 'Renamed Webinar')
 
-    # ---- 10. host clear ----------------------------------------------------
+    # 10. host clear 
 
     def test_clear_host(self):
         webinar = self._make_webinar()  # host assigned
@@ -343,7 +343,7 @@ class WebinarFlowTests(APITestCase):
         r = self.client.delete(self._host_url(webinar.pk))
         self.assertEqual(r.status_code, status.HTTP_422_UNPROCESSABLE_ENTITY)
 
-    # ---- 11. archive + rework transitions ----------------------------------
+    # 11. archive + rework transitions
 
     def test_archive_then_rework(self):
         webinar = self._make_webinar(status_value='published')
@@ -366,7 +366,7 @@ class WebinarFlowTests(APITestCase):
         r = self.client.post(reverse('webinars:webinar-archive', kwargs={'pk': webinar.pk}))
         self.assertEqual(r.status_code, status.HTTP_200_OK)
 
-    # ---- 12. registration reactivation + notifications ---------------------
+    # 12. registration reactivation + notifications 
 
     def test_cancelled_registration_reactivates(self):
         webinar = self._make_webinar(status_value='published')

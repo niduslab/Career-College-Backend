@@ -30,9 +30,6 @@ def register_for_webinar(user, webinar):
         raise WebinarError('Registration is only allowed for published webinars.', http_status=422)
 
     # When the webinar is capacity-limited, lock its row so the capacity check
-    # and the insert/reactivate below are serialized across concurrent
-    # registrations — otherwise two first-time registrants (neither holds a row
-    # to lock) can both pass the count check and over-subscribe.
     if webinar.max_capacity is not None:
         Webinar.objects.select_for_update().filter(pk=webinar.pk).first()
 
@@ -46,8 +43,7 @@ def register_for_webinar(user, webinar):
     if existing and existing.is_active:
         raise WebinarError('You are already registered for this webinar.', http_status=422)
 
-    # Capacity check (only counts active registrations). A reactivating user
-    # who already holds a row does not consume a new slot beyond the count.
+    # Capacity check (only counts active registrations).
     if webinar.max_capacity is not None:
         active = _active_registration_count(webinar)
         if active >= webinar.max_capacity:

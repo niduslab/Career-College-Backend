@@ -202,16 +202,15 @@ class NidusCourse(models.Model):
             models.Index(fields=['is_published', '-published_at'], name='idx_ncourse_pub_date'),
             models.Index(fields=['language', 'level'], name='idx_ncourse_lang_level'),
             models.Index(fields=['created_by', 'status'], name='idx_ncourse_creator_status'),
-            # Catalog range-filter support (?price_min / ?price_max / ?duration_min / ?duration_max).
-            # `is_published` is the leading column because every catalog query filters on it.
+            # Institution analytics
+            models.Index(fields=['partner_institution', 'status'], name='idx_ncourse_inst_status'),
+            # Course Catalog
             models.Index(fields=['is_published', 'price'], name='idx_ncourse_pub_price'),
             models.Index(fields=['is_published', 'duration_minutes'], name='idx_ncourse_pub_duration'),
-            # Catalog rating sort + ?rating_min / ?min_reviews filters.
+            # Catalog rating sort
             models.Index(fields=['is_published', 'avg_rating'], name='idx_ncourse_pub_rating'),
             models.Index(fields=['is_published', 'review_count'], name='idx_ncourse_pub_reviews'),
-            # Catalog search (?search=...) does ILIKE '%foo%' against title and description.
-            # gin_trgm_ops makes that planner-friendly; requires the pg_trgm extension,
-            # which is installed by the accompanying migration.
+            # Catalog search 
             GinIndex(name='idx_ncourse_title_trgm', fields=['title'], opclasses=['gin_trgm_ops']),
             GinIndex(name='idx_ncourse_desc_trgm', fields=['description'], opclasses=['gin_trgm_ops']),
         ]
@@ -278,10 +277,7 @@ class NidusCourse(models.Model):
                 f'Allowed: {", ".join(allowed) if allowed else "none (terminal state)"}.'
             )
 
-        # ── Ownership routing when leaving draft ──
-        # Institution-owned courses must pass through institution review first
-        # (expert /finish/); individual-instructor courses go straight to admin
-        # (/submit/). This keeps the two submission paths from crossing over.
+        # Ownership routing when leaving draft
         if self.status == 'draft':
             if self.partner_institution_id and new_status == 'under_review':
                 raise ValidationError(
@@ -293,23 +289,21 @@ class NidusCourse(models.Model):
                     'Only institution-owned courses use the institution-review stage.'
                 )
 
-        # ── Submission completeness check (draft exit only) ──
-        # Runs when leaving draft for either review stage; the course is frozen
-        # afterwards, so institution_review → under_review needs no re-check.
+        # Submission completeness check
         if self.status == 'draft' and new_status in ('under_review', 'institution_review'):
             self._validate_course_completeness()
 
-        # ── Rejection requires a reason ──
+        # Rejection requires a reason
         if new_status == 'rejected' and not rejection_reason.strip():
             raise ValidationError(
                 {'rejection_reason': 'A reason is required when rejecting a course.'}
             )
 
-        # ── Admin actions require a reviewer ──
+        # Admin actions require a reviewer
         if new_status in ('published', 'rejected') and reviewer is None:
             raise ValidationError('A reviewer (admin) is required for this transition.')
 
-        # ── Apply transition ──
+        # Apply transition
         self.status = new_status
 
         if new_status == 'rejected':
@@ -332,18 +326,18 @@ class NidusCourse(models.Model):
         """
         errors = {}
 
-        # ── Required fields ──
+        # Required fields
         for field_name in self.REQUIRED_FOR_SUBMIT:
             value = getattr(self, field_name, None)
             if not value or (isinstance(value, str) and not value.strip()):
                 errors[field_name] = f'{field_name} is required before submitting.'
 
-        # ── Must have at least one section ──
+        # Must have at least one section
         section_count = self.sections.count()
         if section_count == 0:
             errors['sections'] = 'Course must have at least one section.'
 
-        # ── Every section must have at least one content item ──
+        # Every section must have at least one content item
         if section_count > 0:
             empty_sections = []
             for section in self.sections.all():
@@ -354,7 +348,7 @@ class NidusCourse(models.Model):
                     f'These sections have no content: {", ".join(empty_sections)}.'
                 )
 
-        # ── All video lectures must be done transcoding ──
+        #All video lectures must be done transcoding
         from courses.all_models.assessment_models import Quiz
         from courses.all_models.content_models import VideoAsset
 
@@ -373,7 +367,7 @@ class NidusCourse(models.Model):
                 'All videos must be ready before submission.'
             )
 
-        # ── Every quiz must have at least one question with a correct answer ──
+        # Every quiz must have at least one question with a correct answer
         incomplete_quizzes = []
         for quiz in Quiz.objects.filter(section__course=self):
             questions = quiz.questions.all()

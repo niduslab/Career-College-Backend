@@ -63,6 +63,7 @@ INSTALLED_APPS = [
     'notifications.apps.NotificationsConfig',
     'messaging.apps.MessagingConfig',
     'webinars.apps.WebinarsConfig',
+    'analytics.apps.AnalyticsConfig',
 ]
 
 MIDDLEWARE = [
@@ -362,6 +363,11 @@ LOGGING = {
             'propagate': False,
         },
         'realtime': {
+            'handlers': DEFAULT_LOG_HANDLERS,
+            'level': 'DEBUG' if DEBUG else 'INFO',
+            'propagate': False,
+        },
+        'analytics': {
             'handlers': DEFAULT_LOG_HANDLERS,
             'level': 'DEBUG' if DEBUG else 'INFO',
             'propagate': False,

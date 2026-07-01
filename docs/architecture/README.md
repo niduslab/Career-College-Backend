@@ -25,11 +25,12 @@ a full tour, or jump to the subsystem you're working on.
 17. `17-messaging-system.md` — learner ↔ instructor messaging, REST + WebSocket protocol, unread semantics
 18. `18-partner-institutions.md` — institution verification, expert onboarding, departments, course creation + roster assignment
 19. `19-webinars.md` — institution-owned webinars, presenter roles, publish state machine, catalog + registration
+20. `20-analytics-dashboard.md` — partner-institution analytics: metrics, institution-scoping, query strategy, revenue/attendance caveats
 
 ## Scope
 
 - API base: `/api/v1/`
-- Main apps: `authentication`, `courses`, `id_verification`, `messaging`, `notifications`, `realtime`, `webinars`, `core`
+- Main apps: `authentication`, `courses`, `id_verification`, `messaging`, `notifications`, `realtime`, `webinars`, `analytics`, `core`
 - This guide explains:
   - Database model fields (key entities)
   - System processes (request/flow behavior)

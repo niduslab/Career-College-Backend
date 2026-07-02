@@ -3,7 +3,6 @@ from messaging.all_views.conversation_views import (
     ConversationDetailView,
     ConversationListView,
     MarkConversationReadView,
-    SendMessageView,
     UnreadConversationCountView,
 )
 
@@ -12,6 +11,5 @@ __all__ = [
     'ConversationDetailView',
     'ConversationListView',
     'MarkConversationReadView',
-    'SendMessageView',
     'UnreadConversationCountView',
 ]

@@ -8,6 +8,7 @@ from .messaging_service import (
     list_conversations,
     mark_read,
     send_message,
+    start_conversation,
 )
 
 __all__ = [
@@ -20,4 +21,5 @@ __all__ = [
     'list_conversations',
     'mark_read',
     'send_message',
+    'start_conversation',
 ]

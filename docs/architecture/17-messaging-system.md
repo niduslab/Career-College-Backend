@@ -1,12 +1,34 @@
 # 17 — Messaging System
 
-Direct messaging between learners and the instructors of their enrolled courses.
+Direct messaging between two platform users, scoped by `conversation_type`.
+
+> **Updated — model generalized.** `Conversation` is no longer hardcoded to a
+> `(learner, instructor, course)` triad. It is now a **role-neutral 2-party thread**
+> selected by `conversation_type` (`learner_instructor` | `co_instructor` |
+> `institution_expert`); the two parties live in a `ConversationParticipant`
+> through-table (each row carries that user's `last_read_at` cursor), `course` is
+> nullable, and pair uniqueness is `(conversation_type, course, participant_key)`.
+> The send-gate is dispatched by type in `messaging_service` (`_assert_send_permission`
+> at send-time, `_validate_new_conversation` at create-time) and stays enforced only
+> in the service across REST + WebSocket. Sections below describing the two role
+> columns (`learner`/`instructor`) and the two role cursors
+> (`learner_last_read_at`/`instructor_last_read_at`) reflect the **original** design;
+> the current model + rationale live in `CLAUDE.md` (Messaging) and
+> `docs/future_implementations/INSTITUTION_MESSAGING.md` (§1–7 implemented). Unread
+> semantics and the WebSocket contract are otherwise unchanged. **The REST
+> `POST conversations/<id>/messages/` send endpoint has been removed** — follow-up
+> messages are sent over the WebSocket `messaging` stream only; only the conversation
+> opener is persisted over REST (via `conversations/create/`). Sections below that
+> describe a REST send endpoint are superseded.
 
 ---
 
 ## Scope
 
-Phase 1 covers learner ↔ instructor messaging only. Partner institutions, admins, and learner-to-learner messaging are out of scope.
+Learner ↔ instructor, instructor ↔ co-instructor, and partner-institution ↔ affiliated-expert
+direct messaging. Institution → many-learners announcements (one-to-many, no reply) are notification
+fan-out, not conversations — see `INSTITUTION_MESSAGING.md` §8 (unbuilt). Learner-to-learner and
+admin messaging remain out of scope.
 
 ---
 
@@ -223,8 +245,8 @@ All endpoints require `IsAuthenticated + IsEmailVerified + (IsLearnerUser OR IsI
 | `GET` | `conversations/unread-count/` | Both | `{unread_conversations: N}` — count of threads with ≥1 unread message (badge) |
 | `POST` | `conversations/create/` | Learner only | Creates conversation + first message atomically |
 | `GET` | `conversations/<id>/` | Participant | Metadata + paginated messages |
-| `POST` | `conversations/<id>/messages/` | Participant | Send-gate checked in service |
-| `POST` | `conversations/<id>/read/` | Participant | Updates `*_last_read_at` |
+| ~~`POST`~~ | ~~`conversations/<id>/messages/`~~ | — | **Removed** — follow-up sends are WebSocket-only (see banner) |
+| `POST` | `conversations/<id>/read/` | Participant | Updates the caller's read cursor |
 
 Access-denied policy: numeric IDs → 404 (project-wide rule).
 
@@ -309,13 +331,14 @@ WS reconnects (onopen)
 
 Retry button re-calls `sendMessage(conversationId, body)` — tries WS again; re-queues if still down.
 
-### Why REST send endpoint is kept
+### REST send endpoint — removed
 
-The `POST conversations/<id>/messages/` REST endpoint is not removed even though the frontend prefers WS:
-
-- **Non-browser clients** — scripts, bots, server-to-server integrations have no WS connection.
-- **Testing** — REST is directly testable via Postman without a live WS session.
-- **Zero maintenance cost** — both paths call the same `messaging_service.send_message()`.
+> **Superseded.** The `POST conversations/<id>/messages/` REST send endpoint has been
+> **removed**. Follow-up messages are sent over the WebSocket `messaging` stream only
+> (`send_message` → `message_sent` ack / `new_message` to the recipient); the send-gate
+> still lives in `messaging_service.send_message()`, which the WS handler calls. Only the
+> conversation **opener** is persisted over REST (via `conversations/create/`). Reads
+> (list / detail / unread-count / mark-read) remain REST.
 
 ### Multi-tab note
 

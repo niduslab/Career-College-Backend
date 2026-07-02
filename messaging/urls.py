@@ -5,7 +5,6 @@ from messaging.views import (
     ConversationDetailView,
     ConversationListView,
     MarkConversationReadView,
-    SendMessageView,
     UnreadConversationCountView,
 )
 
@@ -24,9 +23,8 @@ urlpatterns = [
     # Thread detail: metadata + paginated messages.
     path('conversations/<int:conversation_id>/', ConversationDetailView.as_view(), name='conversation-detail'),
 
-    # Send a message in an existing thread.
-    path('conversations/<int:conversation_id>/messages/', SendMessageView.as_view(), name='send-message'),
+    # Follow-up messages are sent over the WebSocket `messaging` stream, not REST.
 
-    # Mark all messages in a thread as read (updates *_last_read_at).
+    # Mark all messages in a thread as read (updates the caller's read cursor).
     path('conversations/<int:conversation_id>/read/', MarkConversationReadView.as_view(), name='mark-read'),
 ]

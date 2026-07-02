@@ -93,6 +93,16 @@ class IsLearnerUser(BasePermission):
         return bool(user and user.is_authenticated and user.user_type == 'learner')
 
 
+class IsPartnerInstitutionUser(BasePermission):
+    """Allow access to any partner-institution account (verification not required)."""
+
+    message = 'Only partner institutions can access this resource.'
+
+    def has_permission(self, request, view):
+        user = request.user
+        return bool(user and user.is_authenticated and user.user_type == 'partner_institution')
+
+
 class IsVerifiedPartnerInstitution(BasePermission):
     """Allow access only to partner institutions approved by an admin."""
 

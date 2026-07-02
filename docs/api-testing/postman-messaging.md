@@ -1,50 +1,53 @@
 # Postman Guide — Messaging System
 
-Manual API testing for the full messaging system: conversation creation, message threads, mark-read, real-time WebSocket delivery, and notification integration.
+Manual API testing for the generalized messaging system. A `Conversation` is a **role-neutral 2-party thread** selected by `conversation_type`:
+
+| `conversation_type` | parties | course | who initiates |
+|---|---|---|---|
+| `learner_instructor` | learner ↔ course instructor | required | learner |
+| `co_instructor` | instructor ↔ instructor (same course roster) | required | either instructor |
+| `institution_expert` | partner institution ↔ affiliated expert | optional | institution |
+
+The two parties live in a `ConversationParticipant` through-table (each row carries that user's read cursor). The send-gate is dispatched by type in the service and enforced identically on REST + WebSocket. Covers: creation for all three types, message threads, mark-read, real-time WS delivery, and notification integration.
 
 ---
 
 ## Environment Variables
-
-Set these in your Postman environment before running the collection.
 
 | Variable | Example value | Notes |
 |----------|--------------|-------|
 | `base_url` | `http://localhost:8000/api/v1` | No trailing slash |
 | `ws_url` | `ws://localhost:8000/ws` | WebSocket base URL |
 | `learner_token` | `Bearer eyJ...` | JWT for a learner enrolled in the test course |
-| `learner_raw_token` | `eyJ...` | Same JWT without the `Bearer ` prefix — used in WS URL |
-| `learner2_token` | `Bearer eyJ...` | JWT for a second learner (not enrolled) — used for access-denial checks |
+| `learner_raw_token` | `eyJ...` | Same JWT without `Bearer ` — used in the WS URL |
+| `learner2_token` | `Bearer eyJ...` | JWT for a second learner (not enrolled) — access-denial checks |
 | `instructor_token` | `Bearer eyJ...` | JWT for an instructor in the test course |
+| `instructor_raw_token` | `eyJ...` | Raw JWT for WS |
+| `peer_instructor_token` | `Bearer eyJ...` | JWT for a **second** instructor also on the course (co-instructor tests) |
+| `institution_token` | `Bearer eyJ...` | JWT for a partner-institution account |
+| `expert_token` | `Bearer eyJ...` | JWT for an instructor who is an **active affiliate** of that institution |
+| `admin_token` | `Bearer eyJ...` | JWT for an admin — used for the 403 check |
 | `course_id` | `1` | PK of a published course |
 | `instructor_id` | `2` | PK of an instructor in `course.instructors.all()` |
+| `peer_instructor_id` | `4` | PK of the second course instructor |
+| `expert_user_id` | `5` | `User.id` of the affiliated expert |
 | `conversation_id` | _(filled during tests)_ | ID of the conversation row |
 
 ---
 
 ## Prerequisites
 
-1. Django dev server running (`python manage.py runserver`).
-2. Redis running (required for Django Channels WS push and Celery).
-3. ASGI server required for WebSocket support. Run with Daphne instead of standard `runserver`:
-   ```bash
-   pip install daphne
-   daphne -p 8000 career_college_backend.asgi:application
-   ```
-   > **Note:** Standard `python manage.py runserver` does not serve WebSocket connections. Use Daphne for WS testing.
-4. Celery worker running (required for notification emails):
-   ```bash
-   celery -A career_college_backend worker -Q celery,notifications -l info
-   ```
-5. `EMAIL_BACKEND = django.core.mail.backends.console.EmailBackend` in settings — emails print to the terminal.
-6. At least one published course with:
-   - A learner actively enrolled (`Enrollment.is_active = True`).
-   - At least one instructor in `course.instructors.all()`.
-   - Note the course `pk` as `course_id` and instructor `pk` as `instructor_id`.
+1. Django dev server running (ASGI/Daphne for WS — see Group 7).
+2. Redis running (Channels WS push + Celery).
+3. Celery worker running (notification emails): `celery -A career_college_backend worker -Q celery,notifications -l info`.
+4. `EMAIL_BACKEND = django.core.mail.backends.console.EmailBackend` — emails print to the terminal.
+5. Data:
+   - A published course with a learner actively enrolled (`Enrollment.is_active=True`) and **two** instructors in `course.instructors.all()` (for co-instructor tests). Note `course_id`, `instructor_id`, `peer_instructor_id`.
+   - A verified partner institution and an **active affiliated expert** (`InstructorProfile.affiliation_status='active'`, `affiliated_institution=` that institution). Note `expert_user_id`.
 
 ---
 
-## Group 1: Starting a Conversation
+## Group 1: Learner ↔ Instructor Conversations
 
 ### 1.1 Learner starts a conversation — happy path
 
@@ -60,6 +63,8 @@ Content-Type: application/json
 }
 ```
 
+> `conversation_type` defaults to `learner_instructor` when omitted, so the legacy body still works.
+
 **Expected:** `201 Created`.
 
 ```json
@@ -68,12 +73,14 @@ Content-Type: application/json
   "message": "Conversation started.",
   "data": {
     "id": 1,
-    "learner_id": 3,
-    "learner_name": "Alice Smith",
-    "instructor_id": 2,
-    "instructor_name": "Bob Jones",
+    "conversation_type": "learner_instructor",
+    "course_id": 1,
     "course_title": "Python Fundamentals",
     "course_slug": "python-fundamentals",
+    "participants": [
+      { "user_id": 3, "full_name": "Alice Smith", "user_type": "learner", "last_read_at": null },
+      { "user_id": 2, "full_name": "Bob Jones", "user_type": "instructor", "last_read_at": null }
+    ],
     "unread_count": 0,
     "updated_at": "2026-06-16T10:00:00Z",
     "created_at": "2026-06-16T10:00:00Z"
@@ -89,6 +96,11 @@ pm.test("conversation id present", () => {
     pm.expect(id).to.be.a("number");
     pm.environment.set("conversation_id", id);
 });
+pm.test("type + two participants", () => {
+    const d = pm.response.json().data;
+    pm.expect(d.conversation_type).to.equal("learner_instructor");
+    pm.expect(d.participants).to.have.lengthOf(2);
+});
 pm.test("unread_count is 0 on creation", () => {
     pm.expect(pm.response.json().data.unread_count).to.equal(0);
 });
@@ -98,52 +110,28 @@ pm.test("unread_count is 0 on creation", () => {
 
 ### 1.2 Same request again — idempotency
 
-Re-send the identical request from 1.1.
+Re-send 1.1. **Expected:** `200 OK`, `message: "Conversation already exists."`, same `id`, no extra message.
 
-**Expected:** `200 OK`.
-
-```json
-{
-  "success": true,
-  "message": "Conversation already exists.",
-  "data": { ... }
-}
-```
-
-**Postman Test:**
 ```javascript
 pm.test("200 on duplicate, not 201", () => pm.response.to.have.status(200));
-pm.test("same conversation id returned", () => {
-    pm.expect(pm.response.json().data.id).to.equal(
-        pm.environment.get("conversation_id") * 1
-    );
+pm.test("same conversation id", () => {
+    pm.expect(pm.response.json().data.id).to.equal(pm.environment.get("conversation_id") * 1);
 });
 ```
 
-No duplicate conversation created. No extra messages created.
-
 ---
 
-### 1.3 Instructor cannot initiate a conversation — 403
+### 1.3 Instructor cannot initiate a learner↔instructor thread — 403
 
 ```
 POST {{base_url}}/messaging/conversations/create/
 Authorization: {{instructor_token}}
 Content-Type: application/json
 
-{
-  "course_id": {{course_id}},
-  "instructor_id": {{instructor_id}},
-  "body": "Hello learner"
-}
+{ "course_id": {{course_id}}, "instructor_id": {{instructor_id}}, "body": "Hello learner" }
 ```
 
-**Expected:** `403 Forbidden`.
-
-**Postman Test:**
-```javascript
-pm.test("instructor blocked from initiating", () => pm.response.to.have.status(403));
-```
+**Expected:** `403 Forbidden` — the role check rejects a non-learner initiator (`"Only a learner can start a conversation with an instructor."`).
 
 ---
 
@@ -154,21 +142,10 @@ POST {{base_url}}/messaging/conversations/create/
 Authorization: {{learner2_token}}
 Content-Type: application/json
 
-{
-  "course_id": {{course_id}},
-  "instructor_id": {{instructor_id}},
-  "body": "Can I message?"
-}
+{ "course_id": {{course_id}}, "instructor_id": {{instructor_id}}, "body": "Can I message?" }
 ```
 
-**Expected:** `403 Forbidden`.
-
-```json
-{
-  "success": false,
-  "message": "You must be actively enrolled in this course to message an instructor."
-}
-```
+**Expected:** `403`, `message: "You must be actively enrolled in this course to message an instructor."`.
 
 ---
 
@@ -179,14 +156,10 @@ POST {{base_url}}/messaging/conversations/create/
 Authorization: {{learner_token}}
 Content-Type: application/json
 
-{
-  "course_id": 99999,
-  "instructor_id": {{instructor_id}},
-  "body": "Hello"
-}
+{ "course_id": 99999, "instructor_id": {{instructor_id}}, "body": "Hello" }
 ```
 
-**Expected:** `404 Not Found`, `message: "Course not found."`.
+**Expected:** `404`, `message: "Course not found."`.
 
 ---
 
@@ -197,14 +170,10 @@ POST {{base_url}}/messaging/conversations/create/
 Authorization: {{learner_token}}
 Content-Type: application/json
 
-{
-  "course_id": {{course_id}},
-  "instructor_id": 99999,
-  "body": "Hello"
-}
+{ "course_id": {{course_id}}, "instructor_id": 99999, "body": "Hello" }
 ```
 
-**Expected:** `404 Not Found`, `message: "Instructor not found."`.
+**Expected:** `404`, `message: "Instructor not found."`.
 
 ---
 
@@ -215,24 +184,135 @@ POST {{base_url}}/messaging/conversations/create/
 Authorization: {{learner_token}}
 Content-Type: application/json
 
+{ "course_id": {{course_id}}, "instructor_id": {{instructor_id}}, "body": "   " }
+```
+
+**Expected:** `400`, `errors.body: ["Message body must not be blank."]`.
+
+---
+
+### 1.8 Missing required field for the type — 400
+
+```
+POST {{base_url}}/messaging/conversations/create/
+Authorization: {{learner_token}}
+Content-Type: application/json
+
+{ "conversation_type": "learner_instructor", "instructor_id": {{instructor_id}}, "body": "no course" }
+```
+
+**Expected:** `400`, `errors.course_id: ["This field is required for this conversation type."]`.
+
+---
+
+## Group 1B: Co-Instructor Conversations
+
+Both parties must be instructors on the same course. Either may initiate.
+
+### 1B.1 Instructor starts a co-instructor thread — happy path
+
+```
+POST {{base_url}}/messaging/conversations/create/
+Authorization: {{instructor_token}}
+Content-Type: application/json
+
 {
+  "conversation_type": "co_instructor",
   "course_id": {{course_id}},
-  "instructor_id": {{instructor_id}},
-  "body": "   "
+  "peer_instructor_id": {{peer_instructor_id}},
+  "body": "Can you review section 3 before we submit?"
 }
 ```
 
-**Expected:** `400 Bad Request`.
+**Expected:** `201 Created`. `data.conversation_type = "co_instructor"`, participants are the two instructors.
+
+```javascript
+pm.test("201 created", () => pm.response.to.have.status(201));
+pm.test("co_instructor type", () => pm.expect(pm.response.json().data.conversation_type).to.equal("co_instructor"));
+pm.environment.set("coinstructor_conversation_id", pm.response.json().data.id);
+```
+
+### 1B.2 Peer instructor replies (WebSocket)
+
+Follow-up messages are sent over the WebSocket `messaging` stream (there is no REST send endpoint — see Group 7). Connect the peer instructor (`ws://localhost:8000/ws/?token=<peer raw JWT>`) and send:
 
 ```json
+{ "stream": "messaging", "payload": { "type": "send_message", "conversation_id": {{coinstructor_conversation_id}}, "body": "On it — will finish today." } }
+```
+
+**Expected:** a `message_sent` ack to the peer; the other instructor (if connected) receives `new_message`.
+
+### 1B.3 Target not on the course roster — 403
+
+Use an instructor **not** in `course.instructors` as `peer_instructor_id`.
+
+**Expected:** `403`, `message: "You are not an instructor for this course."`.
+
+### 1B.4 Removed co-instructor cannot send — 403
+
+Remove the peer instructor from `course.instructors` in admin, then have them POST a message to the thread.
+
+**Expected:** `403`, `message: "You are not an instructor for this course."`. Reading history still returns `200`. Re-add after testing.
+
+---
+
+## Group 1C: Institution ↔ Expert Conversations
+
+Institution-initiated. `course_id` optional (omit for a course-less thread).
+
+### 1C.1 Institution starts a thread with its expert — happy path
+
+```
+POST {{base_url}}/messaging/conversations/create/
+Authorization: {{institution_token}}
+Content-Type: application/json
+
 {
-  "success": false,
-  "message": "Validation failed.",
-  "errors": {
-    "body": ["Message body must not be blank."]
-  }
+  "conversation_type": "institution_expert",
+  "expert_user_id": {{expert_user_id}},
+  "body": "Welcome aboard — your first course assignment is coming."
 }
 ```
+
+**Expected:** `201 Created`. `data.conversation_type = "institution_expert"`, `data.course_id = null`, `course_title`/`course_slug` are `null`.
+
+```javascript
+pm.test("201 created", () => pm.response.to.have.status(201));
+pm.test("courseless institution_expert", () => {
+    const d = pm.response.json().data;
+    pm.expect(d.conversation_type).to.equal("institution_expert");
+    pm.expect(d.course_id).to.equal(null);
+});
+pm.environment.set("ie_conversation_id", pm.response.json().data.id);
+```
+
+### 1C.2 Expert replies (WebSocket)
+
+Connect the expert to the WS `messaging` stream and send:
+
+```json
+{ "stream": "messaging", "payload": { "type": "send_message", "conversation_id": {{ie_conversation_id}}, "body": "Thank you! Ready when you are." } }
+```
+
+**Expected:** a `message_sent` ack. The institution can send the same way in the same thread.
+
+### 1C.3 Target is not an affiliate — 403
+
+Use an instructor **not** affiliated with the institution as `expert_user_id`.
+
+**Expected:** `403`, `message: "You are no longer an active member of this institution."`.
+
+### 1C.4 Learner/instructor cannot open an institution_expert thread — 403
+
+Send 1C.1 with `{{instructor_token}}`.
+
+**Expected:** `403`, `message: "Only a partner institution can open this conversation."`.
+
+### 1C.5 Deactivated expert cannot send — 403
+
+Set the expert's `InstructorProfile.affiliation_status='removed'`, then have the expert POST a message.
+
+**Expected:** `403`. The **institution** party is never affiliation-gated and can still send. Reset to `active` after testing.
 
 ---
 
@@ -245,7 +325,7 @@ GET {{base_url}}/messaging/conversations/
 Authorization: {{learner_token}}
 ```
 
-**Expected:** `200 OK`.
+**Expected:** `200 OK`. Each row carries `conversation_type`, `participants`, and the caller's `unread_count`.
 
 ```json
 {
@@ -257,12 +337,14 @@ Authorization: {{learner_token}}
     "results": [
       {
         "id": 1,
-        "learner_id": 3,
-        "learner_name": "Alice Smith",
-        "instructor_id": 2,
-        "instructor_name": "Bob Jones",
+        "conversation_type": "learner_instructor",
+        "course_id": 1,
         "course_title": "Python Fundamentals",
         "course_slug": "python-fundamentals",
+        "participants": [
+          { "user_id": 3, "full_name": "Alice Smith", "user_type": "learner", "last_read_at": null },
+          { "user_id": 2, "full_name": "Bob Jones", "user_type": "instructor", "last_read_at": null }
+        ],
         "unread_count": 0,
         "updated_at": "2026-06-16T10:00:00Z",
         "created_at": "2026-06-16T10:00:00Z"
@@ -272,49 +354,25 @@ Authorization: {{learner_token}}
 }
 ```
 
-**Postman Test:**
 ```javascript
 pm.test("200 ok", () => pm.response.to.have.status(200));
 pm.test("conversation appears in inbox", () => {
-    const results = pm.response.json().data.results;
-    pm.expect(results.length).to.be.at.least(1);
-    pm.expect(results[0].id).to.equal(pm.environment.get("conversation_id") * 1);
+    const ids = pm.response.json().data.results.map(c => c.id);
+    pm.expect(ids).to.include(pm.environment.get("conversation_id") * 1);
 });
 ```
 
----
-
 ### 2.2 Instructor lists their conversations
 
-```
-GET {{base_url}}/messaging/conversations/
-Authorization: {{instructor_token}}
-```
-
-**Expected:** `200 OK`. Same conversation row appears in the instructor's inbox from their perspective.
-
----
+`{{instructor_token}}` → `200 OK`. The learner↔instructor and any co-instructor threads they belong to appear.
 
 ### 2.3 Pagination
 
-```
-GET {{base_url}}/messaging/conversations/?page=1&page_size=5
-Authorization: {{learner_token}}
-```
+`GET {{base_url}}/messaging/conversations/?page=1&page_size=5` → at most 5 items; `data.next` non-null if more pages.
 
-**Expected:** `data.results` has at most 5 items. `data.next` is non-null if more pages exist.
+### 2.4 Unauthenticated — 401
 
----
-
-### 2.4 Unauthenticated request — 401
-
-```
-GET {{base_url}}/messaging/conversations/
-```
-
-**Expected:** `401 Unauthorized`.
-
----
+`GET {{base_url}}/messaging/conversations/` (no auth) → `401`.
 
 ### 2.5 Unread conversation count (inbox badge)
 
@@ -323,23 +381,9 @@ GET {{base_url}}/messaging/conversations/unread-count/
 Authorization: {{learner_token}}
 ```
 
-**Expected:** `200 OK`.
-```json
-{ "success": true, "data": { "unread_conversations": 1 } }
-```
+**Expected:** `200`, `{ "success": true, "data": { "unread_conversations": 1 } }`.
 
-> Counts **distinct conversations** with at least one unread message — not total unread messages. Three unread messages in one thread → `unread_conversations: 1`. A never-opened thread counts as unread (its opener message has not been read yet). Equals the length of the WS `unread_summary.conversations` list.
-
-**Postman test snippet:**
-```javascript
-pm.test("returns unread conversation count", function () {
-    const body = pm.response.json();
-    pm.expect(body.success).to.be.true;
-    pm.expect(body.data.unread_conversations).to.be.a("number");
-});
-```
-
-After `POST .../read/` on every unread thread, this drops to `0`.
+> Counts **distinct conversations** with ≥1 unread message across all types — not total messages. A never-opened thread counts as unread. Equals the length of the WS `unread_summary.conversations` list. Drops to `0` after `POST .../read/` on every unread thread.
 
 ---
 
@@ -360,12 +404,14 @@ Authorization: {{learner_token}}
   "data": {
     "conversation": {
       "id": 1,
-      "learner_id": 3,
-      "learner_name": "Alice Smith",
-      "instructor_id": 2,
-      "instructor_name": "Bob Jones",
+      "conversation_type": "learner_instructor",
+      "course_id": 1,
       "course_title": "Python Fundamentals",
       "course_slug": "python-fundamentals",
+      "participants": [
+        { "user_id": 3, "full_name": "Alice Smith", "user_type": "learner", "last_read_at": null },
+        { "user_id": 2, "full_name": "Bob Jones", "user_type": "instructor", "last_read_at": null }
+      ],
       "unread_count": 0,
       "updated_at": "2026-06-16T10:00:00Z",
       "created_at": "2026-06-16T10:00:00Z"
@@ -390,271 +436,64 @@ Authorization: {{learner_token}}
 }
 ```
 
-**Postman Test:**
 ```javascript
 pm.test("200 ok", () => pm.response.to.have.status(200));
-pm.test("is_own is true for own message", () => {
-    const msg = pm.response.json().data.messages.results[0];
-    pm.expect(msg.is_own).to.equal(true);
+pm.test("is_own true for own message", () => {
+    pm.expect(pm.response.json().data.messages.results[0].is_own).to.equal(true);
 });
 pm.test("is_deleted not in payload", () => {
-    const msg = pm.response.json().data.messages.results[0];
-    pm.expect(msg).to.not.have.property("is_deleted");
+    pm.expect(pm.response.json().data.messages.results[0]).to.not.have.property("is_deleted");
 });
 ```
-
----
 
 ### 3.2 Instructor gets conversation detail
 
-Same request with `{{instructor_token}}`.
+Same request with `{{instructor_token}}` → `200`. `is_own` is `false` for the learner's opener.
 
-**Expected:** `200 OK`. Same structure. `is_own` is `false` for the learner's opener message since the instructor didn't send it.
+### 3.3 Outsider cannot access — 404
 
-**Postman Test:**
-```javascript
-pm.test("200 ok for instructor", () => pm.response.to.have.status(200));
-pm.test("is_own is false for learner's message", () => {
-    const msg = pm.response.json().data.messages.results[0];
-    pm.expect(msg.is_own).to.equal(false);
-});
-```
-
----
-
-### 3.3 Outsider cannot access conversation — 404
-
-```
-GET {{base_url}}/messaging/conversations/{{conversation_id}}/
-Authorization: {{learner2_token}}
-```
-
-**Expected:** `404 Not Found`, `message: "Conversation not found."`.
-
-**Postman Test:**
-```javascript
-pm.test("outsider gets 404 not 403", () => pm.response.to.have.status(404));
-pm.test("message does not reveal existence", () => {
-    pm.expect(pm.response.json().message).to.equal("Conversation not found.");
-});
-```
-
-> Numeric IDs return 404 (not 403) on no-access — resource existence is not leaked. See [CLAUDE.md](../../CLAUDE.md).
-
----
+`{{learner2_token}}` → `404`, `message: "Conversation not found."`. Numeric IDs return 404 (not 403) on no-access — existence not leaked.
 
 ### 3.4 Paginate messages
 
-```
-GET {{base_url}}/messaging/conversations/{{conversation_id}}/?page=1&page_size=20
-Authorization: {{learner_token}}
-```
-
-**Expected:** `data.messages.results` has at most 20 items, ordered oldest-first.
+`GET {{base_url}}/messaging/conversations/{{conversation_id}}/?page=1&page_size=20` → at most 20, oldest-first.
 
 ---
 
-## Group 4: Sending Messages
+## Group 4: Sending Follow-up Messages (WebSocket only)
 
-### 4.1 Instructor replies — happy path
+**There is no REST send endpoint.** Only the conversation **opener** is persisted over REST (the create call in Groups 1/1B/1C). Every follow-up reply is sent over the WebSocket `messaging` stream — see **Group 7** for the full protocol (`send_message` → `message_sent` ack to sender, `new_message` to the recipient). The send-gate is enforced on that WS path and returns an `error` frame (connection stays open) rather than an HTTP status:
 
-```
-POST {{base_url}}/messaging/conversations/{{conversation_id}}/messages/
-Authorization: {{instructor_token}}
-Content-Type: application/json
+| Send-gate violation (WS `send_message`) | `error.detail` |
+|---|---|
+| Unenrolled/inactive learner (learner_instructor) | `You must be actively enrolled in this course to message an instructor.` |
+| Removed instructor / co-instructor | `You are not an instructor for this course.` |
+| Deactivated expert (institution_expert) | `You are no longer an active member of this institution.` |
+| Not a participant / unknown conversation | `Conversation not found.` |
+| Blank body | `body must not be blank.` |
 
-{
-  "body": "Great question! The answer is in section 3.2."
-}
-```
-
-**Expected:** `201 Created`.
-
-```json
-{
-  "success": true,
-  "message": "Message sent.",
-  "data": {
-    "id": 2,
-    "conversation_id": 1,
-    "sender_id": 2,
-    "sender_name": "Bob Jones",
-    "body": "Great question! The answer is in section 3.2.",
-    "is_own": true,
-    "created_at": "2026-06-16T10:05:00Z"
-  }
-}
-```
-
-**Postman Test:**
-```javascript
-pm.test("201 created", () => pm.response.to.have.status(201));
-pm.test("is_own true for sender", () => {
-    pm.expect(pm.response.json().data.is_own).to.equal(true);
-});
-```
-
-**Verify:** `GET /messaging/conversations/{{conversation_id}}/` — `data.messages.count` is now 2.
-
----
-
-### 4.2 Learner follows up
-
-```
-POST {{base_url}}/messaging/conversations/{{conversation_id}}/messages/
-Authorization: {{learner_token}}
-Content-Type: application/json
-
-{
-  "body": "Thank you, that helped!"
-}
-```
-
-**Expected:** `201 Created`. Message count becomes 3.
-
----
-
-### 4.3 Blank body rejected — 400
-
-```
-POST {{base_url}}/messaging/conversations/{{conversation_id}}/messages/
-Authorization: {{learner_token}}
-Content-Type: application/json
-
-{ "body": "" }
-```
-
-**Expected:** `400 Bad Request`.
-
-```json
-{
-  "success": false,
-  "message": "Validation failed.",
-  "errors": {
-    "body": ["This field may not be blank."]
-  }
-}
-```
-
----
-
-### 4.4 Outsider cannot send — 404
-
-```
-POST {{base_url}}/messaging/conversations/{{conversation_id}}/messages/
-Authorization: {{learner2_token}}
-Content-Type: application/json
-
-{ "body": "Sneaky message" }
-```
-
-**Expected:** `404 Not Found`.
-
----
-
-### 4.5 Send-gate: unenrolled learner blocked — 403
-
-In Django admin, set `Enrollment.is_active = False` for the test learner. Then:
-
-```
-POST {{base_url}}/messaging/conversations/{{conversation_id}}/messages/
-Authorization: {{learner_token}}
-Content-Type: application/json
-
-{ "body": "Am I still here?" }
-```
-
-**Expected:** `403 Forbidden`.
-
-```json
-{
-  "success": false,
-  "message": "You must be actively enrolled to send messages in this course."
-}
-```
-
-**Verify:** `GET /messaging/conversations/{{conversation_id}}/` still returns `200` — the learner can read historical messages. Reset `is_active = True` after testing.
-
----
-
-### 4.6 Send-gate: removed instructor blocked — 403
-
-In Django admin, remove the instructor from `course.instructors`. Then:
-
-```
-POST {{base_url}}/messaging/conversations/{{conversation_id}}/messages/
-Authorization: {{instructor_token}}
-Content-Type: application/json
-
-{ "body": "I was removed but trying to reply" }
-```
-
-**Expected:** `403 Forbidden`.
-
-```json
-{
-  "success": false,
-  "message": "You are no longer an instructor for this course."
-}
-```
-
-Re-add the instructor after testing.
+Reading history is always allowed regardless of send-gate — `GET /messaging/conversations/{{conversation_id}}/` still returns `200`. See Group 7.2 (happy path) and 7.2a (send-gate error).
 
 ---
 
 ## Group 5: Mark as Read
 
-### 5.1 Learner marks conversation as read — happy path
-
-First, confirm there are unread messages. Run `GET /messaging/conversations/` and note `unread_count > 0` for the conversation (requires the instructor to have sent a message in Group 4.1).
+### 5.1 Learner marks conversation as read
 
 ```
 POST {{base_url}}/messaging/conversations/{{conversation_id}}/read/
 Authorization: {{learner_token}}
 ```
 
-**Expected:** `200 OK`.
-
-```json
-{
-  "success": true,
-  "message": "Marked as read."
-}
-```
-
-**Postman Test:**
-```javascript
-pm.test("200 ok", () => pm.response.to.have.status(200));
-```
-
-**Verify:**
-```
-GET {{base_url}}/messaging/conversations/
-Authorization: {{learner_token}}
-```
-`unread_count` is now `0` for that conversation.
-
----
+**Expected:** `200`, `{ "success": true, "message": "Marked as read." }`. Verify `unread_count` is now `0` for that conversation in the list.
 
 ### 5.2 Instructor marks conversation as read
 
-```
-POST {{base_url}}/messaging/conversations/{{conversation_id}}/read/
-Authorization: {{instructor_token}}
-```
-
-**Expected:** `200 OK`. Only the instructor's `instructor_last_read_at` is updated — the learner's unread count is unaffected.
-
----
+`{{instructor_token}}` → `200`. Only the **caller's** participant read cursor is stamped — the other party's unread count is unaffected.
 
 ### 5.3 Outsider cannot mark read — 404
 
-```
-POST {{base_url}}/messaging/conversations/{{conversation_id}}/read/
-Authorization: {{learner2_token}}
-```
-
-**Expected:** `404 Not Found`.
+`{{learner2_token}}` → `404`.
 
 ---
 
@@ -664,15 +503,9 @@ Sending a message triggers a `message.received` notification for the recipient.
 
 ### 6.1 Bell notification created after message sent
 
-1. Have the instructor send a message (Group 4.1).
-2. As the learner, check the bell feed:
+Instructor sends a reply over WebSocket (Group 7.2), then as learner: `GET {{base_url}}/notifications/`.
 
-```
-GET {{base_url}}/notifications/
-Authorization: {{learner_token}}
-```
-
-**Expected:** A notification row with `event_type = message.received`.
+**Expected:** a row with `event_type = message.received`.
 
 ```json
 {
@@ -680,30 +513,21 @@ Authorization: {{learner_token}}
   "event_type": "message.received",
   "title": "New message from Bob Jones",
   "body": "In Python Fundamentals: Great question! The answer is in section 3.2.",
-  "data": {
-    "conversation_id": 1,
-    "course_slug": "python-fundamentals"
-  },
+  "data": { "conversation_id": 1, "course_slug": "python-fundamentals" },
   "is_read": false,
   "created_at": "2026-06-16T10:05:00Z"
 }
 ```
 
-**Postman Test:**
+> For a **course-less** `institution_expert` thread the body has no `"In <course>:"` prefix — it is just the message preview, and `data.course_slug` is `null`.
+
 ```javascript
-pm.test("200 ok", () => pm.response.to.have.status(200));
-pm.test("message.received notification present", () => {
-    const results = pm.response.json().data.results;
-    const found = results.find(n => n.event_type === "message.received");
+pm.test("message.received present", () => {
+    const found = pm.response.json().data.results.find(n => n.event_type === "message.received");
     pm.expect(found).to.not.be.undefined;
     pm.expect(found.data).to.have.property("conversation_id");
-    pm.expect(found.data).to.have.property("course_slug");
 });
 ```
-
-**Verify:** Terminal shows the email if `EMAIL_BACKEND` is set to console and the learner has `messaging` email preference enabled.
-
----
 
 ### 6.2 Disable email for messaging category
 
@@ -712,448 +536,134 @@ PATCH {{base_url}}/notifications/preferences/
 Authorization: {{learner_token}}
 Content-Type: application/json
 
-{
-  "messaging": { "email_enabled": false }
-}
+{ "messaging": { "email_enabled": false } }
 ```
 
-**Expected:** `200 OK`. `messaging.email_enabled` is `false` in the returned data.
-
-**Verify:** Send another message as instructor. Bell feed notification still created. No email in terminal.
-
-Re-enable:
-```json
-{ "messaging": { "email_enabled": true } }
-```
+**Expected:** `200`. Send another message → bell notification still created, no email in terminal. Re-enable with `{ "messaging": { "email_enabled": true } }`.
 
 ---
 
 ## Group 7: WebSocket Testing
 
-Two ways to connect — Postman UI (recommended for this guide) or wscat CLI.
+Protocol is unchanged by the generalization — WS message snapshots carry `id, conversation_id, sender_id, body, is_deleted, created_at` for every conversation type. Run with Daphne (`daphne -p 8000 career_college_backend.asgi:application`) + Redis.
 
----
-
-### Postman WebSocket Setup
-
-1. In Postman, click **New → WebSocket Request**.
-2. Enter the URL:
-   ```
-   ws://localhost:8000/ws/?token={{learner_raw_token}}
-   ```
-   > `{{learner_raw_token}}` is the raw JWT with no `Bearer ` prefix.
-3. Click **Connect**. The **Messages** pane shows all incoming frames in real time.
-4. To send a frame: paste JSON into the message composer at the bottom, then click **Send**.
-5. To test two sessions simultaneously, open a second Postman tab and connect with `{{instructor_raw_token}}` (add `instructor_raw_token` to your environment).
-
-> Add `instructor_raw_token` to your Postman environment the same way as `learner_raw_token` — raw JWT, no prefix.
-
-**wscat equivalent (CLI):**
-```bash
-# Learner session
-wscat -c "ws://localhost:8000/ws/?token={{learner_raw_token}}"
-
-# Instructor session (separate terminal)
-wscat -c "ws://localhost:8000/ws/?token={{instructor_raw_token}}"
-```
-
----
+Connect: `ws://localhost:8000/ws/?token={{learner_raw_token}}` (raw JWT, no `Bearer `). For two-party live tests open a second tab with `{{instructor_raw_token}}`.
 
 ### 7.1 Connect and receive unread summary
 
-Connect as the learner (Postman or wscat).
-
-**Expected immediately on connect — two frames arrive automatically:**
+On connect, two frames arrive automatically:
 ```json
 { "stream": "notifications", "payload": { "type": "unread_count", "count": 2 } }
 { "stream": "messaging",     "payload": { "type": "unread_summary", "conversations": [{ "conversation_id": 1, "unread_count": 1 }], "unread_conversations": 1 } }
 ```
-
-> `unread_summary` lists only conversations with unread messages. Empty array if all are read. `unread_conversations` is the number of entries in that list — the same value (and same field name) the REST `conversations/unread-count/` endpoint returns. Use it directly for an inbox badge instead of summing `unread_count`.
-
----
+`unread_conversations` = length of the list (same value the REST `unread-count/` returns). Spans all conversation types the user belongs to.
 
 ### 7.2 Send a message via WebSocket
 
-**Prerequisite:** learner session connected. Paste into Postman message composer and click **Send**:
-
 ```json
-{
-  "stream": "messaging",
-  "payload": {
-    "type": "send_message",
-    "conversation_id": 1,
-    "body": "Sent over WebSocket!"
-  }
-}
+{ "stream": "messaging", "payload": { "type": "send_message", "conversation_id": 1, "body": "Sent over WebSocket!" } }
 ```
 
-**Sender receives exactly one frame — the immediate acknowledgment:**
+Sender receives exactly one `message_sent` ack (not `new_message`):
 ```json
-{
-  "stream": "messaging",
-  "payload": {
-    "type": "message_sent",
-    "message": {
-      "id": 4,
-      "conversation_id": 1,
-      "sender_id": 3,
-      "body": "Sent over WebSocket!",
-      "is_deleted": false,
-      "created_at": "2026-06-16T10:10:00Z"
-    }
-  }
-}
+{ "stream": "messaging", "payload": { "type": "message_sent", "message": { "id": 4, "conversation_id": 1, "sender_id": 3, "body": "Sent over WebSocket!", "is_deleted": false, "created_at": "..." } } }
 ```
-
-The sender does **not** receive a `new_message` frame. `message_sent` is the only delivery to the sender's session — the server intentionally excludes the sender's channel group from the broadcast to prevent duplicate delivery.
-
-**If the instructor is connected in a second session, they receive:**
-```json
-{
-  "stream": "messaging",
-  "payload": {
-    "type": "new_message",
-    "conversation_id": 1,
-    "message": {
-      "id": 4,
-      "conversation_id": 1,
-      "sender_id": 3,
-      "body": "Sent over WebSocket!",
-      "is_deleted": false,
-      "created_at": "2026-06-16T10:10:00Z"
-    }
-  }
-}
-```
-
-**Verify:** `GET /messaging/conversations/{{conversation_id}}/` — message count increased by 1.
-
----
+If the other party is connected, they receive a `new_message` frame with the same snapshot. The sender is intentionally excluded from the recipient broadcast to avoid duplicate delivery.
 
 ### 7.2a Send-gate error via WebSocket
 
-With learner's enrollment set to inactive (`is_active = False` in admin), send:
+With the learner's enrollment inactive, sending yields (connection stays open):
+```json
+{ "stream": "messaging", "payload": { "type": "error", "detail": "You must be actively enrolled in this course to message an instructor." } }
+```
+Reset `is_active=True` after.
+
+### 7.3 Mark read via WebSocket
 
 ```json
-{
-  "stream": "messaging",
-  "payload": {
-    "type": "send_message",
-    "conversation_id": 1,
-    "body": "Should be blocked"
-  }
-}
+{ "stream": "messaging", "payload": { "type": "mark_read", "conversation_id": 1 } }
 ```
+→ `{ "stream": "messaging", "payload": { "type": "marked_read", "conversation_id": 1 } }`. Verify `unread_count` is `0` via REST.
 
-**Expected — error frame, connection stays open:**
-```json
-{
-  "stream": "messaging",
-  "payload": {
-    "type": "error",
-    "detail": "You must be actively enrolled to send messages in this course."
-  }
-}
-```
+### 7.4 Live push to the other party
 
-Reset `is_active = True` after testing.
+Two tabs (learner + instructor). Instructor sends → instructor gets `message_sent` only; learner gets `new_message` automatically. Works identically for a co-instructor or institution↔expert thread — connect the two relevant parties.
+
+### 7.5–7.8 WS error frames
+
+- Unknown conversation id → `{ "type": "error", "detail": "Conversation not found." }`
+- Blank body → `{ "type": "error", "detail": "body must not be blank." }`
+- Unknown action → `{ "type": "error", "detail": "Unknown action: <x>." }`
+- Unknown stream → `{ "stream": "error", "payload": { "detail": "Unknown stream: <x>." } }`
+
+### 7.9 / 7.10 Auth failure
+
+Connect with no token or an invalid token → connection rejected immediately, close code `4001`.
 
 ---
 
-### 7.3 Mark conversation as read via WebSocket
-
-```json
-{
-  "stream": "messaging",
-  "payload": {
-    "type": "mark_read",
-    "conversation_id": 1
-  }
-}
-```
-
-**Expected:**
-```json
-{
-  "stream": "messaging",
-  "payload": {
-    "type": "marked_read",
-    "conversation_id": 1
-  }
-}
-```
-
-**Verify:** `GET /messaging/conversations/` via REST — `unread_count` is `0`.
-
----
-
-### 7.4 Receive a live message from the other party
-
-**Setup:** two Postman WebSocket tabs open simultaneously.
-- **Tab A** connected as learner (`ws://localhost:8000/ws/?token={{learner_raw_token}}`)
-- **Tab B** connected as instructor (`ws://localhost:8000/ws/?token={{instructor_raw_token}}`)
-
-From **Tab B (instructor)**, send:
-```json
-{ "stream": "messaging", "payload": { "type": "send_message", "conversation_id": 1, "body": "Live push test" } }
-```
-
-**Tab B (instructor) receives `message_sent` only:**
-```json
-{
-  "stream": "messaging",
-  "payload": {
-    "type": "message_sent",
-    "message": { "id": 5, "sender_id": 2, "body": "Live push test", "conversation_id": 1, ... }
-  }
-}
-```
-
-**Tab A (learner) receives `new_message` automatically — no action needed:**
-```json
-{
-  "stream": "messaging",
-  "payload": {
-    "type": "new_message",
-    "conversation_id": 1,
-    "message": { "id": 5, "sender_id": 2, "body": "Live push test", ... }
-  }
-}
-```
-
-> Tab B does **not** receive `new_message` — the server pushes that frame only to the recipient's channel group.
-
----
-
-### 7.4a Reconnect behavior after disconnect
-
-This test verifies the backend accepts sends normally after a reconnect. The in-memory queue (which holds messages while the WS is down) is frontend logic and cannot be simulated in Postman.
-
-1. Close the learner's Postman WS tab (click **Disconnect**).
-2. Reopen a new WebSocket tab and reconnect as learner.
-3. **Expected on reconnect:** `unread_summary` frame arrives with current unread state.
-4. Send a message immediately after reconnect:
-   ```json
-   { "stream": "messaging", "payload": { "type": "send_message", "conversation_id": 1, "body": "After reconnect" } }
-   ```
-5. **Expected:** `message_sent` frame arrives normally — no errors, no delay.
-
-> In a real frontend using Option A, any messages queued while the connection was down would flush in order at step 4's moment. The backend sees them as normal sequential sends and returns a `message_sent` for each. The frontend upgrades each queued message's UI state from `pending` to `sent`.
-
----
-
-### 7.5 WS error: send to non-existent conversation
-
-```json
-{
-  "stream": "messaging",
-  "payload": {
-    "type": "send_message",
-    "conversation_id": 99999,
-    "body": "Hello"
-  }
-}
-```
-
-**Expected:**
-```json
-{
-  "stream": "messaging",
-  "payload": { "type": "error", "detail": "Conversation not found." }
-}
-```
-
-Connection stays open.
-
----
-
-### 7.6 WS error: blank body
-
-```json
-{
-  "stream": "messaging",
-  "payload": {
-    "type": "send_message",
-    "conversation_id": 1,
-    "body": "   "
-  }
-}
-```
-
-**Expected:**
-```json
-{
-  "stream": "messaging",
-  "payload": { "type": "error", "detail": "body must not be blank." }
-}
-```
-
----
-
-### 7.7 WS error: unknown action
-
-```json
-{
-  "stream": "messaging",
-  "payload": { "type": "unknown_action" }
-}
-```
-
-**Expected:**
-```json
-{
-  "stream": "messaging",
-  "payload": { "type": "error", "detail": "Unknown action: unknown_action." }
-}
-```
-
----
-
-### 7.8 WS error: unknown stream
-
-```json
-{ "stream": "unknown_stream", "payload": {} }
-```
-
-**Expected:**
-```json
-{
-  "stream": "error",
-  "payload": { "detail": "Unknown stream: unknown_stream." }
-}
-```
-
----
-
-### 7.9 Connect without token — auth failure
-
-**Postman:** open a new WebSocket tab, enter `ws://localhost:8000/ws/` (no token param), click **Connect**.
-
-**wscat:**
-```bash
-wscat -c "ws://localhost:8000/ws/"
-```
-
-**Expected:** Connection rejected immediately with close code `4001`.
-
----
-
-### 7.10 Connect with invalid/expired token
-
-**Postman:** enter `ws://localhost:8000/ws/?token=not.a.real.token`, click **Connect**.
-
-**wscat:**
-```bash
-wscat -c "ws://localhost:8000/ws/?token=not.a.real.token"
-```
-
-**Expected:** Connection rejected immediately with close code `4001`.
-
----
-
-## Group 8: Edge Cases
+## Group 8: Edge Cases & Access
 
 ### 8.1 Offline recipient still gets notification
 
-1. Disconnect the learner's wscat session.
-2. Send a message as the instructor via REST.
-3. Reconnect wscat as the learner.
-
-**Expected on reconnect:** `unread_summary` shows the new unread count. `GET /notifications/` shows the `message.received` notification row.
-
----
+Disconnect learner WS → instructor sends via REST → reconnect learner. `unread_summary` reflects the new unread; `GET /notifications/` shows the `message.received` row.
 
 ### 8.2 Conversation list ordered by most recent activity
 
-Send messages across multiple conversations. Verify that `GET /messaging/conversations/` returns the conversation with the most recent message first (`ordering = -updated_at`).
+Send messages across multiple threads → `GET /messaging/conversations/` returns the most-recently-active first (`ordering = -updated_at`).
 
----
+### 8.3 Access by user type
 
-### 8.3 Admin / partner institution cannot access messaging
+| Caller | `GET /messaging/conversations/` |
+|---|---|
+| Learner | 200 |
+| Instructor | 200 |
+| Partner institution | 200 (needed for institution↔expert threads) |
+| Admin | **403** |
 
 ```
 GET {{base_url}}/messaging/conversations/
 Authorization: {{admin_token}}
 ```
-
-**Expected:** `403 Forbidden`. Only `learner` and `instructor` user types are permitted.
+**Expected:** `403 Forbidden`. Admins are excluded from messaging.
 
 ---
 
 ## Response Shape Reference
 
-**Start conversation (201):**
+**Conversation object (create 201 / list / detail):**
 ```json
 {
-  "success": true,
-  "message": "Conversation started.",
-  "data": {
-    "id": 1,
-    "learner_id": 3,
-    "learner_name": "Alice Smith",
-    "instructor_id": 2,
-    "instructor_name": "Bob Jones",
-    "course_title": "Python Fundamentals",
-    "course_slug": "python-fundamentals",
-    "unread_count": 0,
-    "updated_at": "2026-06-16T10:00:00Z",
-    "created_at": "2026-06-16T10:00:00Z"
-  }
+  "id": 1,
+  "conversation_type": "learner_instructor",
+  "course_id": 1,
+  "course_title": "Python Fundamentals",
+  "course_slug": "python-fundamentals",
+  "participants": [
+    { "user_id": 3, "full_name": "Alice Smith", "user_type": "learner", "last_read_at": null },
+    { "user_id": 2, "full_name": "Bob Jones", "user_type": "instructor", "last_read_at": null }
+  ],
+  "unread_count": 0,
+  "updated_at": "2026-06-16T10:00:00Z",
+  "created_at": "2026-06-16T10:00:00Z"
 }
 ```
+> For `institution_expert` with no course: `course_id`, `course_title`, `course_slug` are all `null`.
 
-**Conversation detail (200):**
+**Send message — WebSocket only.** The sender's `message_sent` ack frame carries:
 ```json
-{
-  "success": true,
-  "data": {
-    "conversation": { "id": 1, "learner_id": 3, "instructor_id": 2, "unread_count": 1, ... },
-    "messages": {
-      "count": 2,
-      "next": null,
-      "previous": null,
-      "results": [
-        { "id": 1, "sender_id": 3, "sender_name": "Alice Smith", "body": "...", "is_own": true, "created_at": "..." }
-      ]
-    }
-  }
-}
+{ "stream": "messaging", "payload": { "type": "message_sent",
+  "message": { "id": 2, "conversation_id": 1, "sender_id": 2, "body": "...", "is_deleted": false, "created_at": "..." } } }
 ```
+(There is no REST `POST .../messages/` endpoint.)
 
-**Send message (201):**
-```json
-{
-  "success": true,
-  "message": "Message sent.",
-  "data": { "id": 2, "conversation_id": 1, "sender_id": 2, "sender_name": "Bob Jones", "body": "...", "is_own": true, "created_at": "..." }
-}
-```
+**Unread conversation count (200):** `{ "success": true, "data": { "unread_conversations": 1 } }`
 
-**Unread conversation count (200):**
-```json
-{ "success": true, "data": { "unread_conversations": 1 } }
-```
+**Mark read (200):** `{ "success": true, "message": "Marked as read." }`
 
-**Mark read (200):**
-```json
-{ "success": true, "message": "Marked as read." }
-```
+**Not found (404):** `{ "success": false, "message": "Conversation not found." }`
 
-**Error — not found (404):**
-```json
-{ "success": false, "message": "Conversation not found." }
-```
-
-**Error — access denied (403):**
-```json
-{ "success": false, "message": "You must be actively enrolled in this course to message an instructor." }
-```
-
-**Error — validation (400):**
-```json
-{ "success": false, "message": "Validation failed.", "errors": { "body": ["..."] } }
-```
+**Validation (400):** `{ "success": false, "message": "Validation failed.", "errors": { "body": ["..."] } }`
 
 ---
 
@@ -1161,19 +671,21 @@ Authorization: {{admin_token}}
 
 | Scenario | Endpoint | Status |
 |----------|----------|--------|
-| Instructor tries to initiate | `POST conversations/create/` | 403 |
+| Instructor initiates learner↔instructor thread | `POST conversations/create/` | 403 |
 | Unenrolled learner initiates | `POST conversations/create/` | 403 |
+| Co-instructor target not on roster | `POST conversations/create/` | 403 |
+| Institution↔expert target not an affiliate | `POST conversations/create/` | 403 |
+| Non-institution opens institution↔expert | `POST conversations/create/` | 403 |
 | Course not found | `POST conversations/create/` | 404 |
-| Instructor not found | `POST conversations/create/` | 404 |
+| Instructor / expert not found | `POST conversations/create/` | 404 |
 | Blank opener body | `POST conversations/create/` | 400 |
+| Missing required id for the type | `POST conversations/create/` | 400 |
 | Unauthenticated | any endpoint | 401 |
 | Outsider accesses detail | `GET conversations/<id>/` | 404 |
-| Outsider sends message | `POST conversations/<id>/messages/` | 404 |
-| Unenrolled learner sends | `POST conversations/<id>/messages/` | 403 |
-| Removed instructor sends | `POST conversations/<id>/messages/` | 403 |
-| Blank follow-up body | `POST conversations/<id>/messages/` | 400 |
 | Outsider marks read | `POST conversations/<id>/read/` | 404 |
-| Admin / partner institution | any messaging endpoint | 403 |
+| Admin | any messaging endpoint | 403 |
+
+Follow-up send-gate violations happen on the **WebSocket** `send_message` action and surface as `error` frames (connection stays open), not HTTP statuses — see Group 4 and Group 7.2a.
 
 ---
 
@@ -1181,55 +693,29 @@ Authorization: {{admin_token}}
 
 ```
 Setup
-  1. Enroll learner in a published course
-  2. Note course_id and instructor_id
+  Enroll a learner + add TWO instructors to a published course.
+  Create a verified institution + an active affiliated expert.
 
-Group 1: Conversation creation
-  1.1  Learner starts conversation    → 201, save conversation_id
-  1.2  Same request again             → 200, idempotent
-  1.3  Instructor initiates           → 403
-  1.4  Unenrolled learner             → 403
-  1.5  Bad course id                  → 404
-  1.6  Bad instructor id              → 404
-  1.7  Blank body                     → 400
+Group 1  Learner↔Instructor
+  1.1 start → 201 (save conversation_id)   1.2 duplicate → 200
+  1.3 instructor initiates → 403           1.4 unenrolled → 403
+  1.5 bad course → 404                     1.6 bad instructor → 404
+  1.7 blank body → 400                     1.8 missing course_id → 400
 
-Group 2: List
-  2.1  Learner lists                  → 200, conversation present
-  2.2  Instructor lists               → 200, same conversation
-  2.4  Unauthenticated               → 401
-  2.5  Unread conversation count      → 200, {unread_conversations: N}
+Group 1B Co-Instructor
+  1B.1 instructor starts → 201             1B.2 peer replies → 201
+  1B.3 target off roster → 403             1B.4 removed co-instructor sends → 403
 
-Group 3: Detail
-  3.1  Learner gets detail            → 200, is_own=true on own msg
-  3.2  Instructor gets detail         → 200, is_own=false on learner msg
-  3.3  Outsider gets detail           → 404
+Group 1C Institution↔Expert
+  1C.1 institution starts (courseless) → 201   1C.2 expert replies → 201
+  1C.3 non-affiliate target → 403          1C.4 non-institution opens → 403
+  1C.5 deactivated expert sends → 403
 
-Group 4: Send messages
-  4.1  Instructor replies             → 201, verify count=2
-  4.2  Learner follows up             → 201, verify count=3
-  4.3  Blank body                     → 400
-  4.4  Outsider sends                 → 404
-  4.5  Unenrolled learner sends       → 403 (set is_active=False first)
-  4.6  Removed instructor sends       → 403 (remove from course.instructors)
-
-Group 5: Mark read
-  5.1  Learner marks read             → 200, unread_count=0
-  5.2  Instructor marks read          → 200
-  5.3  Outsider marks read            → 404
-
-Group 6: Notifications
-  6.1  Bell feed has message.received → check after Group 4.1
-  6.2  Disable email pref             → no email, bell unaffected
-
-Group 7: WebSocket (requires Daphne + Redis)
-  7.1  Connect                        → unread_summary (+ unread_conversations) pushed on connect
-  7.2  Send via WS                    → message_sent back to sender; new_message to recipient only
-  7.3  Mark read via WS               → marked_read back
-  7.4  Live push to other party       → two tabs, new_message delivered to recipient only
-  7.5  Send to bad conversation       → error frame
-  7.9  Connect without token          → closed 4001
-
-Group 8: Edge cases
-  8.1  Offline then reconnect         → unread_summary reflects new messages
-  8.3  Admin calls messaging          → 403
+Group 2  List: 2.1/2.2 → 200, 2.4 → 401, 2.5 unread count
+Group 3  Detail: 3.1 is_own=true, 3.2 is_own=false, 3.3 outsider → 404
+Group 4  Follow-up sends are WebSocket-only → see Group 7 (send-gate → error frame)
+Group 5  Mark read: 5.1 → unread 0, 5.2 own cursor only, 5.3 outsider → 404
+Group 6  Notifications: 6.1 bell has message.received, 6.2 disable email
+Group 7  WebSocket (Daphne+Redis): 7.1 connect, 7.2 send, 7.3 read, 7.4 live push, 7.5+ errors, 7.9 no token → 4001
+Group 8  Edge: 8.1 offline reconnect, 8.2 ordering, 8.3 admin → 403 / institution → 200
 ```

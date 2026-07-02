@@ -1,6 +1,6 @@
 from rest_framework import serializers
 
-from messaging.models import Conversation, Message
+from messaging.models import Conversation, ConversationParticipant, Message
 
 
 class MessageSerializer(serializers.ModelSerializer):
@@ -29,46 +29,61 @@ class MessageSerializer(serializers.ModelSerializer):
         return obj.sender_id == request.user.pk
 
 
+class ConversationParticipantSerializer(serializers.ModelSerializer):
+    """A single party in a conversation."""
+
+    full_name = serializers.CharField(source='user.full_name', read_only=True)
+    user_type = serializers.CharField(source='user.user_type', read_only=True)
+
+    class Meta:
+        model = ConversationParticipant
+        fields = ['user_id', 'full_name', 'user_type', 'last_read_at']
+        read_only_fields = fields
+
+
 class ConversationSerializer(serializers.ModelSerializer):
     """
-    List-level serializer. Returns metadata + per-caller unread_count.
+    List-level serializer. Returns metadata + participants + per-caller unread_count.
 
     unread_count performs one COUNT query per conversation row. Acceptable for
     inbox lists (O(10–50) items); optimize with annotation if scale demands.
     """
 
-    learner_name = serializers.CharField(source='learner.full_name', read_only=True)
-    instructor_name = serializers.CharField(source='instructor.full_name', read_only=True)
-    course_title = serializers.CharField(source='course.title', read_only=True)
-    course_slug = serializers.SlugField(source='course.slug', read_only=True)
+    participants = ConversationParticipantSerializer(many=True, read_only=True)
+    course_title = serializers.SerializerMethodField()
+    course_slug = serializers.SerializerMethodField()
     unread_count = serializers.SerializerMethodField()
 
     class Meta:
         model = Conversation
         fields = [
             'id',
-            'learner_id',
-            'learner_name',
-            'instructor_id',
-            'instructor_name',
+            'conversation_type',
+            'course_id',
             'course_title',
             'course_slug',
+            'participants',
             'unread_count',
             'updated_at',
             'created_at',
         ]
         read_only_fields = fields
 
+    def get_course_title(self, obj: Conversation):
+        return obj.course.title if obj.course_id else None
+
+    def get_course_slug(self, obj: Conversation):
+        return obj.course.slug if obj.course_id else None
+
     def get_unread_count(self, obj: Conversation) -> int:
         request = self.context.get('request')
         if request is None:
             return 0
-        user = request.user
-        last_read = (
-            obj.learner_last_read_at
-            if user.pk == obj.learner_id
-            else obj.instructor_last_read_at
-        )
+        last_read = None
+        for p in obj.participants.all():
+            if p.user_id == request.user.pk:
+                last_read = p.last_read_at
+                break
         qs = Message.objects.filter(conversation=obj, is_deleted=False)
         if last_read is not None:
             qs = qs.filter(created_at__gt=last_read)
@@ -76,10 +91,24 @@ class ConversationSerializer(serializers.ModelSerializer):
 
 
 class ConversationCreateSerializer(serializers.Serializer):
-    """Payload for initiating a new conversation (learner → instructor for a course)."""
+    """
+    Payload for initiating a conversation. `conversation_type` selects which
+    target/course fields are required:
 
-    course_id = serializers.IntegerField(min_value=1)
-    instructor_id = serializers.IntegerField(min_value=1)
+      learner_instructor (default): course_id + instructor_id
+      co_instructor              : course_id + peer_instructor_id
+      institution_expert         : expert_user_id (course_id optional)
+    """
+
+    conversation_type = serializers.ChoiceField(
+        choices=Conversation.ConversationType.choices,
+        required=False,
+        default=Conversation.ConversationType.LEARNER_INSTRUCTOR,
+    )
+    course_id = serializers.IntegerField(min_value=1, required=False)
+    instructor_id = serializers.IntegerField(min_value=1, required=False)
+    peer_instructor_id = serializers.IntegerField(min_value=1, required=False)
+    expert_user_id = serializers.IntegerField(min_value=1, required=False)
     body = serializers.CharField(max_length=5000)
 
     def validate_body(self, value: str) -> str:
@@ -88,14 +117,21 @@ class ConversationCreateSerializer(serializers.Serializer):
             raise serializers.ValidationError('Message body must not be blank.')
         return stripped
 
+    def validate(self, attrs):
+        ctype = attrs['conversation_type']
+        CType = Conversation.ConversationType
+        if ctype == CType.LEARNER_INSTRUCTOR:
+            self._require(attrs, 'course_id', 'instructor_id')
+        elif ctype == CType.CO_INSTRUCTOR:
+            self._require(attrs, 'course_id', 'peer_instructor_id')
+        elif ctype == CType.INSTITUTION_EXPERT:
+            self._require(attrs, 'expert_user_id')
+        return attrs
 
-class SendMessageSerializer(serializers.Serializer):
-    """Payload for sending a follow-up message in an existing conversation."""
-
-    body = serializers.CharField(max_length=5000)
-
-    def validate_body(self, value: str) -> str:
-        stripped = value.strip()
-        if not stripped:
-            raise serializers.ValidationError('Message body must not be blank.')
-        return stripped
+    @staticmethod
+    def _require(attrs, *fields):
+        missing = [f for f in fields if attrs.get(f) is None]
+        if missing:
+            raise serializers.ValidationError(
+                {f: 'This field is required for this conversation type.' for f in missing}
+            )

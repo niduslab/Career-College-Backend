@@ -1,28 +1,39 @@
 """
 Messaging service — all business logic for conversations and messages.
 
-Send-gate rules (applied at message-send time, not conversation-open time):
-  Learner  : Enrollment(user=learner, course=course, is_active=True) must exist.
-  Instructor: instructor must still be in course.instructors.all().
+Conversations are 2-party threads. `conversation_type` selects the party roles
+and the send-gate; parties live in `ConversationParticipant`. All send-gates are
+applied at message-send time (not conversation-open time) and are enforced only
+here — never duplicated in a view or the WebSocket consumer.
 
-Access policy (numeric IDs → 404 on no-access; slug-based → 403):
-  get_conversation_for_participant raises Conversation.DoesNotExist when the
-  caller is not a participant, yielding a 404 in the view layer — consistent
-  with the project-wide rule for numeric-ID resources.
+Send-gate by type:
+  learner_instructor : learner needs an active enrollment; instructor must still
+                       be on the course.
+  co_instructor      : each instructor must still be on the course roster.
+  institution_expert : the expert must still be an active affiliate; the
+                       institution party may always send.
+
+Access policy (numeric IDs → 404 on no-access): get_conversation_for_participant
+raises Conversation.DoesNotExist when the caller is not a participant, yielding a
+404 in the view layer.
 """
 
+import datetime
 import logging
-from typing import Optional
 
 from asgiref.sync import async_to_sync
 from channels.layers import get_channel_layer
 from django.db import IntegrityError, transaction
-from django.db.models import Q, QuerySet
+from django.db.models import Exists, OuterRef, QuerySet, Value
+from django.db.models.functions import Coalesce
 from django.utils import timezone
 
-from messaging.models import Conversation, Message
+from messaging.models import Conversation, ConversationParticipant, Message
 
 logger = logging.getLogger(__name__)
+
+_EPOCH = datetime.datetime(1970, 1, 1, tzinfo=datetime.timezone.utc)
+_CType = Conversation.ConversationType
 
 
 class MessagingError(Exception):
@@ -35,155 +46,217 @@ class MessagingError(Exception):
 
 
 # ---------------------------------------------------------------------------
-# Internal permission guards
+# Low-level guards (raise MessagingError)
 # ---------------------------------------------------------------------------
 
-def _assert_active_enrollment(learner, course) -> None:
-    """Raises MessagingError(403) if no active enrollment exists."""
+def _assert_active_enrollment(learner, course_id) -> None:
     from courses.all_models.enrollment_models import Enrollment
-    if not Enrollment.objects.filter(user=learner, course=course, is_active=True).exists():
+    if not Enrollment.objects.filter(user=learner, course_id=course_id, is_active=True).exists():
         raise MessagingError(
             'You must be actively enrolled in this course to message an instructor.',
             http_status=403,
         )
 
 
-def _assert_instructor_on_course(instructor, course) -> None:
-    """Raises MessagingError(403) if instructor is not in course.instructors."""
-    if not course.instructors.filter(pk=instructor.pk).exists():
+def _assert_instructor_on_course(instructor, course_id) -> None:
+    from courses.all_models.course_models import NidusCourse
+    if not NidusCourse.objects.filter(pk=course_id, instructors=instructor).exists():
         raise MessagingError(
-            'This instructor is not a member of this course.',
+            'You are not an instructor for this course.',
             http_status=403,
         )
 
+
+def _assert_active_affiliation(expert_user, institution_user) -> None:
+    from authentication.models import InstructorProfile
+    ok = InstructorProfile.objects.filter(
+        user=expert_user,
+        affiliated_institution__user=institution_user,
+        affiliation_status='active',
+    ).exists()
+    if not ok:
+        raise MessagingError(
+            'You are no longer an active member of this institution.',
+            http_status=403,
+        )
+
+
+def _pair_key(user_id_a: int, user_id_b: int) -> str:
+    lo, hi = sorted((user_id_a, user_id_b))
+    return f'{lo}-{hi}'
+
+
+def _other_participant(conversation: Conversation, user):
+    """The other party's ConversationParticipant (participants are prefetched)."""
+    for p in conversation.participants.all():
+        if p.user_id != user.pk:
+            return p
+    return None
+
+
+# ---------------------------------------------------------------------------
+# Send-gate dispatch
+# ---------------------------------------------------------------------------
 
 def _assert_send_permission(sender, conversation: Conversation) -> None:
-    """
-    Checks the send-gate for an existing conversation.
-
-    Learner side : active enrollment required.
-    Instructor side: must still be on the course.
-    """
-    if sender.pk == conversation.learner_id:
-        from courses.all_models.enrollment_models import Enrollment
-        if not Enrollment.objects.filter(
-            user=sender,
-            course_id=conversation.course_id,
-            is_active=True,
-        ).exists():
-            raise MessagingError(
-                'You must be actively enrolled to send messages in this course.',
-                http_status=403,
-            )
-    elif sender.pk == conversation.instructor_id:
-        # Reload course to avoid stale M2M cache on cached conversation objects.
-        from courses.all_models.course_models import NidusCourse
-        if not NidusCourse.objects.filter(
-            pk=conversation.course_id,
-            instructors=sender,
-        ).exists():
-            raise MessagingError(
-                'You are no longer an instructor for this course.',
-                http_status=403,
-            )
+    ctype = conversation.conversation_type
+    if ctype == _CType.LEARNER_INSTRUCTOR:
+        if sender.user_type == 'learner':
+            _assert_active_enrollment(sender, conversation.course_id)
+        else:
+            _assert_instructor_on_course(sender, conversation.course_id)
+    elif ctype == _CType.CO_INSTRUCTOR:
+        _assert_instructor_on_course(sender, conversation.course_id)
+    elif ctype == _CType.INSTITUTION_EXPERT:
+        if sender.user_type != 'partner_institution':
+            # Institution party is the prefetched counterpart — no extra query.
+            institution = _other_participant(conversation, sender)
+            _assert_active_affiliation(sender, institution.user)
     else:
-        # Should never happen if get_conversation_for_participant is called first,
-        # but guard defensively.
+        raise MessagingError('Unknown conversation type.', http_status=422)
+
+
+def _validate_new_conversation(conversation_type, initiator, target, course) -> None:
+    """Creation-time gate: the pair is valid and the initiator may open it.
+
+    Role checks come before the self-pair check so a wrong-role initiator gets a
+    403 (not a 400) even when they pass their own id as the target.
+    """
+    if conversation_type == _CType.LEARNER_INSTRUCTOR:
+        if course is None:
+            raise MessagingError('A course is required for this conversation.', http_status=400)
+        if initiator.user_type != 'learner' or target.user_type != 'instructor':
+            raise MessagingError(
+                'Only a learner can start a conversation with an instructor.', http_status=403,
+            )
+        _assert_no_self(initiator, target)
+        _assert_active_enrollment(initiator, course.pk)
+        _assert_instructor_on_course(target, course.pk)
+
+    elif conversation_type == _CType.CO_INSTRUCTOR:
+        if course is None:
+            raise MessagingError('A course is required for this conversation.', http_status=400)
+        if initiator.user_type != 'instructor' or target.user_type != 'instructor':
+            raise MessagingError('Both parties must be instructors.', http_status=403)
+        _assert_no_self(initiator, target)
+        _assert_instructor_on_course(initiator, course.pk)
+        _assert_instructor_on_course(target, course.pk)
+
+    elif conversation_type == _CType.INSTITUTION_EXPERT:
+        institution, expert = _resolve_institution_expert(initiator, target)
+        _assert_no_self(initiator, target)
+        _assert_active_affiliation(expert, institution)
+
+    else:
+        raise MessagingError('Unknown conversation type.', http_status=400)
+
+
+def _assert_no_self(initiator, target) -> None:
+    if initiator.pk == target.pk:
+        raise MessagingError('Cannot start a conversation with yourself.', http_status=400)
+
+
+def _resolve_institution_expert(initiator, target):
+    """Return (institution_user, expert_user) from an unordered pair; else raise."""
+    parties = {initiator.user_type: initiator, target.user_type: target}
+    institution = parties.get('partner_institution')
+    expert = parties.get('instructor')
+    if institution is None or expert is None:
         raise MessagingError(
-            'You are not a participant in this conversation.',
+            'An institution conversation is between a partner institution and an expert.',
             http_status=403,
         )
+    return institution, expert
 
 
 # ---------------------------------------------------------------------------
-# Public API
+# Public API — creation
 # ---------------------------------------------------------------------------
 
-def get_or_create_conversation(
-    learner,
-    instructor,
-    course,
-    opener_body: str,
-) -> tuple[Conversation, bool]:
+def start_conversation(*, conversation_type, initiator, target, course=None, opener_body):
     """
-    Get existing or atomically create a new Conversation + first Message.
+    Get an existing thread or atomically create it + its first Message.
 
-    Returns (conversation, created: bool).
-    Raises MessagingError on permission violations.
-
-    The opener_body is only persisted when created=True. When the conversation
-    already exists the caller receives the existing row without a new message,
-    matching the recommended UX of "take the user to the existing thread".
+    Returns (conversation, created). Raises MessagingError on gate violations.
+    The opener_body is persisted only when created=True; an existing thread is
+    returned untouched so the client navigates to it.
     """
-    _assert_active_enrollment(learner, course)
-    _assert_instructor_on_course(instructor, course)
+    _validate_new_conversation(conversation_type, initiator, target, course)
+    key = _pair_key(initiator.pk, target.pk)
 
     with transaction.atomic():
-        try:
-            conversation, created = Conversation.objects.get_or_create(
-                learner=learner,
-                instructor=instructor,
-                course=course,
-            )
-        except IntegrityError:
-            # Another concurrent request created the row between our SELECT and INSERT.
-            conversation = Conversation.objects.get(
-                learner=learner,
-                instructor=instructor,
-                course=course,
-            )
-            created = False
-
+        conversation, created = _get_or_create(conversation_type, key, course, initiator, target)
         if created:
             message = Message.objects.create(
-                conversation=conversation,
-                sender=learner,
-                body=opener_body,
+                conversation=conversation, sender=initiator, body=opener_body,
             )
             _schedule_new_message_dispatch(
-                conversation=conversation,
-                message=message,
-                sender=learner,
-                recipient_id=instructor.pk,
-                course_slug=course.slug,
-                course_title=course.title,
-                sender_name=learner.full_name,
+                conversation=conversation, message=message,
+                sender=initiator, recipient_id=target.pk,
             )
 
     return conversation, created
 
 
+def _get_or_create(conversation_type, key, course, initiator, target):
+    existing = Conversation.objects.filter(
+        conversation_type=conversation_type, participant_key=key, course=course,
+    ).first()
+    if existing:
+        return existing, False
+    try:
+        with transaction.atomic():
+            conversation = Conversation.objects.create(
+                conversation_type=conversation_type, participant_key=key, course=course,
+            )
+            ConversationParticipant.objects.create(conversation=conversation, user=initiator)
+            ConversationParticipant.objects.create(conversation=conversation, user=target)
+        return conversation, True
+    except IntegrityError:
+        # Lost a race; return the row the other request created.
+        return Conversation.objects.get(
+            conversation_type=conversation_type, participant_key=key, course=course,
+        ), False
+
+
+def get_or_create_conversation(learner, instructor, course, opener_body):
+    """Back-compat shim for the learner↔instructor path (learner-initiated)."""
+    return start_conversation(
+        conversation_type=_CType.LEARNER_INSTRUCTOR,
+        initiator=learner, target=instructor, course=course, opener_body=opener_body,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Public API — reads & sends
+# ---------------------------------------------------------------------------
+
 def list_conversations(user) -> QuerySet:
-    """
-    Return all conversations for a user (learner or instructor), most-recently
-    active first. Callers can annotate or paginate the returned queryset.
-    """
+    """All conversations the user participates in, most-recently active first."""
     return (
         Conversation.objects
-        .filter(Q(learner=user) | Q(instructor=user))
-        .select_related('learner', 'instructor', 'course')
+        .filter(participants__user=user)
+        .select_related('course')
+        .prefetch_related('participants__user')
         .order_by('-updated_at')
     )
 
 
 def get_conversation_for_participant(user, conversation_id: int) -> Conversation:
     """
-    Fetch a conversation by numeric ID. Raises Conversation.DoesNotExist when
-    the row doesn't exist OR the caller is not a participant — both surface as
-    404 per the project's numeric-ID access-denied policy.
+    Fetch a conversation by numeric ID. Raises Conversation.DoesNotExist when the
+    row doesn't exist OR the caller is not a participant — both → 404.
     """
-    try:
-        return Conversation.objects.select_related(
-            'learner', 'instructor', 'course'
-        ).get(
-            Q(pk=conversation_id) & (Q(learner=user) | Q(instructor=user))
-        )
-    except Conversation.DoesNotExist:
-        raise
+    return (
+        Conversation.objects
+        .select_related('course')
+        .prefetch_related('participants__user')
+        .get(pk=conversation_id, participants__user=user)
+    )
 
 
 def get_messages(conversation: Conversation) -> QuerySet:
-    """Return visible (non-deleted) messages for a conversation, oldest first."""
+    """Visible (non-deleted) messages for a conversation, oldest first."""
     return (
         Message.objects
         .filter(conversation=conversation, is_deleted=False)
@@ -196,142 +269,82 @@ def send_message(user, conversation_id: int, body: str) -> Message:
     """
     Create a new Message in an existing conversation.
 
-    Raises:
-        Conversation.DoesNotExist  — caller is not a participant (→ 404).
-        MessagingError(403)        — send-gate violated (unenrolled / removed instructor).
+    Raises Conversation.DoesNotExist (caller not a participant → 404) or
+    MessagingError(403) (send-gate violated).
     """
     conversation = get_conversation_for_participant(user, conversation_id)
     _assert_send_permission(user, conversation)
-
-    recipient_id = (
-        conversation.instructor_id
-        if user.pk == conversation.learner_id
-        else conversation.learner_id
-    )
+    other = _other_participant(conversation, user)
+    recipient_id = other.user_id if other else None
 
     with transaction.atomic():
-        message = Message.objects.create(
-            conversation=conversation,
-            sender=user,
-            body=body,
-        )
-        # Touch updated_at for list ordering without triggering auto_now on Conversation
-        # (auto_now fires on full .save(); a targeted UPDATE avoids it and is cheaper).
+        message = Message.objects.create(conversation=conversation, sender=user, body=body)
+        # Bump updated_at for list ordering without triggering auto_now.
         Conversation.objects.filter(pk=conversation.pk).update(updated_at=timezone.now())
-
         _schedule_new_message_dispatch(
-            conversation=conversation,
-            message=message,
-            sender=user,
-            recipient_id=recipient_id,
-            course_slug=conversation.course.slug,
-            course_title=conversation.course.title,
-            sender_name=user.full_name,
+            conversation=conversation, message=message,
+            sender=user, recipient_id=recipient_id,
         )
 
     return message
 
 
 def mark_read(user, conversation_id: int) -> None:
-    """
-    Record that the caller has read all messages in a conversation up to now.
-    Updates the appropriate *_last_read_at timestamp in one query.
-
-    Raises Conversation.DoesNotExist if caller is not a participant.
-    """
+    """Stamp the caller's read cursor to now. Raises DoesNotExist if not a participant."""
     conversation = get_conversation_for_participant(user, conversation_id)
-    now = timezone.now()
-    if user.pk == conversation.learner_id:
-        Conversation.objects.filter(pk=conversation.pk).update(learner_last_read_at=now)
-    else:
-        Conversation.objects.filter(pk=conversation.pk).update(instructor_last_read_at=now)
+    ConversationParticipant.objects.filter(
+        conversation=conversation, user=user,
+    ).update(last_read_at=timezone.now())
 
 
 def get_unread_conversation_count(user) -> int:
-    """
-    Return the number of conversations that have at least one unread message
-    for this user (NOT the total unread message count).
-
-    A never-opened conversation (its *_last_read_at is NULL) counts as unread
-    when it has any visible message — Coalesce maps NULL to the epoch so the
-    created_at > last_read comparison holds for every message.
-
-    Two queries (one per role side), each pushing the existence check into the
-    DB via Exists — no per-conversation Python loop, unlike get_unread_counts.
-    """
-    import datetime
-
-    from django.db.models import Exists, OuterRef, Value
-    from django.db.models.functions import Coalesce
-
-    epoch = datetime.datetime(1970, 1, 1, tzinfo=datetime.timezone.utc)
-
-    def _count_for(role_field: str, last_read_field: str) -> int:
-        unread_msgs = Message.objects.filter(
-            conversation=OuterRef('pk'),
-            is_deleted=False,
-            created_at__gt=Coalesce(OuterRef(last_read_field), Value(epoch)),
-        )
-        return (
-            Conversation.objects
-            .filter(**{role_field: user})
-            .filter(Exists(unread_msgs))
-            .count()
-        )
-
-    # A user is never both learner and instructor of the same conversation
-    # (CHECK(learner != instructor)), so the two sides never double-count.
+    """Number of the caller's conversations with at least one unread message."""
+    unread_msgs = Message.objects.filter(
+        conversation=OuterRef('conversation_id'),
+        is_deleted=False,
+        created_at__gt=Coalesce(OuterRef('last_read_at'), Value(_EPOCH)),
+    )
     return (
-        _count_for('learner', 'learner_last_read_at')
-        + _count_for('instructor', 'instructor_last_read_at')
+        ConversationParticipant.objects
+        .filter(user=user)
+        .filter(Exists(unread_msgs))
+        .count()
     )
 
 
 def get_unread_counts(user) -> list[dict]:
     """
-    Return a list of {conversation_id, unread_count} dicts for conversations
-    where the caller has unread messages. Used by the WS on-connect handler.
-
-    This does N+1 count queries (one per conversation). Acceptable because
-    users typically have O(10–50) conversations and this only runs at connect time.
+    Per-conversation unread message counts for the caller (used by the WS
+    on-connect handler). One count query per participant row — acceptable at
+    connect time for O(10–50) conversations.
     """
-    conversations = list(
-        Conversation.objects.filter(
-            Q(learner=user) | Q(instructor=user)
-        ).only('pk', 'learner_id', 'instructor_id', 'learner_last_read_at', 'instructor_last_read_at')
+    parts = ConversationParticipant.objects.filter(user=user).only(
+        'conversation_id', 'last_read_at',
     )
     result = []
-    for conv in conversations:
-        last_read = (
-            conv.learner_last_read_at
-            if user.pk == conv.learner_id
-            else conv.instructor_last_read_at
-        )
-        qs = Message.objects.filter(conversation=conv, is_deleted=False)
-        count = qs.filter(created_at__gt=last_read).count() if last_read else qs.count()
+    for p in parts:
+        qs = Message.objects.filter(conversation_id=p.conversation_id, is_deleted=False)
+        count = qs.filter(created_at__gt=p.last_read_at).count() if p.last_read_at else qs.count()
         if count > 0:
-            result.append({'conversation_id': conv.pk, 'unread_count': count})
+            result.append({'conversation_id': p.conversation_id, 'unread_count': count})
     return result
 
 
 # ---------------------------------------------------------------------------
-# Internal helpers
+# Internal helpers — WS push + notification
 # ---------------------------------------------------------------------------
 
-def _schedule_new_message_dispatch(
-    *,
-    conversation: Conversation,
-    message: Message,
-    sender,
-    recipient_id: int,
-    course_slug: str,
-    course_title: str,
-    sender_name: str,
-) -> None:
+def _schedule_new_message_dispatch(*, conversation, message, sender, recipient_id) -> None:
     """Register on_commit callbacks for WS push + notification. Never raises."""
+    if recipient_id is None:
+        return
     message_snapshot = _serialize_message(message)
+    course = conversation.course
     conv_id = conversation.pk
     sender_id = sender.pk
+    sender_name = sender.full_name
+    course_slug = course.slug if course else None
+    course_title = course.title if course else None
 
     transaction.on_commit(
         lambda: _push_ws_and_notify(
@@ -346,23 +359,12 @@ def _schedule_new_message_dispatch(
     )
 
 
-def _push_ws_and_notify(
-    *,
-    conversation_id: int,
-    message_snapshot: dict,
-    sender_id: int,
-    recipient_id: int,
-    course_slug: str,
-    course_title: str,
-    sender_name: str,
-) -> None:
-    """Push new_message to the recipient and send a notification to them."""
+def _push_ws_and_notify(*, conversation_id, message_snapshot, sender_id, recipient_id,
+                        course_slug, course_title, sender_name) -> None:
+    """Push new_message to the recipient and dispatch a notification. Never raises."""
     channel_layer = get_channel_layer()
     if channel_layer is not None:
-        # Push only to the recipient's channel group. The sender already has the
-        # message: via message_sent (WS path) or the 201 response body (REST path).
-        # Pushing to the sender group too would cause duplicate delivery on the WS
-        # path, requiring client-side dedup by message.id.
+        # Only the recipient — the sender already has the message via the ack / 201.
         try:
             async_to_sync(channel_layer.group_send)(
                 f'messaging_user_{recipient_id}',
@@ -392,7 +394,6 @@ def _push_ws_and_notify(
                 'course_slug': course_slug,
                 'course_title': course_title,
                 'sender_name': sender_name,
-                # Full body — the notification builder owns truncation + ellipsis.
                 'body_preview': message_snapshot['body'],
             },
         )

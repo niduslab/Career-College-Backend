@@ -1,4 +1,4 @@
-"""Tests for the messaging service layer."""
+"""Tests for the messaging service layer (generalized conversations)."""
 
 from unittest.mock import patch
 
@@ -6,15 +6,14 @@ from django.test import TestCase
 
 from authentication.models import User
 from courses.models import Enrollment, NidusCourse
-from messaging.models import Conversation, Message
+from messaging.models import Conversation, ConversationParticipant, Message
 from messaging.services.messaging_service import (
     MessagingError,
+    _pair_key,
     get_conversation_for_participant,
-    get_messages,
     get_or_create_conversation,
     get_unread_conversation_count,
     get_unread_counts,
-    list_conversations,
     mark_read,
     send_message,
 )
@@ -43,6 +42,20 @@ def _enroll(learner, course, is_active=True):
     return Enrollment.objects.create(user=learner, course=course, is_active=is_active)
 
 
+def _make_conversation(user_a, user_b, course, conversation_type='learner_instructor'):
+    conv = Conversation.objects.create(
+        conversation_type=conversation_type, course=course,
+        participant_key=_pair_key(user_a.id, user_b.id),
+    )
+    ConversationParticipant.objects.create(conversation=conv, user=user_a)
+    ConversationParticipant.objects.create(conversation=conv, user=user_b)
+    return conv
+
+
+def _last_read(conv, user):
+    return ConversationParticipant.objects.get(conversation=conv, user=user).last_read_at
+
+
 class GetOrCreateConversationTest(TestCase):
     def setUp(self):
         self.learner = _make_user('learner@s.com', 'learner', 'Alice')
@@ -60,7 +73,8 @@ class GetOrCreateConversationTest(TestCase):
             opener_body='Hello!',
         )
         self.assertTrue(created)
-        self.assertEqual(conv.learner, self.learner)
+        participant_ids = set(conv.participants.values_list('user_id', flat=True))
+        self.assertEqual(participant_ids, {self.learner.pk, self.instructor.pk})
         self.assertEqual(Message.objects.filter(conversation=conv).count(), 1)
 
     @patch('messaging.services.messaging_service._push_ws_and_notify')
@@ -68,7 +82,6 @@ class GetOrCreateConversationTest(TestCase):
         get_or_create_conversation(self.learner, self.instructor, self.course, 'First')
         conv2, created = get_or_create_conversation(self.learner, self.instructor, self.course, 'Second')
         self.assertFalse(created)
-        # Second call must NOT create another message.
         self.assertEqual(Message.objects.filter(conversation=conv2).count(), 1)
 
     def test_blocked_without_enrollment(self):
@@ -98,11 +111,7 @@ class SendMessageTest(TestCase):
         self.course = _make_course(self.instructor, 'sm-course')
         self.course.instructors.add(self.instructor)
         _enroll(self.learner, self.course)
-        self.conv = Conversation.objects.create(
-            learner=self.learner,
-            instructor=self.instructor,
-            course=self.course,
-        )
+        self.conv = _make_conversation(self.learner, self.instructor, self.course)
 
     @patch('messaging.services.messaging_service._push_ws_and_notify')
     def test_learner_can_send(self, mock_dispatch):
@@ -144,23 +153,19 @@ class MarkReadTest(TestCase):
         self.course = _make_course(self.instructor, 'mr-course')
         self.course.instructors.add(self.instructor)
         _enroll(self.learner, self.course)
-        self.conv = Conversation.objects.create(
-            learner=self.learner,
-            instructor=self.instructor,
-            course=self.course,
-        )
+        self.conv = _make_conversation(self.learner, self.instructor, self.course)
 
-    def test_learner_mark_read_updates_learner_timestamp(self):
-        self.assertIsNone(Conversation.objects.get(pk=self.conv.pk).learner_last_read_at)
+    def test_learner_mark_read_updates_own_cursor_only(self):
+        self.assertIsNone(_last_read(self.conv, self.learner))
         mark_read(self.learner, self.conv.pk)
-        self.assertIsNotNone(Conversation.objects.get(pk=self.conv.pk).learner_last_read_at)
-        # Instructor timestamp must remain untouched.
-        self.assertIsNone(Conversation.objects.get(pk=self.conv.pk).instructor_last_read_at)
+        self.assertIsNotNone(_last_read(self.conv, self.learner))
+        # The instructor's cursor must remain untouched.
+        self.assertIsNone(_last_read(self.conv, self.instructor))
 
-    def test_instructor_mark_read_updates_instructor_timestamp(self):
+    def test_instructor_mark_read_updates_own_cursor_only(self):
         mark_read(self.instructor, self.conv.pk)
-        self.assertIsNotNone(Conversation.objects.get(pk=self.conv.pk).instructor_last_read_at)
-        self.assertIsNone(Conversation.objects.get(pk=self.conv.pk).learner_last_read_at)
+        self.assertIsNotNone(_last_read(self.conv, self.instructor))
+        self.assertIsNone(_last_read(self.conv, self.learner))
 
     def test_nonparticipant_raises_does_not_exist(self):
         outsider = _make_user('outsider@mr.com', 'learner', 'Judy')
@@ -174,11 +179,7 @@ class GetConversationForParticipantTest(TestCase):
         self.instructor = _make_user('instructor@gp.com', 'instructor', 'Lara')
         self.course = _make_course(self.instructor, 'gp-course')
         self.course.instructors.add(self.instructor)
-        self.conv = Conversation.objects.create(
-            learner=self.learner,
-            instructor=self.instructor,
-            course=self.course,
-        )
+        self.conv = _make_conversation(self.learner, self.instructor, self.course)
 
     def test_learner_can_fetch(self):
         conv = get_conversation_for_participant(self.learner, self.conv.pk)
@@ -204,11 +205,7 @@ class GetUnreadCountsTest(TestCase):
         self.instructor = _make_user('instructor@uc.com', 'instructor', 'Olaf')
         self.course = _make_course(self.instructor, 'uc-course')
         self.course.instructors.add(self.instructor)
-        self.conv = Conversation.objects.create(
-            learner=self.learner,
-            instructor=self.instructor,
-            course=self.course,
-        )
+        self.conv = _make_conversation(self.learner, self.instructor, self.course)
 
     def test_unread_count_before_any_read(self):
         Message.objects.create(conversation=self.conv, sender=self.instructor, body='Hi')
@@ -237,18 +234,13 @@ class GetUnreadConversationCountTest(TestCase):
         self.instructor = _make_user('instructor@ucc.com', 'instructor', 'Quinn')
         self.course = _make_course(self.instructor, 'ucc-course')
         self.course.instructors.add(self.instructor)
-        self.conv = Conversation.objects.create(
-            learner=self.learner,
-            instructor=self.instructor,
-            course=self.course,
-        )
+        self.conv = _make_conversation(self.learner, self.instructor, self.course)
 
     def test_zero_when_no_messages(self):
         self.assertEqual(get_unread_conversation_count(self.learner), 0)
         self.assertEqual(get_unread_conversation_count(self.instructor), 0)
 
     def test_counts_never_opened_conversation_with_message(self):
-        # last_read is NULL → a visible message makes the conversation unread.
         Message.objects.create(conversation=self.conv, sender=self.instructor, body='Hi')
         self.assertEqual(get_unread_conversation_count(self.learner), 1)
 
@@ -264,7 +256,6 @@ class GetUnreadConversationCountTest(TestCase):
         self.assertEqual(get_unread_conversation_count(self.learner), 0)
 
     def test_counts_distinct_conversations_not_messages(self):
-        # Three unread messages in ONE conversation → count is 1, not 3.
         for _ in range(3):
             Message.objects.create(conversation=self.conv, sender=self.instructor, body='msg')
         self.assertEqual(get_unread_conversation_count(self.learner), 1)
@@ -272,15 +263,12 @@ class GetUnreadConversationCountTest(TestCase):
     def test_counts_multiple_conversations(self):
         course2 = _make_course(self.instructor, 'ucc-course-2')
         course2.instructors.add(self.instructor)
-        conv2 = Conversation.objects.create(
-            learner=self.learner, instructor=self.instructor, course=course2,
-        )
+        conv2 = _make_conversation(self.learner, self.instructor, course2)
         Message.objects.create(conversation=self.conv, sender=self.instructor, body='one')
         Message.objects.create(conversation=conv2, sender=self.instructor, body='two')
         self.assertEqual(get_unread_conversation_count(self.learner), 2)
 
     def test_matches_len_of_unread_counts(self):
-        # The REST endpoint (this fn) and the WS unread_summary list length must agree.
         Message.objects.create(conversation=self.conv, sender=self.instructor, body='Hi')
         self.assertEqual(
             get_unread_conversation_count(self.learner),
@@ -288,7 +276,6 @@ class GetUnreadConversationCountTest(TestCase):
         )
 
     def test_instructor_side_counted_independently(self):
-        # A message from the learner is unread for the instructor.
         Message.objects.create(conversation=self.conv, sender=self.learner, body='Question')
         self.assertEqual(get_unread_conversation_count(self.instructor), 1)
         mark_read(self.instructor, self.conv.pk)

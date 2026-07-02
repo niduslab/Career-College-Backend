@@ -238,12 +238,14 @@ def _message_received(recipient, ctx):
     preview = ctx.get('body_preview', '')
     if len(preview) > 120:
         preview = preview[:117] + '...'
+    course_title = ctx.get('course_title')
+    body = f'In {course_title}: {preview}' if course_title else preview
     return _build(
         title=f'New message from {ctx["sender_name"]}',
-        body=f'In {ctx["course_title"]}: {preview}',
+        body=body,
         data={
             'conversation_id': ctx['conversation_id'],
-            'course_slug': ctx['course_slug'],
+            'course_slug': ctx.get('course_slug'),
         },
     )
 

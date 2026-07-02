@@ -365,15 +365,17 @@ Tests must **never** hit real Docker. Patch `courses.services.code_runner.CodeRu
 5. The dashboard "My Courses" list is at `GET /api/v1/courses/my-courses/`.
 6. Learners can soft-unenroll via `POST /api/v1/courses/{slug}/unenroll/`; progress stays preserved.
 
-### 8. Learner ↔ instructor messaging
+### 8. Messaging (learner↔instructor · co-instructor · institution↔expert)
 
-1. A learner opens a thread with `POST /api/v1/messaging/conversations/create/` (`course_id`, `instructor_id`, `body`). Only learners can initiate; idempotent — returns the existing thread (200) if the triad already exists. One thread per `(learner, instructor, course)`.
-2. Either party appends messages via `POST /api/v1/messaging/conversations/{id}/messages/` (REST) **or** the `messaging` WebSocket stream (primary path for the frontend). Both routes call the same service, so the send-gate is enforced identically: the learner must have an active enrollment and the instructor must still be on the course *at send time*.
-3. Real-time delivery: the recipient receives a `new_message` frame on their `messaging_user_{id}` channel group (the sender does **not** — they already have the message via the `message_sent` ack / 201 response). A `message.received` notification + optional email also fire.
-4. Unread tracking is cursor-based: `POST /api/v1/messaging/conversations/{id}/read/` (or the `mark_read` WS action) stamps the caller's `*_last_read_at`. Unread message count is per-conversation; `GET /api/v1/messaging/conversations/unread-count/` returns the number of conversations with ≥1 unread message (inbox badge).
-5. Either party can always read historical messages, even after unenrollment or instructor removal.
+A `Conversation` is a role-neutral 2-party thread selected by `conversation_type`. The send-gate is dispatched by type; parties live in `ConversationParticipant` (per-user read cursor).
 
-See [docs/architecture/17-messaging-system.md](docs/architecture/17-messaging-system.md) for the data model, WS protocol, and frontend client contract.
+1. Open a thread with `POST /api/v1/messaging/conversations/create/` — `conversation_type` (default `learner_instructor`) plus the required ids: `learner_instructor` → `{course_id, instructor_id}` (learner-initiated); `co_instructor` → `{course_id, peer_instructor_id}` (instructor-initiated); `institution_expert` → `{expert_user_id, course_id?}` (institution-initiated). Idempotent — returns the existing thread (200) if the pair already has one. Only the **opener** message is persisted here.
+2. **Follow-up messages are sent over the `messaging` WebSocket stream only** (`send_message`) — there is no REST send endpoint. The send-gate runs there (per type: active enrollment / instructor-on-course / active affiliation *at send time*) and returns an `error` frame on violation.
+3. Real-time delivery: the recipient receives a `new_message` frame on their `messaging_user_{id}` group (the sender does **not** — they got the `message_sent` ack). A `message.received` notification + optional email also fire (course context omitted for course-less institution↔expert threads).
+4. Unread tracking is cursor-based: `POST /api/v1/messaging/conversations/{id}/read/` (or the `mark_read` WS action) stamps the caller's participant cursor. `GET /api/v1/messaging/conversations/unread-count/` returns the number of conversations with ≥1 unread message (inbox badge).
+5. Either party can always read historical messages, even after unenrollment / instructor removal / expert deactivation.
+
+See [docs/future_implementations/INSTITUTION_MESSAGING.md](docs/future_implementations/INSTITUTION_MESSAGING.md) for the current model and [docs/architecture/17-messaging-system.md](docs/architecture/17-messaging-system.md) for the WS protocol (note: its body predates the generalization — see the banner).
 
 ### 9. Partner institution onboarding & course staffing
 
@@ -692,16 +694,19 @@ Gated `IsVerifiedPartnerInstitution`; only the owning institution; numeric pk �
 
 ### Messaging — `/api/v1/messaging/`
 
-All endpoints require `IsEmailVerified` + (`IsLearnerUser` OR `IsInstructorUser`). Numeric IDs → 404 on no-access (project-wide rule).
+All endpoints require `IsEmailVerified` + learner/instructor/partner-institution user type (admins excluded). Numeric IDs → 404 on no-access (project-wide rule).
+
+A `Conversation` is a role-neutral 2-party thread selected by `conversation_type`: `learner_instructor` (learner-initiated, course required), `co_instructor` (instructor↔instructor on a course), `institution_expert` (institution-initiated, course optional). The send-gate is dispatched by type in the service. See [docs/future_implementations/INSTITUTION_MESSAGING.md](docs/future_implementations/INSTITUTION_MESSAGING.md).
 
 | Method | Endpoint | Auth | Description |
 |--------|----------|------|-------------|
-| GET | `conversations/` | Learner or Instructor | Paginated inbox, newest-active first. Each row carries the caller's `unread_count` |
-| GET | `conversations/unread-count/` | Learner or Instructor | `{unread_conversations: N}` — count of threads with ≥1 unread message (inbox badge) |
-| POST | `conversations/create/` | Learner only | Initiate a thread (`course_id`, `instructor_id`, `body`). 201 on create, 200 if it already exists (idempotent) |
+| GET | `conversations/` | Participant | Paginated inbox, newest-active first. Each row carries `conversation_type`, `participants`, and the caller's `unread_count` |
+| GET | `conversations/unread-count/` | Participant | `{unread_conversations: N}` — count of threads with ≥1 unread message (inbox badge) |
+| POST | `conversations/create/` | Type-dependent initiator | Initiate a thread. Body: `conversation_type` (default `learner_instructor`) + the required ids — `{course_id, instructor_id}` / `{course_id, peer_instructor_id}` / `{expert_user_id, course_id?}` + `body`. 201 on create, 200 if it already exists (idempotent) |
 | GET | `conversations/{id}/` | Participant | Thread metadata + paginated messages (oldest-first). Does **not** mark read |
-| POST | `conversations/{id}/messages/` | Participant | Append a message. Send-gate (enrollment / instructor membership) enforced in the service |
-| POST | `conversations/{id}/read/` | Participant | Stamp the caller's `*_last_read_at` (one UPDATE) |
+| POST | `conversations/{id}/read/` | Participant | Stamp the caller's participant read cursor (one UPDATE) |
+
+> Follow-up messages have **no REST endpoint** — they are sent over the WebSocket `messaging` stream (`send_message`). The create call persists the opener; every reply flows through WS. Send-gate violations return a WS `error` frame, not an HTTP status.
 
 #### WebSocket — `/ws/` (stream `messaging`)
 
@@ -887,11 +892,11 @@ career_college_backend/
 │   └── management/commands/
 │       └── seed_course_categories.py
 ├── id_verification/               Identity verification workflow
-├── messaging/                     Learner ↔ instructor messaging
-│   ├── models.py                  Conversation, Message (cursor-based unread tracking)
-│   ├── services/messaging_service.py  Send-gate, send/read, unread counts, WS push + notify
+├── messaging/                     Generalized 2-party messaging (learner↔instructor, co-instructor, institution↔expert)
+│   ├── models.py                  Conversation (conversation_type), ConversationParticipant (per-user cursor), Message
+│   ├── services/messaging_service.py  Per-type send-gate dispatch, start_conversation, send/read, unread counts, WS push + notify
 │   ├── all_views/conversation_views.py  REST endpoints (list, create, detail, send, read, unread-count)
-│   └── tests/                     Model, service, and view tests
+│   └── tests/                     Model, service, view, and conversation-type tests
 ├── notifications/                 In-app notification feed + email preferences + dispatcher
 ├── realtime/                      ASGI WebSocket layer
 │   ├── consumers.py               PlatformConsumer — multiplexes streams, routes channel events
@@ -937,7 +942,7 @@ career_college_backend/
 - **Coding submission idempotency**: `evaluate_coding_submission_task` is `acks_late=True` and short-circuits on terminal status, so worker-death redelivery is safe. A Celery-beat reaper (`reap_stuck_coding_submissions_task`, 60 s) flips `queued`/`grading` rows older than 5 min to `error`.
 - **Certificates** — issued automatically when `progress_percent` reaches 100% for the first time (`recalculate_progress` → `transaction.on_commit` → `_issue_certificate_and_notify`). `Certificate` is identified by a UUID4 (non-guessable); `issue_certificate` uses `get_or_create` so Celery redelivery is idempotent. PDF generated on-the-fly by reportlab (`courses/certificate_pdf.py`); no file stored on disk.
 - **Reviews & ratings** — `CourseReview` is one-per-enrollment (enforced by `OneToOneField(enrollment)`). `ReviewVote` tracks helpful/not-helpful per reviewer. `avg_rating` and `review_count` are denormalized onto `NidusCourse` (updated via `transaction.on_commit` after every review write) so catalog sort/filter (`?sort=rating`, `?rating_min=`, `?min_reviews=`) stays a single-table scan. Vote flips use `select_for_update` + `F()` expressions for atomicity.
-- **Messaging** — one `Conversation` per `(learner, instructor, course)` triad; only learners initiate. The send-gate (active enrollment / current instructor membership) lives in `messaging_service.send_message()` and is enforced identically on the REST and WebSocket paths. Unread state is two timestamp cursors (`learner_last_read_at` / `instructor_last_read_at`), so marking a thread read is a single UPDATE rather than N per-message flags. After a message commits, a `new_message` channel event is pushed **only to the recipient's** group (the sender already has it), plus a `message.received` notification via `transaction.on_commit`.
+- **Messaging** — a `Conversation` is a role-neutral 2-party thread selected by `conversation_type` (`learner_instructor` | `co_instructor` | `institution_expert`); the two parties live in `ConversationParticipant`, each row carrying that user's read cursor. The send-gate is dispatched by type in `messaging_service` (`_assert_send_permission` at send, `_validate_new_conversation` at create) and enforced identically on the REST and WebSocket paths. Marking a thread read is a single UPDATE of the caller's participant cursor. Pair uniqueness is `(conversation_type, course, participant_key)`. After a message commits, a `new_message` event is pushed **only to the recipient's** group (the sender already has it), plus a `message.received` notification via `transaction.on_commit`. Institution announcements (one-to-many) are notification fan-out, not conversations (unbuilt — see `docs/future_implementations/INSTITUTION_MESSAGING.md` §8).
 - **Realtime / WebSocket** — a single ASGI `PlatformConsumer` at `/ws/` multiplexes per-feature streams (`{"stream": "...", "payload": {...}}`); JWT is passed as a `?token=` query param and validated on connect. Cross-process delivery uses the Redis channel layer (`group_send` to `messaging_user_{id}` / notification groups). Adding a stream = register a handler class in `realtime/streams/`.
 - **Webinars** — institution-owned live sessions that link out to an external provider (`meeting_url`), not a curriculum tree. Three presenter roles: `host_expert` (FK, publishes), `institutional_speakers` (M2M, credit-only), `guest_speakers` (JSON, no account). Three-state machine (`draft → published → archived`) with **no approval gate** — the assigned host publishes directly via `transition_to()`. GET is owner-or-host; PATCH is institution-only (host reads but cannot edit). `meeting_url` is registrant-only — enforced by dedicated serializers (catalog omits it, registrant serializer includes it), never conditional stripping. Registration enforces capacity under a `select_for_update` lock on the webinar row. `WEBINAR_PUBLISHED` / `WEBINAR_REGISTERED` notifications each need four-point wiring (event type, builder, `EVENT_TO_CATEGORY`, `_EVENT_TEMPLATE_MAP`).
 
@@ -960,6 +965,7 @@ career_college_backend/
 | [docs/api-testing/postman-partner-institution.md](docs/api-testing/postman-partner-institution.md) | Postman testing guide for partner-institution verification, expert management, course creation + roster assignment |
 | [docs/api-testing/postman-expert-course-editing.md](docs/api-testing/postman-expert-course-editing.md) | Postman testing guide for an institution-assigned expert logging in and editing/submitting their course |
 | [docs/api-testing/postman-webinars.md](docs/api-testing/postman-webinars.md) | Postman testing guide for webinar authoring, host assignment, publish, catalog, and learner registration |
+| [docs/api-testing/postman-analytics.md](docs/api-testing/postman-analytics.md) | Postman testing guide for the partner-institution analytics dashboard (summary, trends, top-courses) |
 | [CLAUDE.md](CLAUDE.md) | AI assistant coding instructions |
 
 ### Architecture (`docs/architecture/`)
@@ -988,3 +994,4 @@ Read in order; [docs/architecture/README.md](docs/architecture/README.md) is the
 | [17-messaging-system.md](docs/architecture/17-messaging-system.md) | Messaging data model, REST + WebSocket protocol, unread semantics, frontend client contract |
 | [18-partner-institutions.md](docs/architecture/18-partner-institutions.md) | Institution verification, expert onboarding, departments, course creation + roster assignment |
 | [19-webinars.md](docs/architecture/19-webinars.md) | Institution-owned webinars — presenter roles, publish state machine, catalog + registration, notification wiring |
+| [20-analytics-dashboard.md](docs/architecture/20-analytics-dashboard.md) | Partner-institution analytics — metrics, institution-scoping, query strategy, revenue/attendance caveats |

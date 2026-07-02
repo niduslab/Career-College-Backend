@@ -170,8 +170,10 @@ REST prefixes defined in `career_college_backend/urls.py`; WebSocket in `realtim
 | `/api/v1/auth/` | `authentication` | `/auth/register/`, `/auth/login/`, `/auth/partner/experts/`, `/auth/partner/departments/` |
 | `/api/v1/verification/` | `id_verification` | `/verification/create/`, `/verification/institution/create/`, `/verification/admin/institution/{id}/review/` |
 | `/api/v1/courses/` | `courses` | `/courses/catalog/`, `/courses/learn/lectures/{id}/`, `/courses/{slug}/reviews/`, `/courses/{pk}/institution-instructors/` |
-| `/api/v1/messaging/` | `messaging` | `/messaging/conversations/`, `/messaging/conversations/{id}/messages/` |
+| `/api/v1/messaging/` | `messaging` | `/messaging/conversations/`, `/messaging/conversations/create/`, `/messaging/conversations/{id}/read/` (follow-up sends are WebSocket-only) |
 | `/api/v1/notifications/` | `notifications` | `/notifications/`, `/notifications/unread-count/`, `/notifications/preferences/` |
+| `/api/v1/webinars/` | `webinars` | `/webinars/catalog/`, `/webinars/create/`, `/webinars/{pk}/publish/`, `/webinars/{slug}/register/` |
+| `/api/v1/analytics/` | `analytics` | `/analytics/partner/summary/`, `/analytics/partner/enrollments/trend/`, `/analytics/partner/top-courses/` |
 | `/ws/` | `realtime` | `ws://host/ws/?token=<JWT>` — streams `notifications`, `messaging` |
 | `/admin/` | Django admin | staff console |
 

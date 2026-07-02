@@ -2,11 +2,13 @@
 Messaging REST endpoints.
 
 Routes (all under /api/v1/messaging/):
-    GET  conversations/                     → ConversationListView
-    POST conversations/                     → ConversationCreateView   (learner only)
-    GET  conversations/<int:conversation_id>/          → ConversationDetailView
-    POST conversations/<int:conversation_id>/messages/ → SendMessageView
-    POST conversations/<int:conversation_id>/read/     → MarkConversationReadView
+    GET  conversations/                        → ConversationListView
+    POST conversations/create/                 → ConversationCreateView
+    GET  conversations/<int:conversation_id>/  → ConversationDetailView
+    POST conversations/<int:conversation_id>/read/ → MarkConversationReadView
+
+Follow-up messages are sent over the WebSocket `messaging` stream only (there is
+no REST send endpoint); the conversation opener is persisted by the create view.
 
 Access-denied policy (project convention):
     Numeric conversation/message IDs → 404 on no-access.
@@ -20,29 +22,32 @@ from rest_framework.response import Response
 from rest_framework.views import APIView
 
 from core.pagination import StandardResultsSetPagination
-from core.permissions import IsEmailVerified, IsInstructorUser, IsLearnerUser
+from core.permissions import (
+    IsEmailVerified,
+    IsInstructorUser,
+    IsLearnerUser,
+    IsPartnerInstitutionUser,
+)
 from messaging.models import Conversation
 from messaging.serializers import (
     ConversationCreateSerializer,
     ConversationSerializer,
     MessageSerializer,
-    SendMessageSerializer,
 )
 from messaging.services import (
     MessagingError,
     get_conversation_for_participant,
     get_messages,
-    get_or_create_conversation,
     get_unread_conversation_count,
     list_conversations,
     mark_read,
-    send_message,
+    start_conversation,
 )
 
 logger = logging.getLogger(__name__)
 
-# Both user types share most messaging endpoints.
-_MESSAGING_USERS = IsLearnerUser | IsInstructorUser
+# Learners, instructors, and partner institutions all use messaging.
+_MESSAGING_USERS = IsLearnerUser | IsInstructorUser | IsPartnerInstitutionUser
 
 
 class ConversationListView(APIView):
@@ -92,16 +97,28 @@ class UnreadConversationCountView(APIView):
         )
 
 
+class _ResolutionError(Exception):
+    """Internal: signals a 404/403 while resolving create-payload references."""
+
+    def __init__(self, message, http_status):
+        self.message = message
+        self.http_status = http_status
+        super().__init__(message)
+
+
 class ConversationCreateView(APIView):
     """
-    POST — Initiate a new conversation. Learner-only.
+    POST — Initiate a conversation. `conversation_type` (default
+    learner_instructor) selects who may open it and which target/course fields
+    are required. Learner↔instructor is learner-initiated; co_instructor is
+    instructor-initiated; institution_expert is institution-initiated.
 
-    Atomically creates the Conversation row + first Message. If the
-    (learner, instructor, course) triad already exists, returns the existing
-    conversation with HTTP 200 so the client can navigate to the open thread.
+    Atomically creates the Conversation + first Message. If the thread already
+    exists, returns it with HTTP 200 so the client navigates to the open thread.
+    The send-gate is enforced in the service (returns 403 on violation).
     """
 
-    permission_classes = [IsAuthenticated, IsEmailVerified, IsLearnerUser]
+    permission_classes = [IsAuthenticated, IsEmailVerified, _MESSAGING_USERS]
 
     def post(self, request):
         serializer = ConversationCreateSerializer(data=request.data)
@@ -112,30 +129,19 @@ class ConversationCreateView(APIView):
             )
 
         vd = serializer.validated_data
-
-        # Resolve course and instructor up-front; use 404 not 403 (numeric IDs).
         try:
-            from courses.models import NidusCourse
-            course = NidusCourse.objects.prefetch_related('instructors').get(pk=vd['course_id'])
-        except NidusCourse.DoesNotExist:
+            course, target = self._resolve_course_and_target(request.user, vd)
+        except _ResolutionError as exc:
             return Response(
-                {'success': False, 'message': 'Course not found.'},
-                status=status.HTTP_404_NOT_FOUND,
+                {'success': False, 'message': exc.message},
+                status=exc.http_status,
             )
 
         try:
-            from authentication.models import User
-            instructor = User.objects.get(pk=vd['instructor_id'], user_type='instructor')
-        except User.DoesNotExist:
-            return Response(
-                {'success': False, 'message': 'Instructor not found.'},
-                status=status.HTTP_404_NOT_FOUND,
-            )
-
-        try:
-            conversation, created = get_or_create_conversation(
-                learner=request.user,
-                instructor=instructor,
+            conversation, created = start_conversation(
+                conversation_type=vd['conversation_type'],
+                initiator=request.user,
+                target=target,
                 course=course,
                 opener_body=vd['body'],
             )
@@ -146,8 +152,8 @@ class ConversationCreateView(APIView):
             )
         except Exception:
             logger.exception(
-                'ConversationCreateView: unexpected error user=%s course=%s instructor=%s',
-                request.user.pk, vd['course_id'], vd['instructor_id'],
+                'ConversationCreateView: unexpected error user=%s type=%s',
+                request.user.pk, vd['conversation_type'],
             )
             return Response(
                 {'success': False, 'message': 'An unexpected error occurred. Please try again.'},
@@ -164,6 +170,41 @@ class ConversationCreateView(APIView):
             },
             status=http_status,
         )
+
+    def _resolve_course_and_target(self, user, vd):
+        """Resolve (course_or_none, target_user) per conversation_type. Numeric IDs → 404."""
+        from authentication.models import User
+        from courses.models import NidusCourse
+
+        ctype = vd['conversation_type']
+        CType = Conversation.ConversationType
+
+        course = None
+        course_id = vd.get('course_id')
+        if course_id is not None:
+            try:
+                course = NidusCourse.objects.get(pk=course_id)
+            except NidusCourse.DoesNotExist:
+                raise _ResolutionError('Course not found.', status.HTTP_404_NOT_FOUND)
+
+        if ctype == CType.LEARNER_INSTRUCTOR:
+            target_id, label = vd['instructor_id'], 'Instructor'
+        elif ctype == CType.CO_INSTRUCTOR:
+            target_id, label = vd['peer_instructor_id'], 'Instructor'
+        else:  # institution_expert — institution-initiated
+            if user.user_type != 'partner_institution':
+                raise _ResolutionError(
+                    'Only a partner institution can open this conversation.',
+                    status.HTTP_403_FORBIDDEN,
+                )
+            target_id, label = vd['expert_user_id'], 'Expert'
+
+        try:
+            target = User.objects.get(pk=target_id, user_type='instructor')
+        except User.DoesNotExist:
+            raise _ResolutionError(f'{label} not found.', status.HTTP_404_NOT_FOUND)
+
+        return course, target
 
 
 class ConversationDetailView(APIView):
@@ -201,62 +242,6 @@ class ConversationDetailView(APIView):
             },
         }
         return paginated
-
-
-class SendMessageView(APIView):
-    """
-    POST — Append a message to an existing conversation.
-
-    Both learners and instructors can send. Send-gate (enrollment / instructor
-    membership) is enforced inside the service.
-
-    Numeric ID → 404 on no-access.
-    """
-
-    permission_classes = [IsAuthenticated, IsEmailVerified, _MESSAGING_USERS]
-
-    def post(self, request, conversation_id: int):
-        serializer = SendMessageSerializer(data=request.data)
-        if not serializer.is_valid():
-            return Response(
-                {'success': False, 'message': 'Validation failed.', 'errors': serializer.errors},
-                status=status.HTTP_400_BAD_REQUEST,
-            )
-
-        try:
-            message = send_message(
-                user=request.user,
-                conversation_id=conversation_id,
-                body=serializer.validated_data['body'],
-            )
-        except Conversation.DoesNotExist:
-            return Response(
-                {'success': False, 'message': 'Conversation not found.'},
-                status=status.HTTP_404_NOT_FOUND,
-            )
-        except MessagingError as exc:
-            return Response(
-                {'success': False, 'message': exc.message},
-                status=exc.http_status,
-            )
-        except Exception:
-            logger.exception(
-                'SendMessageView: unexpected error user=%s conversation=%s',
-                request.user.pk, conversation_id,
-            )
-            return Response(
-                {'success': False, 'message': 'An unexpected error occurred. Please try again.'},
-                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            )
-
-        return Response(
-            {
-                'success': True,
-                'message': 'Message sent.',
-                'data': MessageSerializer(message, context={'request': request}).data,
-            },
-            status=status.HTTP_201_CREATED,
-        )
 
 
 class MarkConversationReadView(APIView):

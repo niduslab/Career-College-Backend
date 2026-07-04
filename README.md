@@ -406,7 +406,8 @@ See [docs/architecture/19-webinars.md](docs/architecture/19-webinars.md) for pre
 1. A verified institution loads `GET /api/v1/analytics/partner/summary/` — one payload of KPI cards: course counts + status breakdown + weighted avg rating, enrollment totals/growth/active-learners/completion-rate, certificates issued, webinar status + upcoming/live/completed + registrations, roster size, and a composite engagement score.
 2. Charts fetch trends lazily: `analytics/partner/enrollments/trend/`, `webinars/trend/`, `certificates/trend/` — each `?granularity=monthly|weekly&periods=N` (zero-filled contiguous series).
 3. `analytics/partner/top-courses/?sort=enrollments|rating|completion&limit=N` ranks the institution's courses.
-4. Everything is read-only and scoped to the caller's own institution (no resource id in the URL → the only failure mode is 403). `revenue` is disabled (no payments model) and webinar attendance is flagged off until the live-day join flow ships.
+4. `analytics/partner/experts/performance/` drills to per-expert outcomes (ratings, enrollments, completion, certificates, content authored, webinars hosted) for the whole roster; `.../experts/{id}/performance/` for one. A course is credited to every instructor + its creator.
+5. Everything is read-only and scoped to the caller's own institution (no resource id → the only failure mode is 403, except the numeric expert-id detail which is 404 for a non-affiliate). `revenue` is disabled (no payments model) and webinar attendance is flagged off until the live-day join flow ships.
 
 See [docs/architecture/20-analytics-dashboard.md](docs/architecture/20-analytics-dashboard.md) for metrics, query strategy, and the revenue/attendance caveats.
 
@@ -787,6 +788,10 @@ Read-only partner-institution analytics dashboard. Its own app; owns no models �
 | GET | `partner/webinars/trend/` | Webinar-registration time series |
 | GET | `partner/certificates/trend/` | Certificate-issuance time series |
 | GET | `partner/top-courses/` | Ranked courses (`?sort=enrollments\|rating\|completion&limit=N`) |
+| GET | `partner/experts/performance/` | Per-expert outcome metrics for the whole active roster (courses credited, content authored, avg rating, enrollments, completion, certificates, webinars hosted, last-active) |
+| GET | `partner/experts/{expert_id}/performance/` | One expert (numeric id → 404 if not an active affiliate) |
+
+> Expert performance credits a course to **every** instructor + its creator (co-taught courses count toward each — per-expert sums can exceed institution totals; stated in the payload's `attribution`).
 
 ---
 

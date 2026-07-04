@@ -15,6 +15,7 @@ Architecture: `docs/architecture/20-analytics-dashboard.md`.
 | `institution_token` | `Bearer eyJ...` | JWT for a **verified** partner institution (`is_verified=True, is_active=True`) |
 | `other_institution_token` | `Bearer eyJ...` | JWT for a second, unrelated verified institution (isolation check) |
 | `learner_token` | `Bearer eyJ...` | JWT for any learner — negative authz test |
+| `expert_id` | `12` | `User.id` of an active affiliated expert (Group 4 detail) |
 
 > **Precondition:** `institution_token` must be a **verified** institution (all endpoints are gated
 > `IsVerifiedPartnerInstitution`). Seed some data first — create courses, get learners enrolled, publish
@@ -201,6 +202,64 @@ Authorization: {{institution_token}}
 ```
 
 **200** — exactly one course returned.
+
+---
+
+## Group 4: Expert Performance
+
+Per-expert outcome metrics for the institution's active roster.
+
+### 4.1 Roster performance list
+
+```
+GET {{base_url}}/analytics/partner/experts/performance/
+Authorization: {{institution_token}}
+```
+
+**200:**
+
+```json
+{"success": true, "data": {
+  "attribution": "a course is credited to every instructor and its creator",
+  "experts": [
+    {
+      "expert": {"id": 12, "full_name": "Jane Roe", "email": "jane@x.com"},
+      "department": "Data Science", "affiliation_status": "active",
+      "affiliated_at": "2026-05-01T09:00:00Z",
+      "courses_credited": 1, "published_courses": 1,
+      "content": {"sections": 2, "lectures": 1, "quizzes": 0, "assignments": 0, "coding_exercises": 0},
+      "avg_rating": 4.5, "total_reviews": 10,
+      "enrollments": 2, "completion_rate": 50.0, "certificates": 1,
+      "webinars_hosted": 1, "webinar_registrations": 1,
+      "last_active": "2026-06-20T10:00:00Z"
+    }
+  ]
+}}
+```
+
+**Checks:**
+- **Every active affiliate** appears — a zero-activity expert is present with all counts `0` and `last_active: null` (the dashboard shows the whole roster).
+- Metrics count only this institution's data — an enrollment on another institution's course is excluded even if the same expert somehow taught it.
+- `attribution` is present: a co-taught course counts toward **each** instructor, so per-expert sums can exceed the institution totals — not a bug.
+- `avg_rating` is review-weighted across the expert's credited **published** courses.
+
+### 4.2 Single expert detail
+
+```
+GET {{base_url}}/analytics/partner/experts/{{expert_id}}/performance/
+Authorization: {{institution_token}}
+```
+
+**200** — `data.expert` is one row of the shape above.
+
+### 4.3 Foreign / unknown expert → 404
+
+```
+GET {{base_url}}/analytics/partner/experts/999999/performance/
+Authorization: {{institution_token}}
+```
+
+**404** — a numeric id that isn't one of **your** active affiliates returns `Expert not found.` (never leaks another institution's expert).
 
 ---
 

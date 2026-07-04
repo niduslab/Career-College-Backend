@@ -54,6 +54,29 @@ All under the base `/api/v1/analytics/`.
 | `GET partner/webinars/trend/` | `InstitutionWebinarTrendView` | Webinar-registration series. |
 | `GET partner/certificates/trend/` | `InstitutionCertificateTrendView` | Certificate-issuance series. |
 | `GET partner/top-courses/` | `InstitutionTopCoursesView` | Ranked courses. |
+| `GET partner/experts/performance/` | `InstitutionExpertPerformanceView` | Per-expert outcome metrics (whole roster). |
+| `GET partner/experts/<expert_id>/performance/` | `InstitutionExpertPerformanceDetailView` | One expert (id → 404 if not an active affiliate). |
+
+## Expert performance (`expert_performance_service.py`)
+
+Drills below the institution-wide KPIs to **per-expert** outcomes: courses credited,
+content authored (sections/lectures/quizzes/assignments/coding), review-weighted avg rating,
+active enrollments, completion rate, certificates, webinars hosted + registrations, and
+`last_active`. The whole active roster is returned, zero-activity experts included (all-zero row).
+
+**Attribution:** a course is credited to every user in `course.instructors` **and** its
+`created_by` (of this institution). Co-taught courses count toward each instructor, so per-expert
+sums can exceed the institution total — the payload states this in an `attribution` field so the
+columns aren't misread as mutually exclusive. Content-authorship counts use `created_by` on the
+content rows (exact per expert).
+
+**Query strategy:** cost is a fixed ~12 grouped queries regardless of roster size. Per-course
+aggregates (enrollments/completions/certificates) are computed once keyed by course id, credited
+course-id sets are built per expert from the `instructors` M2M + `created_by`, and the two are
+summed per expert in Python — no per-expert ORM loop. Content counts are one grouped query per
+content type keyed by `created_by`. The detail endpoint raises `InstructorProfile.DoesNotExist`
+→ 404 for a non-affiliate (never leaks another institution's expert). `EXPERT_CONTENT_ACTIVITY_ROLLUP`
+is unbuilt; the content counts are computed inline here rather than depending on it.
 
 Trend params: `?granularity=monthly|weekly` (default `monthly`), `?periods=N` (default 12, clamped `[1,24]`).
 Top-courses params: `?sort=enrollments|rating|completion` (default `enrollments`), `?limit=N` (default 5, clamped `[1,50]`).

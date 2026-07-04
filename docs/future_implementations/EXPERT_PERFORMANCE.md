@@ -1,7 +1,8 @@
 # Expert Performance Metrics (Institution)
 
-**Status:** Planned — not yet implemented.
-**Depends on:** the `analytics` app (shipped), `AuthoredModel` authorship (shipped, migration `courses/0016`), the expert roster (`InstructorProfile.affiliated_institution`, shipped). Complements — does **not** duplicate — `EXPERT_CONTENT_ACTIVITY_ROLLUP.md` (raw content counts).
+**Status:** ✅ Implemented.
+**Shipped:** `analytics/services/expert_performance_service.py` (`expert_performance(institution, *, expert_id=None)`), views `InstitutionExpertPerformanceView` / `InstitutionExpertPerformanceDetailView` in `analytics/all_views/analytics_views.py`, routes `partner/experts/performance/` + `partner/experts/<int:expert_id>/performance/`, tests `analytics/all_tests/test_expert_performance.py`. No migration. Docs: CLAUDE.md + `docs/architecture/20-analytics-dashboard.md` + `docs/api-testing/postman-analytics.md` (Group 4). **Note:** `EXPERT_CONTENT_ACTIVITY_ROLLUP.md` is still unbuilt, so the content-authorship counts are computed **inline** here (grouped `created_by` queries per content type) rather than reusing a shared rollup service — extract the shared helper if/when the rollup ships.
+**Depends on:** the `analytics` app, `AuthoredModel` authorship (migration `courses/0016`), the expert roster (`InstructorProfile.affiliated_institution`) — all shipped.
 **SRS:** §7.2.1 "track expert-created content performance", §7.7 reporting.
 
 ---

@@ -349,13 +349,33 @@ class WorkExperienceDetailView(APIView):
 class PublicProfileDetailView(APIView):
     """
     GET /profiles/<slug>/
-    Returns the public profile for any user type, looked up by name_slug.
+    Returns the public profile for any user type.
+    Partner institutions are resolved by their own institution slug
+    (PartnerInstitutionProfile.slug); every other user type is looked up by
+    User.name_slug.
     Only returns data for active, non-deleted, email-verified users.
     For learners, the profile must also be marked public.
     """
     permission_classes = [AllowAny]
 
     def get(self, request, slug):
+        institution = (
+            PartnerInstitutionProfile.objects
+            .select_related('user')
+            .filter(
+                slug=slug,
+                is_active=True,
+                user__is_active=True,
+                user__is_email_verified=True,
+                user__is_deleted=False,
+            )
+            .first()
+        )
+        if institution is not None:
+            data = PublicPartnerInstitutionProfileSerializer(institution).data
+            data['user_type'] = institution.user.user_type
+            return Response({'success': True, 'data': data}, status=status.HTTP_200_OK)
+
         user = User.objects.filter(
             name_slug=slug,
             is_active=True,

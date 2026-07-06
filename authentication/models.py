@@ -701,7 +701,7 @@ class PartnerInstitutionProfile(models.Model):
         upload_to=institution_cover_path, blank=True, null=True
     )
     institution_name = models.CharField(max_length=255)
-    slug = models.SlugField(max_length=255, unique=True, blank=True, db_index=True)
+    slug = models.SlugField(max_length=255, unique=True, blank=True, null=True, db_index=True)
     tagline = models.CharField(
         max_length=255, blank=True, default='',
         help_text='Short institution tagline'
@@ -775,7 +775,7 @@ class PartnerInstitutionProfile(models.Model):
         return self.institution_name
 
     def save(self, *args, **kwargs):
-        if not self.slug:
+        if not self.slug and self.institution_name:
             base_slug = slugify(self.institution_name) or 'institution'
             candidate = base_slug
             suffix = 1

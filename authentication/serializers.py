@@ -211,7 +211,9 @@ class UserRegistrationSerializer(serializers.ModelSerializer):
             profile = user.partner_institution_profile
             profile.institution_name = institution_name
             profile.institution_type = institution_type
-            profile.save(update_fields=['institution_name', 'institution_type'])
+            # slug is generated in save() from institution_name (NULL until now);
+            # include it in update_fields so the generated value persists.
+            profile.save(update_fields=['institution_name', 'institution_type', 'slug'])
 
         user.generate_otp(purpose='registration')
         return user

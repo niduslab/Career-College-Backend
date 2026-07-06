@@ -8,6 +8,8 @@ items keep full detail until they ship.
 
 1. [Catalog Filtering & Sorting (opened 2026-05-21)](#1-catalog-filtering--sorting) — 9 of 10 actionable items closed; 1 blocked + 1 informational open.
 2. [System-Wide Security Sweep (opened 2026-05-21)](#2-system-wide-security-sweep) — 18 findings; 9 closed, 9 open.
+3. [Payments Integration Review (opened 2026-07-06)](#3-payments-integration-review) — 9 findings; 2 closed, 7 open.
+4. [Whole-Project Sweep (opened 2026-07-06)](#4-whole-project-sweep) — 32 findings (4 high, 12 medium, 16 low); all open. Covers auth, id_verification, courses (non-catalog), messaging, notifications, realtime, webinars, analytics, core + config.
 
 ---
 
@@ -388,3 +390,474 @@ into thinking it guards something.
 - **Dependency CVEs:** run `pip-audit` against the lock file separately.
 - **Static analysis:** run `bandit -r .` separately.
 - **Secret scanning:** run `git-secrets` or `trufflehog` against repo history.
+
+---
+
+# 3. Payments Integration Review
+
+**Date opened:** 2026-07-06
+**Last updated:** 2026-07-06
+**Scope:** the SSLCommerz payments PR (`feature/ssl_commerz_sandbox_payment`) —
+the new `payments/` app (`Order` model, `order_service`, `sslcommerz_service`,
+callback/checkout/order views, reaper task) plus the free-enroll / free-register
+gates it added in `courses/all_views/enrollment_views.py`,
+`courses/services/enrollment_service.py`, and
+`webinars/services/registration_service.py`, and the notification wiring.
+
+## TL;DR
+
+Strong, defensively-written integration. Trust model is correct: `finalize_payment`
+is the sole PAID path, re-validates against the SSLCommerz Validation API, checks
+tran_id/amount/currency/store_id against the price snapshot, is idempotent under
+double-fire, treats PAID as terminal, and flags duplicate payments for refund.
+62 tests cover the tamper/duplicate/idempotency cases. **No blocking correctness
+bugs.** 9 findings: 2 fixed in this pass (admin webinar fields, order-detail
+N+1), 7 open — 2 medium (both architectural/UX, not correctness), 5 low.
+
+## Closed issues
+
+Fixed in the 2026-07-06 pass.
+
+| ID | Severity | What was wrong | What shipped |
+|---|---|---|---|
+| PAY-L6 | Low | `OrderAdmin` referenced only `course` in `list_display`/`search_fields`/`readonly_fields` — webinar orders showed a blank column, weren't searchable, and `webinar` rendered as an *editable* FK dropdown (contradicting the read-only audit-row intent). | `webinar` added to all three tuples. See [`admin.py:8-15`](payments/admin.py#L8-L15). |
+| PAY-L7 | Low | `OrderDetailView` did `select_related('course')` only → one extra query on webinar order detail; inconsistent with `OrderListView`. | `select_related('course', 'webinar')`. See [`order_views.py:54`](payments/all_views/order_views.py#L54). |
+
+---
+
+## Open issues
+
+### PAY-M1. Paid-course enroll gate lives in the view, not the service
+
+**Status: OPEN.**
+
+The `price > 0 → require a PAID order` check sits in `CourseEnrollView`
+([`enrollment_views.py:110-127`](courses/all_views/enrollment_views.py#L110-L127)).
+`enroll_learner()` itself will create a FREE enrollment on a paid course if
+called with the default `enrollment_type`. Today only two callers exist — the
+view (gated) and `finalize_payment` (passes `PAID` explicitly) — so there is no
+live leak. But the invariant is one careless future caller away from giving away
+paid content for free.
+
+**Why it matters:** the webinar side already puts the equivalent gate *inside*
+`register_for_webinar` (with a `via_payment=True` bypass for finalize). The
+course side is the outlier — the guarantee should not depend on every call site
+remembering to pre-check.
+
+**Recommended:** move the "no free enrollment on a paid course without a PAID
+order" check into `enroll_learner`, with a keyword bypass mirroring
+`allow_unpublished` for the finalize path.
+
+### PAY-M2. Duplicate payment is marked FAILED with no user-facing signal
+
+**Status: OPEN.**
+
+`_record_duplicate_payment`
+([`order_service.py:262-278`](payments/services/order_service.py#L262-L278))
+grants access, sets `gateway_payload.requires_refund=True`, and `logger.critical`s
+for a manual refund — but dispatches **no notification**, and the learner's order
+history shows the second order as `failed`. The learner paid twice, got access,
+sees "failed", and has no signal that a refund is owed to them.
+
+**Recommended:** dispatch a distinct notification (or a dedicated order sub-state),
+and surface `requires_refund` in `OrderSerializer` so the frontend can show
+"refund pending" instead of a bare "failed".
+
+### PAY-L1. `courses`/`webinars` now depend on `payments` (conceptual cycle)
+
+**Status: OPEN (architectural).**
+
+`payments` imports `enroll_learner` / `register_for_webinar` at module top level;
+`courses` and `webinars` import `payments.Order` **lazily inside functions**
+([`enrollment_views.py:114`](courses/all_views/enrollment_views.py#L114),
+[`registration_service.py`](webinars/services/registration_service.py)) to dodge the
+import-time cycle. It works, but the lazy import papers over bidirectional coupling —
+unlike the clean one-way `analytics → courses/webinars` dependency documented in
+CLAUDE.md.
+
+**Recommended:** expose a `has_paid_order(user, target)` helper from `payments`
+and have `courses`/`webinars` call that, or invert so `payments` owns the grant and
+the upstream apps never reach into it. Low priority; if kept as-is, document the
+deviation.
+
+### PAY-L2. Notification dispatch is untested
+
+**Status: OPEN (test gap).**
+
+The 4-edit wiring for `PAYMENT_SUCCESSFUL` / `PAYMENT_FAILED` (event type, builder,
+`EVENT_TO_CATEGORY`, `_EVENT_TEMPLATE_MAP` + templates) is present and correct, but
+no test asserts either event actually dispatches, and none render the templates. A
+missing `ctx` key in a builder would only surface at runtime.
+
+**Recommended:** one dispatch test per event (assert a `Notification` row lands with
+the expected `data`), plus a template-render smoke test.
+
+### PAY-L3. Unauthenticated callback endpoints trigger an outbound gateway call, unthrottled
+
+**Status: OPEN.**
+
+`/success/` and `/ipn/` are `AllowAny`. An unknown `tran_id` short-circuits to 404
+before any network call (good), but a *known* tran_id with an arbitrary `val_id`
+triggers a Validation-API round-trip. `tran_id` is non-guessable (`CC` + 24 hex),
+so the risk is low.
+
+**Recommended:** add a rate limit on the callback views as defence in depth.
+
+### PAY-L4. `logger.info` fires on the money path via `enroll_learner`
+
+**Status: OPEN.**
+
+The payments app rule is "warning/error/critical/exception only — never
+`logger.info`". `finalize_payment` calls `enroll_learner`, which does
+`logger.info('Enrollment reactivated …')`. It's in the `courses` logger namespace,
+so it doesn't violate the rule literally, but the intent (no info-level noise on the
+money path) leaks.
+
+**Recommended:** minor — accept, or demote that log when reached via finalize.
+
+### PAY-L5. Truncated comment in the capacity block
+
+**Status: OPEN (trivial).**
+
+[`registration_service.py:47`](webinars/services/registration_service.py#L47) —
+`# When the webinar is capacity-limited, lock its row so the capacity check` ends
+mid-sentence. Pre-existing, but touched by this diff. Finish or drop it.
+
+## Trust-model verification — clean
+
+Walked the money path end-to-end:
+
+| Property | Where enforced | Verdict |
+|---|---|---|
+| Only `finalize_payment` grants PAID | `order_service.finalize_payment` | OK |
+| Gateway body never trusted; re-validates via API | `validate_transaction` + `_verification_failure` | OK |
+| amount/currency/store_id/tran_id checked vs snapshot | `_verification_failure` | OK |
+| `store_id` fails closed in production, tolerated in sandbox | `_verification_failure:162-173` | OK — tested both ways |
+| PAID terminal; late fail/cancel no-op | `_terminal_mark:316` | OK |
+| Idempotent under double IPN / redirect+IPN | pre-check + `select_for_update(of=('self',))` | OK — tested |
+| Duplicate payment → refund flag, access still granted | `_record_duplicate_payment` | OK (but see PAY-M2) |
+| fail/cancel callbacks require valid signature | `verify_callback_signature` | OK |
+| `gateway_payload` / `val_id` never serialized to learner | `OrderSerializer` field list | OK |
+| Stranded `processing` orders reconciled | `reap_stale_processing_orders_task` | OK |
+
+---
+
+# 4. Whole-Project Sweep
+
+**Date opened:** 2026-07-06
+**Last updated:** 2026-07-06
+**Scope:** every app not already covered by passes 1–3 — `authentication`,
+`id_verification`, `courses` (excluding the catalog filter/sort of pass 1 and
+the payments-enroll gate of pass 3), `messaging`, `notifications`, `realtime`,
+`webinars`, `analytics`, and `core` + `career_college_backend` config +
+project-wide convention adherence. Run as five parallel domain audits; each
+finding below was verified against the actual code. The four HIGH items and the
+messaging/celery claims were independently re-verified before publishing.
+
+## TL;DR
+
+32 findings — **4 high, 12 medium, 16 low; all open.** No blockers *inside*
+already-shipped features fire in normal happy-path use, but two of the highs are
+"silent breakage" class: notification emails never send under the documented
+worker command (CORE-H1), and LinkedIn OAuth 500s on every attempt (AUTH-H1).
+Broad architecture, learner-safe serialization, payment trust model, analytics
+institution-scoping, capacity locking, and the send-gate are all sound (see the
+per-domain "clean" notes at the end). This pass found no critical data-loss or
+auth-bypass holes.
+
+## Severity index
+
+| ID | Sev | Domain | One-liner |
+|---|---|---|---|
+| CORE-H1 | High | core/config | `notifications` Celery queue routed but no documented worker consumes it → notification emails silently never fire |
+| AUTH-H1 | High | auth | LinkedIn OAuth feeds raw `/v2/me` into Google provisioning → `KeyError` 500 on every LinkedIn sign-in |
+| AUTH-H2 | High | auth | OAuth `state` generated + stored but never validated on callback → login-CSRF |
+| CRS-H1 | High | courses | Transcode task `.delay()` inside caller's `atomic()` (not `on_commit`) → worker races the commit / phantom-row retries |
+| AUTH-M1 | Med | auth | `TokenRefreshView` never reads/writes the refresh cookie → pure cookie clients can't refresh |
+| AUTH-M2 | Med | auth | Login errors leak account existence + state (deactivated / unverified / invalid) |
+| AUTH-M3 | Med | auth | `User.save()` swallows `clean()` `ValidationError` → model invariants never block a write |
+| AUTH-M4 | Med | id_verification | `transition_to` status write + verify side effect not atomic and not row-locked |
+| CRS-M1 | Med | courses | No stuck-submission reaper for `AssignmentSubmission` (coding has one) → learner can be permanently blocked |
+| CRS-M2 | Med | courses | Inconsistent owner scoping (`instructors` vs `instructors\|created_by`) across authoring endpoints |
+| MSG-M1 | Med | messaging | Unread counts never exclude `sender` → caller's own sent messages count as unread |
+| MSG-M2 | Med | notifications | `NotificationPreference.push_enabled` is a dead toggle — never consulted in `_push_ws` |
+| MSG-M3 | Med | notifications/realtime | Zero test coverage for the entire notification + realtime layer |
+| ANL-M1 | Med | analytics | Engagement composite bakes in a structurally-zero attendance weight → score capped ~85, never 100 |
+| ANL-M2 | Med | analytics | `top_courses(sort='completion')` ranks by completion *count*, contradicting the `completion_rate` it displays |
+| CORE-M1 | Med | core | `ValidationError`→400/422 mapping copy-pasted across ~15 sites; belongs in `core/` |
+| AUTH-L1 | Low | auth | `create_user` default `user_type='customer'` is not a valid choice |
+| AUTH-L2 | Low | auth | Partner-institution slug derived from registrant `full_name`, not institution name |
+| AUTH-L3 | Low | id_verification | Duplicate-in-progress verification check is TOCTOU with no DB backstop |
+| AUTH-L4 | Low | auth | `User.save()` recomputes slug + runs an `.exists()` query on every save (incl. OTP writes) |
+| CRS-L1 | Low | courses | Duplicate `COURSE_COMPLETED` notification possible under concurrent recalc |
+| CRS-L2 | Low | courses | Coding reaper can flip a still-running long submission to `error` |
+| CRS-L3 | Low | courses | `courses/selectors.py` is a dead module (imported nowhere) |
+| CRS-L4 | Low | courses | Transcoder always emits all 5 renditions → upscales low-res sources |
+| MSG-L1 | Low | notifications | Template-less events (`MESSAGE_RECEIVED` etc.) enqueue no-op email tasks every dispatch |
+| MSG-L2 | Low | realtime | `JWTAuthMiddleware(AuthMiddlewareStack(...))` redundantly runs session auth per WS connect |
+| MSG-L3 | Low | messaging | `institution_expert` conversation accepts an arbitrary, unscoped `course_id` |
+| ANL-L1 | Low | analytics | Stale comment "no payments/orders model exists" — one now exists |
+| ANL-L2 | Low | analytics | `top_courses` docstring says "published" but query includes draft/archived |
+| ANL-L3 | Low | analytics | `active_ratio` divides distinct-user count by active-*enrollment* count (unit mismatch) |
+| CORE-L1 | Low | config | `.env.example` `DB_ENGINE=sqlite3` contradicts the Postgres-only requirement |
+| CORE-L2 | Low | config | `settings.py` does import-time `LOG_DIR.mkdir` (no `parents=True`) + writability probe |
+
+Cross-refs: `RequestLoggingMiddleware` no-op and `IsAdminOrReadOnly` dead code
+were also independently surfaced this pass — already tracked as SEC-L1 / SEC-L2.
+
+---
+
+## High
+
+### CORE-H1. Notification emails routed to a queue no documented worker consumes
+
+**Status: OPEN.**
+
+[`settings.py:255-258`](career_college_backend/settings.py#L255-L258) —
+`CELERY_TASK_ROUTES` sends `send_notification_email_task` and
+`purge_old_notifications_task` to `{'queue': 'notifications'}`. There is no
+`CELERY_TASK_DEFAULT_QUEUE` override, and the only documented worker command
+(CLAUDE.md, README) is `celery -A career_college_backend worker -l info` — no
+`-Q notifications`. No Procfile / compose / script starts a worker on that queue.
+A default worker consumes only the `celery` queue, so **every** notification email
+(verification decisions, `PAYMENT_SUCCESSFUL/FAILED`, `WEBINAR_*`,
+`MESSAGE_RECEIVED`, expert onboarding, review events) and the daily purge pile up
+unconsumed and never send — in dev *and* prod. Auth OTP/credentials tasks are not
+routed, so they still work, which masks the problem. Tests are unaffected
+(`CELERY_TASK_ALWAYS_EAGER`).
+
+**Fix:** drop the two routes (let them use the default queue), or run + document a
+worker with `-Q celery,notifications`.
+
+### AUTH-H1. LinkedIn OAuth 500s on every sign-in
+
+**Status: OPEN.**
+
+`fetch_linkedin_profile` ([`linkedin_oauth.py:116-139`](authentication/services/linkedin_oauth.py#L116-L139))
+returns the raw `/v2/me` payload plus an `email` key. It is then fed into the
+*Google* provisioning functions (aliased in `linkedin_views.py`), which require
+`profile['sub']`, `['full_name']`, `['email_verified']`, `['given_name']`,
+`['family_name']`, `['picture']`
+([`user_provisioning.py:53,74-79`](authentication/services/user_provisioning.py#L53-L79))
+— none of which LinkedIn sets → `KeyError` → 500. Compounding: `/v2/me` +
+`/v2/emailAddress` are the deprecated r_liteprofile APIs and don't work with the
+requested OIDC scopes (`openid email profile`); the correct call is
+`GET /v2/userinfo`. No LinkedIn tests exist, so this shipped unnoticed.
+
+**Fix:** switch to `/v2/userinfo` and normalize its response to the same dict shape
+as `google_oauth._normalize_profile` (`sub`, `email`, `email_verified`,
+`full_name`, `given_name`, `family_name`, `picture`).
+
+### AUTH-H2. OAuth `state` is never validated → login-CSRF
+
+**Status: OPEN.**
+
+[`google_views.py:81`](authentication/all_views/google_views.py#L81) /
+[`linkedin_views.py:74`](authentication/all_views/linkedin_views.py#L74) generate a
+`state` and store it in the session, but it is only ever read back to *forward* to
+the frontend — no code path compares the returned `state` to the session value, and
+the `exchange-token` POST ignores `state` entirely. Enables OAuth login-CSRF
+(attacker splices their own auth code to log a victim into the attacker's account,
+or forces sign-in).
+
+**Fix:** compare returned `state` against the session-stored value; reject on
+mismatch.
+
+### CRS-H1. Transcode task dispatched inside an open transaction, not on commit
+
+**Status: OPEN.**
+
+[`section_service.py:173`](courses/services/section_service.py#L173) —
+`replace_lecture_video_and_enqueue_transcoding` calls
+`transcode_video_asset_task.delay(...)` directly. In the lecture-create-with-video
+path (`content_views.py` `_create_lecture` wraps the service call *and* the
+subsequent `create_section_content_for_object` in one `transaction.atomic()`), two
+failures result: (a) the worker can dequeue before the outer transaction commits →
+`VideoAsset.objects.get(pk=...)` raises `DoesNotExist`; (b) if the `(section,
+position)` unique constraint trips and the transaction rolls back, the just-queued
+task now points at a deleted row. Every other dispatch in the app uses
+`transaction.on_commit(lambda: task.delay(...))`. Masked in tests by
+`CELERY_TASK_ALWAYS_EAGER` (runs inline while the row still exists), so there is no
+coverage for the real async race.
+
+**Fix:** defer the dispatch to `transaction.on_commit`.
+
+---
+
+## Medium
+
+### AUTH-M1. `TokenRefreshView` is cookie-blind
+
+[`auth_views.py:184-217`](authentication/all_views/auth_views.py#L184-L217) reads
+the refresh token only from the request body and returns new tokens only in the
+body. The auth model stores tokens in HttpOnly cookies (JS can't read them), so a
+pure cookie client can't refresh, and a successful refresh doesn't update the
+`access_token` cookie. **Fix:** fall back to `request.COOKIES[refresh_cookie]` and
+call `set_jwt_cookies` on the response (mirror login/OAuth).
+
+### AUTH-M2. Login errors leak account existence and state
+
+[`serializers.py:73-81`](authentication/serializers.py#L73-L81)
+(`UserLoginSerializer.validate`) returns distinct messages for deactivated
+("deactivated or restricted"), unverified ("verify your email"), and other
+("Invalid email or password"). Enables enumeration of registered emails and their
+state. Registration `validate_email` (serializers.py:146-150) has the same class of
+leak, lower impact. **Fix:** generic message for all pre-auth failures, or only
+differentiate after a correct password.
+
+### AUTH-M3. `User.save()` silently discards model validation
+
+[`models.py:207-217`](authentication/models.py#L207-L217) wraps `self.clean()` in
+`try/except ValidationError: pass`, so `User.clean()` and any future invariant never
+block a write — invalid data persists platform-wide. **Fix:** don't swallow; drop
+the in-`save` `clean()` and validate in serializers, or gate the swallow to the
+specific social-auth path that needs it.
+
+### AUTH-M4. Verification transition + side effect not atomic / not locked
+
+[`id_verification/models.py:221-241`](id_verification/models.py#L221-L241) and
+`:432-452` (`transition_to`) do `self.save()` then a *separate*
+`_mark_instructor_verified()` / `_mark_institution_verified()` write. If the second
+fails, the row is `approved` but the profile's `is_verified` stays `False`. No
+`select_for_update`, so two concurrent admin reviews can both pass the transition
+check. **Fix:** wrap transition + side effect in `transaction.atomic()` and lock the
+row.
+
+### CRS-M1. No stuck-submission reaper for assignments
+
+Coding submissions have `reap_stuck_coding_submissions_task`; assignments have no
+equivalent. If the `on_commit` `grade_assignment_submission_task.delay()` never
+lands on the broker (Redis down at commit — the callback raises *after* the row is
+committed), the submission is stuck in `submitted`/`grading` forever: the in-flight
+partial unique blocks re-submission and `retry_assignment_grading`
+([`learner_service.py:632`](courses/services/learner_service.py#L632)) only accepts
+`grading_failed`. `acks_late` covers worker death, not a failed initial enqueue.
+**Fix:** add a reaper flipping long-stale in-flight assignment rows to
+`grading_failed`.
+
+### CRS-M2. Inconsistent owner scoping across authoring endpoints
+
+`LectureDetailAPIView`, `SectionContentReorderAPIView`, `QuizAnswerDetailAPIView`
+scope by `Q(instructors=user) | Q(created_by=user)`; section CRUD,
+`SectionContentListCreate`, quiz/question CRUD, and the `CourseItem*` bases scope by
+`instructors=user` only ([`content_views.py`](courses/all_views/content_views.py)
+lines 194/510/732 vs 61/78/110/563/604/776/817). For institution-owned courses
+(`created_by` = institution user, not in `instructors`), the same actor can edit an
+existing lecture but gets 404 creating a section — incoherent. **Fix:** apply the
+project-wide `Q(instructors) | Q(created_by)` policy uniformly.
+
+### MSG-M1. Unread counts include the caller's own sent messages
+
+All three unread computations —
+[`messaging_service.py:300-312`](messaging/services/messaging_service.py#L300-L312)
+(`get_unread_conversation_count`), `:315-330` (`get_unread_counts`), and
+[`serializers.py:78-90`](messaging/serializers.py#L78-L90)
+(`ConversationSerializer.get_unread_count`) — filter only on `created_at >
+last_read_at` and never exclude `sender=user`. The cursor is bumped only by explicit
+`mark_read`. A learner who sends the opener immediately sees their own thread as 1
+unread until they POST `/read/`. The three stay mutually consistent (the "always
+agree" invariant holds) but all agree on the wrong number. **Fix:** add
+`~Q(sender=user)` to all three, or bump the sender's cursor in `send_message`.
+
+### MSG-M2. `push_enabled` is a dead preference toggle
+
+[`dispatcher.py:82-99`](notifications/services/dispatcher.py#L82-L99) (`_push_ws`)
+always fires `group_send`; nothing reads `push_enabled` (only `email_enabled` is
+consulted). The field is stored, serialized, and writable via
+`NotificationPreferenceView.patch`, so a user can "disable" in-app/WS push and keep
+receiving it. **Fix:** honor it in `_push_ws`, or remove it from
+model/serializer/API to stop advertising a no-op control.
+
+### MSG-M3. Notification + realtime layers have zero tests
+
+No test files exist in `notifications/` or `realtime/`. Untested: `dispatch()` dedup
++ `IntegrityError` race, `skip_email`, preference-gated email enqueue,
+`PlatformConsumer` JWT reject-on-connect (`close(4001)`), stream group add/discard,
+gate-error surfacing, unread recompute on push. High-risk code (races, `on_commit`
+ordering, async ORM wrapping) with no regression net. Distinct from PAY-L2. **Fix:**
+add dispatch/dedup/consumer-connect regression tests.
+
+### ANL-M1. Engagement composite bakes in a structurally-zero attendance term
+
+[`analytics_service.py:211`](analytics/services/analytics_service.py#L211) —
+`_engagement_score` weights `attendance` at `0.15`, but `attendance_rate` is always
+`0.0` (the `attended` field is never populated; tracking is unbuilt). Every
+institution's `engagement_score.composite` is capped at ~85/100 and can never reach
+100. The `webinars` block flags `attendance_tracking_enabled: False`, but the
+engagement score gives no such signal — it just reports a depressed number.
+**Fix:** drop attendance from the weights (renormalize the other three to sum to 1)
+until tracking ships, or add an `attendance_included: False` flag.
+
+### ANL-M2. `top_courses(sort='completion')` ranks by count, not the rate it shows
+
+[`analytics_service.py:347`](analytics/services/analytics_service.py#L347) orders by
+`-completed_count, -enrollment_count`, but each row surfaces `completion_rate` (a
+percentage, line 359). A course at 10% (100/10) ranks above one at 100% (5/5),
+contradicting the rendered field. **Fix:** annotate/sort by the ratio so ranking
+matches `completion_rate`.
+
+### CORE-M1. `ValidationError`→400/422 mapping is copy-pasted ~15 times
+
+`webinars/all_views/status_views.py:20` extracts `_transition_error_response`; the
+byte-identical block is inlined instead in `courses/all_views/status_views.py` (8×),
+`courses/all_views/enrollment_views.py` (2×), and the three
+`id_verification/all_views/*` modules. CLAUDE.md says duplicated helpers belong in
+`core/`. **Fix:** extract one helper (e.g. `core/http.py`) and import everywhere.
+
+---
+
+## Low
+
+| ID | Location | Problem → fix |
+|---|---|---|
+| AUTH-L1 | [`models.py:35`](authentication/models.py#L35) | `create_user` default `user_type='customer'` isn't a valid choice → no profile signal fires. Change to `'learner'`. |
+| AUTH-L2 | [`serializers.py:210-214`](authentication/serializers.py#L210-L214) | PI slug computed from registrant `full_name` before `institution_name` is overwritten (slug never recomputes). Set name before first profile save, or force recompute. |
+| AUTH-L3 | [`id_verification/serializers.py:32-38`](id_verification/serializers.py#L32-L38) | Duplicate-in-progress guard is `.exists()` TOCTOU with no partial unique on active statuses → two concurrent POSTs both create a draft. Add a DB backstop. |
+| AUTH-L4 | [`models.py:219-235`](authentication/models.py#L219-L235) | `User.save()` recomputes slug + runs `.exists()` even when the name is unchanged (fires on every OTP write). Short-circuit when name unchanged. |
+| CRS-L1 | [`enrollment_service.py:434-447`](courses/services/enrollment_service.py#L434-L447) | Concurrent recalc can dispatch `COURSE_COMPLETED` twice (cert is idempotent, notification isn't). Guard dispatch on `created` from `get_or_create`. |
+| CRS-L2 | [`tasks.py:539-561`](courses/tasks.py#L539-L561) | Coding reaper's blind bulk `.update()` can flip a legitimately long-running submission to `error`. Key the cutoff off `time_limit_ms * total_tests`, or re-check per row. |
+| CRS-L3 | `courses/selectors.py` | Dead module — `get_course_base_queryset` / `get_instructor_course(s)` imported nowhere. Remove or wire up. |
+| CRS-L4 | [`transcoding.py:135`](courses/transcoding.py#L135) | Always produces 240p–1080p, upscaling low-res sources (wasted CPU/storage). Probe source height, cap renditions. |
+| MSG-L1 | [`dispatcher.py:78-79`](notifications/services/dispatcher.py#L78-L79) | Template-less events (`MESSAGE_RECEIVED`, `LECTURE_COMPLETED`, `REVIEW_RECEIVED`, `VIDEO_*`, …) enqueue a no-op email task every dispatch. Short-circuit `_enqueue_email` when `_EVENT_TEMPLATE_MAP` has no entry. |
+| MSG-L2 | [`realtime/middleware.py:34-36`](realtime/middleware.py#L34-L36) | `JWTAuthMiddleware(AuthMiddlewareStack(...))` runs a session lookup per WS connect after JWT already set `scope['user']`. Wrap only `URLRouter`. |
+| MSG-L3 | [`conversation_views.py:182-188`](messaging/all_views/conversation_views.py#L182-L188) | `institution_expert` create fetches `NidusCourse.objects.get(pk=course_id)` unscoped — any course (incl. unowned/draft) can be attached as context and leaked via the serializer. Scope course to the institution or reject. |
+| ANL-L1 | [`analytics_service.py:232`](analytics/services/analytics_service.py#L232) | Comment "No payments/orders model exists" is now false (payments app shipped). Update to "revenue aggregation deferred to Phase 2". |
+| ANL-L2 | [`analytics_service.py:322-333`](analytics/services/analytics_service.py#L322-L333) | `top_courses` docstring says "published" but query has no status filter (draft/archived included). Add `is_published=True` or fix the docstring. |
+| ANL-L3 | [`analytics_service.py:206`](analytics/services/analytics_service.py#L206) | `active_ratio = _pct(active_learners, active)` mixes distinct-user numerator with active-enrollment denominator → understated for multi-enrolled learners. Divide by distinct enrolled learners. |
+| CORE-L1 | [`.env.example:8`](.env.example#L8) | `DB_ENGINE=sqlite3` contradicts the Postgres-only requirement (partial unique indexes, `django.contrib.postgres`). Set a Postgres backend in the example. |
+| CORE-L2 | [`settings.py:318-330`](career_college_backend/settings.py#L318-L330) | Import-time `LOG_DIR.mkdir(exist_ok=True)` (no `parents=True`) + writability probe run on every management command; a nested custom `LOG_DIR` with a missing parent raises at import. |
+
+---
+
+## Verified clean this pass
+
+- **Learner-safe serialization** (courses) — `is_correct` / `model_answer` /
+  `rubric` / `solution_code` / hidden tests all handled by field *absence* on
+  dedicated serializers plus service-layer filtering. Reveal-on-wrong /
+  reveal-on-graded rules centralized and correct.
+- **Submission atomicity + grading idempotency** (courses) — quiz/assignment/coding
+  all `@transaction.atomic`, snapshot rubric/points, dispatch grading on
+  `on_commit`, short-circuit on terminal status under `acks_late`. Certificate
+  `get_or_create` idempotent. Reorder uses `select_for_update` + two-phase offset.
+  `vote_on_review` race-safe. Code runner sandbox hardened (`cap_drop=ALL`,
+  no-new-privileges, network off, always removed).
+- **Send-gate** (messaging) — enforced service-only; consumer/views never re-check.
+  `_push_ws_and_notify` recipient-only (no duplicate delivery). Dedup race-safe.
+  `PlatformConsumer` rejects unauthenticated connects; async ORM wrapped in
+  `database_sync_to_async`. `EVENT_TO_CATEGORY` + `_BUILDERS` cover all 30 events.
+- **Analytics** — institution-scoping derived from the token on *every* query, no
+  client-supplied institution id; 403-vs-404 correct; expert-performance attribution
+  (creator+instructor dedup, co-taught double-credit, removed-expert exclusion) and
+  trend zero-fill/bucket alignment correct and tested; no N+1.
+- **Webinars** — capacity lock (`select_for_update().filter().first()`) genuinely
+  holds the row lock and serializes concurrent first-time registrants; `meeting_url`
+  registrant-only via dedicated serializers; presenter roles kept distinct; publish
+  state machine consistent (no reintroduced `rejected`).
+- **Departments + expert provisioning** (auth) — service-layer, per-institution
+  scoped, `IntegrityError` race handling, `on_commit` email/notification, password
+  kept out of the notification payload, deactivation blocks authoring.
+- **Project conventions** (core) — response envelope consistent across all 9 apps;
+  every view is an `APIView` subclass (no generics/ViewSets); all permissions in
+  `core/permissions.py`; `message_dict`→400 / plain→422 uniform;
+  `makemigrations --check` clean; all 4 `CELERY_BEAT_SCHEDULE` tasks exist with
+  matching signatures.

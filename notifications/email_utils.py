@@ -25,6 +25,8 @@ _EVENT_TEMPLATE_MAP = {
     _ET.INST_VERIFICATION_ACTION_REQ: 'notifications/emails/institution_verification_action_required.html',
     _ET.WEBINAR_PUBLISHED:       'notifications/emails/webinar_published.html',
     _ET.WEBINAR_REGISTERED:      'notifications/emails/webinar_registered.html',
+    _ET.PAYMENT_SUCCESSFUL:      'notifications/emails/payment_successful.html',
+    _ET.PAYMENT_FAILED:          'notifications/emails/payment_failed.html',
 }
 
 

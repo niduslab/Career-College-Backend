@@ -32,6 +32,7 @@ gap noted, since the SRS requirement is not fully met.
 - Course reviews & ratings with helpful up/down votes
 - Direct messaging with instructors
 - In-app notification feed + WebSocket real-time delivery
+- Paid course **and** paid webinar purchase via SSLCommerz hosted checkout (sandbox; BDT; cards/bKash/Nagad/mobile banking through the gateway), server-side validation, PAID enrollment / webinar registration on success, order history endpoints
 
 ### Features Not Built
 - Learning preferences (topics/difficulty/learning style) and privacy controls
@@ -39,7 +40,7 @@ gap noted, since the SRS requirement is not fully met.
 - Similar-course recommendations ("courses like this")
 - Personalized recommendations
 - Dynamic learning-path recommendations
-- Paid-course enrollment / payment processing (Stripe, Bkash, Nagad, cards, mobile banking)
+- Stripe payment option (SSLCommerz only today; SRS also lists Stripe)
 - Wishlist and price-drop alerts
 - Predicted completion timeline
 - Skill assessments (pre-course / post-course)
@@ -80,7 +81,7 @@ gap noted, since the SRS requirement is not fully met.
 - Notifications for course/enrollment/review events
 
 ### Features Not Built
-- Course pricing configuration (free/paid, coupons, promo codes, time-limited discounts) — no payment layer
+- Pricing promotions (coupons, promo codes, time-limited discounts) — base free/paid pricing + SSLCommerz checkout now exist; promo tooling does not
 - Multimedia upload beyond video/article/image: audio, PDF/DOCX/PPTX documents, SCORM/xAPI, code repos
 - Automatic video thumbnails / preview clips
 - Screen recording tool
@@ -152,7 +153,7 @@ gap noted, since the SRS requirement is not fully met.
 - Course scheduling: start date, end date, enrollment deadline enforcement, staggered/timed content release
 - Access control by schedule (pre-start, active, post-end lockout/read-only, per-learner extensions)
 - Restricted enrollment (email domain / named list / group mapping)
-- Paid enrollment (no payment layer)
+- Institution revenue capture from paid enrollments (learner-side SSLCommerz checkout exists; wallet/ledger attribution to the institution is Phase 2)
 - Learner status relative to schedule (on track / behind / overdue)
 - Cohort filtering, enrollment-date-range or department filtering of metrics
 - Downloadable / exportable reports (enrollment, progress, at-risk learners, assessment stats, compliance/audit logs)

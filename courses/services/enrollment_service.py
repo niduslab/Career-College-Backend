@@ -260,12 +260,23 @@ def get_learner_enrollments(user) -> QuerySet[Enrollment]:
 
 
 @transaction.atomic
-def enroll_learner(user, course: NidusCourse) -> Enrollment:
-    """Enroll a learner in a published course. Raises ValidationError on duplicate or unpublished."""
+def enroll_learner(
+    user,
+    course: NidusCourse,
+    *,
+    enrollment_type: str = Enrollment.EnrollmentType.FREE,
+    allow_unpublished: bool = False,
+) -> Enrollment:
+    """Enroll a learner in a published course. Raises ValidationError on duplicate or unpublished.
+
+    `enrollment_type` records how access was obtained (free/paid). `allow_unpublished`
+    is reserved for the payment finalize path — a validated payment must be honored
+    even if the course was unpublished mid-transaction.
+    """
     if user.user_type != 'learner':
         raise ValidationError('Only learners can enroll in courses.')
 
-    if not course.is_published:
+    if not course.is_published and not allow_unpublished:
         raise ValidationError('Enrollment is only allowed for published courses.')
 
     existing = (
@@ -280,7 +291,16 @@ def enroll_learner(user, course: NidusCourse) -> Enrollment:
             raise ValidationError('You are already enrolled in this course.')
         existing.is_active = True
         existing.last_accessed_at = now
-        existing.save(update_fields=['is_active', 'last_accessed_at', 'updated_at'])
+        update_fields = ['is_active', 'last_accessed_at', 'updated_at']
+        # Upgrade only: a paid reactivation records the purchase; a free call
+        # never downgrades an enrollment the learner already paid for.
+        if (
+            enrollment_type == Enrollment.EnrollmentType.PAID
+            and existing.enrollment_type != Enrollment.EnrollmentType.PAID
+        ):
+            existing.enrollment_type = Enrollment.EnrollmentType.PAID
+            update_fields.append('enrollment_type')
+        existing.save(update_fields=update_fields)
         logger.info('Enrollment reactivated: user=%s course=%s', user.pk, course.pk)
         _dispatch_enrollment_notifications(user, course, existing)
         return existing
@@ -289,8 +309,7 @@ def enroll_learner(user, course: NidusCourse) -> Enrollment:
         enrollment = Enrollment.objects.create(
             user=user,
             course=course,
-            # Payment is not integrated yet; all published courses enroll as free for now.
-            enrollment_type=Enrollment.EnrollmentType.FREE,
+            enrollment_type=enrollment_type,
             is_active=True,
             last_accessed_at=now,
         )

@@ -411,6 +411,16 @@ See [docs/architecture/19-webinars.md](docs/architecture/19-webinars.md) for pre
 
 See [docs/architecture/20-analytics-dashboard.md](docs/architecture/20-analytics-dashboard.md) for metrics, query strategy, and the revenue/attendance caveats.
 
+### 12. Paid course / webinar purchase (SSLCommerz sandbox)
+
+1. Learner hits `POST /api/v1/payments/checkout/` with exactly one of `{"course_slug": "..."}` or `{"webinar_slug": "..."}` on a published target with `price > 0` → the backend opens an SSLCommerz hosted-checkout session and returns a `gateway_url` (+ `tran_id`, `item_type`).
+2. The frontend redirects the browser to `gateway_url`; the learner pays on SSLCommerz's page (sandbox card `4111 1111 1111 1111`).
+3. The gateway redirects back to the backend `success/` callback, which **re-validates** the payment via the SSLCommerz Validation API (`val_id`) — amount, currency, tran_id, and store_id are all checked against the order snapshot. Only then is the order marked `paid` and the access granted atomically: a **PAID enrollment** (course) or an **active registration** (webinar). The browser is then 302'd to the frontend success page. The server-to-server IPN funnels into the same idempotent finalize as a safety net.
+4. Fail/cancel at the gateway mark the order `failed`/`cancelled` and redirect accordingly; a completed (`paid`) order can never be clobbered by a late callback.
+5. The free-enroll endpoint (`POST /courses/{slug}/enroll/`) and the webinar register endpoint (`POST /webinars/{slug}/register/`) reject paid targets with 422 unless the learner already has a `paid` order — so unenroll → re-enroll (or cancel → re-register) never double-charges.
+
+See [docs/architecture/21-payments.md](docs/architecture/21-payments.md) for the trust model and edge-case policies; [docs/api-testing/postman-payments.md](docs/api-testing/postman-payments.md) is the sandbox walkthrough.
+
 ---
 
 ## API Endpoints
@@ -792,6 +802,22 @@ Read-only partner-institution analytics dashboard. Its own app; owns no models �
 | GET | `partner/experts/{expert_id}/performance/` | One expert (numeric id → 404 if not an active affiliate) |
 
 > Expert performance credits a course to **every** instructor + its creator (co-taught courses count toward each — per-expert sums can exceed institution totals; stated in the payload's `attribution`).
+
+### Payments — `/api/v1/payments/`
+
+SSLCommerz hosted-checkout payments for courses **and** webinars (sandbox via `SSLCOMMERZ_SANDBOX`). Currency BDT. Learner-gated except the gateway callbacks.
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| POST | `checkout/` | Open a gateway session for a paid course or webinar (body: exactly one of `{course_slug}` / `{webinar_slug}`) → `{gateway_url, order_id, tran_id, item_type, amount, currency}` |
+| POST | `ipn/` | SSLCommerz server-to-server notification (unauthenticated; validated server-side) |
+| GET/POST | `success/` | Gateway success redirect → validates + finalizes → 302 to frontend success page |
+| GET/POST | `fail/` | Gateway fail redirect → marks order failed → 302 to frontend |
+| GET/POST | `cancel/` | Gateway cancel redirect → marks order cancelled → 302 to frontend |
+| GET | `orders/` | Caller's own orders (`?status=` filter, paginated) |
+| GET | `orders/{id}/` | One own order (cross-user → 404) |
+
+> Payment state is never taken from redirect/IPN bodies — the backend re-queries the SSLCommerz Validation API and verifies amount/currency/tran_id/store_id against the order snapshot before marking anything `paid`. The `paid` order + access grant (PAID enrollment or webinar registration) are created atomically; double IPN / redirect races are idempotent.
 
 ---
 

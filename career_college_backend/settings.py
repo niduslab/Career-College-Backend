@@ -64,6 +64,7 @@ INSTALLED_APPS = [
     'messaging.apps.MessagingConfig',
     'webinars.apps.WebinarsConfig',
     'analytics.apps.AnalyticsConfig',
+    'payments.apps.PaymentsConfig',
 ]
 
 MIDDLEWARE = [
@@ -160,6 +161,21 @@ GOOGLE_CALLBACK_URL = env('GOOGLE_CALLBACK_URL', default='http://localhost:8000/
 FRONTEND_URL = env('FRONTEND_URL', default='http://localhost:3000')
 FRONTEND_GOOGLE_CALLBACK = env('FRONTEND_GOOGLE_CALLBACK', default='')
 FRONTEND_ERROR_URL = env('FRONTEND_ERROR_URL', default='')
+
+# SSLCommerz payment gateway
+SSLCOMMERZ_STORE_ID = env('SSLCOMMERZ_STORE_ID', default='')
+SSLCOMMERZ_STORE_PASSWORD = env('SSLCOMMERZ_STORE_PASSWORD', default='')
+SSLCOMMERZ_SANDBOX = env.bool('SSLCOMMERZ_SANDBOX', default=True)
+SSLCOMMERZ_BASE_URL = (
+    'https://sandbox.sslcommerz.com' if SSLCOMMERZ_SANDBOX
+    else 'https://securepay.sslcommerz.com'
+)
+# Backend base URL used to build the gateway callback URLs (success/fail/cancel/ipn).
+BACKEND_URL = env('BACKEND_URL', default='http://localhost:8000')
+# Frontend paths the payment callbacks redirect the browser to.
+FRONTEND_PAYMENT_SUCCESS_PATH = env('FRONTEND_PAYMENT_SUCCESS_PATH', default='/payment/success')
+FRONTEND_PAYMENT_FAIL_PATH = env('FRONTEND_PAYMENT_FAIL_PATH', default='/payment/fail')
+FRONTEND_PAYMENT_CANCEL_PATH = env('FRONTEND_PAYMENT_CANCEL_PATH', default='/payment/cancel')
 
 # CORS
 CORS_ALLOWED_ORIGINS = env.list('CORS_ALLOWED_ORIGINS', default=[FRONTEND_URL])
@@ -262,6 +278,10 @@ CELERY_BEAT_SCHEDULE = {
         'task': 'notifications.tasks.purge_old_notifications_task',
         'schedule': 86400.0,  # daily
         'kwargs': {'days': 90},
+    },
+    'reap-stale-processing-orders': {
+        'task': 'payments.tasks.reap_stale_processing_orders_task',
+        'schedule': 900.0,  # every 15 min
     },
 }
 

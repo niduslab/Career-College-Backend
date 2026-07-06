@@ -15,19 +15,36 @@ def _active_registration_count(webinar):
 
 
 @transaction.atomic
-def register_for_webinar(user, webinar):
+def register_for_webinar(user, webinar, *, via_payment=False):
     """
     Register a learner for a published webinar.
 
-    Free registration only (payment is not integrated). Reactivates a cancelled
-    row, enforces capacity, and dispatches WEBINAR_REGISTERED on commit.
-    Raises WebinarError on any business-rule violation.
+    Paid webinars (`price > 0`) require a completed payment order; the payment
+    finalize path calls with `via_payment=True`, which also bypasses the
+    published/capacity checks — money already moved, so access is honored even
+    if the webinar was archived or filled mid-payment (overshoot is logged).
+    Reactivates a cancelled row, enforces capacity, and dispatches
+    WEBINAR_REGISTERED on commit. Raises WebinarError on any violation.
     """
     if user.user_type != 'learner':
         raise WebinarError('Only learners can register for webinars.', http_status=422)
 
-    if not webinar.is_published:
+    if not webinar.is_published and not via_payment:
         raise WebinarError('Registration is only allowed for published webinars.', http_status=422)
+
+    if webinar.price > 0 and not via_payment:
+        # Direct registration on a paid webinar is only for learners who
+        # already purchased (covers cancel → re-register without a second
+        # charge). Local import — keeps webinars→payments off module load.
+        from payments.all_models.order_models import Order
+        has_paid = Order.objects.filter(
+            user=user, webinar=webinar, status=Order.Status.PAID,
+        ).exists()
+        if not has_paid:
+            raise WebinarError(
+                'This is a paid webinar. Complete payment via the checkout endpoint to register.',
+                http_status=422,
+            )
 
     # When the webinar is capacity-limited, lock its row so the capacity check
     if webinar.max_capacity is not None:
@@ -43,11 +60,19 @@ def register_for_webinar(user, webinar):
     if existing and existing.is_active:
         raise WebinarError('You are already registered for this webinar.', http_status=422)
 
-    # Capacity check (only counts active registrations).
+    # Capacity check (only counts active registrations). A validated payment
+    # is honored even at capacity — overshoot from concurrent checkouts is
+    # possible and logged rather than refused after money moved.
     if webinar.max_capacity is not None:
         active = _active_registration_count(webinar)
         if active >= webinar.max_capacity:
-            raise WebinarError('This webinar has reached its capacity.', http_status=422)
+            if via_payment:
+                logger.warning(
+                    'Paid registration exceeds capacity: webinar=%s user=%s active=%s cap=%s',
+                    webinar.pk, user.pk, active, webinar.max_capacity,
+                )
+            else:
+                raise WebinarError('This webinar has reached its capacity.', http_status=422)
 
     if existing:
         existing.is_active = True

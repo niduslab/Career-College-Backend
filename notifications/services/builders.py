@@ -266,6 +266,32 @@ def _webinar_registered(recipient, ctx):
     )
 
 
+def _payment_successful(recipient, ctx):
+    access_note = 'You are now enrolled.' if ctx['item_type'] == 'course' else 'You are now registered.'
+    return _build(
+        title='Payment successful',
+        body=(
+            f'Your payment of {ctx["amount"]} {ctx["currency"]} for '
+            f'"{ctx["item_title"]}" was successful. {access_note}'
+        ),
+        data={'item_type': ctx['item_type'], 'item_slug': ctx['item_slug'], 'tran_id': ctx['tran_id']},
+        dedup_key=f'payment.successful:{recipient.id}:{ctx["tran_id"]}',
+    )
+
+
+def _payment_failed(recipient, ctx):
+    return _build(
+        title='Payment failed',
+        body=(
+            f'Your payment for "{ctx["item_title"]}" could not be completed. '
+            f'If money was deducted it will be reversed by your payment provider. '
+            f'You can try again from the {ctx["item_type"]} page.'
+        ),
+        data={'item_type': ctx['item_type'], 'item_slug': ctx['item_slug'], 'tran_id': ctx['tran_id']},
+        dedup_key=f'payment.failed:{recipient.id}:{ctx["tran_id"]}',
+    )
+
+
 _BUILDERS = {
     _ET.ENROLLMENT_CREATED:      _enrollment_created,
     _ET.LECTURE_COMPLETED:       _lecture_completed,
@@ -295,6 +321,8 @@ _BUILDERS = {
     _ET.MESSAGE_RECEIVED:        _message_received,
     _ET.WEBINAR_PUBLISHED:       _webinar_published,
     _ET.WEBINAR_REGISTERED:      _webinar_registered,
+    _ET.PAYMENT_SUCCESSFUL:      _payment_successful,
+    _ET.PAYMENT_FAILED:          _payment_failed,
 }
 
 

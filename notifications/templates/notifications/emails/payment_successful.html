@@ -1,0 +1,7 @@
+{% extends "notifications/emails/base_notification.html" %}
+{% block content %}
+<h2>{{ title }}</h2>
+<p>{{ body }}</p>
+{% if data.tran_id %}<p>Transaction reference: {{ data.tran_id }}</p>{% endif %}
+<p>Head to your dashboard to start learning right away.</p>
+{% endblock %}

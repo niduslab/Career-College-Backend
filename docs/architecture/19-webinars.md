@@ -36,7 +36,7 @@ Inherits `AuthoredModel` (so `created_by` / `last_edited_by` are stamped — the
 | `timezone` | CharField (`default='UTC'`) | Display tz, e.g. `Asia/Dhaka`. |
 | `duration_minutes` | PositiveInt (`default=0`) | |
 | `max_capacity` | PositiveInt (null) | Null = unlimited. |
-| `price` | Decimal (`default=0`, `MinValueValidator(0)`) | `0` = free (payment not integrated). |
+| `price` | Decimal (`default=0`, `MinValueValidator(0)`) | `0` = free registration; `> 0` requires SSLCommerz checkout (see `21-payments.md`). |
 | `meeting_provider` | CharField | `zoom` \| `meet` \| `jitsi` \| `other`. |
 | `meeting_url` | URLField (null) | External join link — **registrant-only, never in catalog**. |
 | `status` | CharField | `draft` \| `published` \| `archived`. |
@@ -240,7 +240,7 @@ Deliberately out of scope for this slice — do not assume these exist:
   `webinar.starting_soon` events.
 - **Recording** — `recording_url` field + `webinar.recording_available` event.
 - **Ratings** — reuse the `CourseReview` pattern later.
-- **Paid webinars** — `price` exists but payment is not integrated; registration is free-only.
+- ~~**Paid webinars**~~ — **shipped**: `register_for_webinar` gates `price > 0` behind an SSLCommerz `Order`; the payment finalize path registers with `via_payment=True` (bypasses price/published/capacity — money already moved). See `docs/architecture/21-payments.md`.
 
 ---
 

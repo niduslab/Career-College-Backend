@@ -107,8 +107,27 @@ class CourseEnrollView(APIView):
     def post(self, request, slug):
         course = get_object_or_404(NidusCourse, slug=slug, is_published=True)
 
+        enrollment_type = Enrollment.EnrollmentType.FREE
+        if course.price > 0:
+            # Paid course: direct enrollment only for learners who already
+            # purchased (covers unenroll → re-enroll without a second charge).
+            # Local import — keeps courses→payments off the module-load path.
+            from payments.all_models.order_models import Order
+            has_paid = Order.objects.filter(
+                user=request.user, course=course, status=Order.Status.PAID,
+            ).exists()
+            if not has_paid:
+                return Response(
+                    {
+                        'success': False,
+                        'message': 'This is a paid course. Complete payment via the checkout endpoint to enroll.',
+                    },
+                    status=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                )
+            enrollment_type = Enrollment.EnrollmentType.PAID
+
         try:
-            enrollment = enroll_learner(request.user, course)
+            enrollment = enroll_learner(request.user, course, enrollment_type=enrollment_type)
         except ValidationError as e:
             if hasattr(e, 'message_dict'):
                 return Response(

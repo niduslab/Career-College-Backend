@@ -12,6 +12,7 @@ urlpatterns = [
     path('api/v1/messaging/', include('messaging.urls', namespace='messaging')),
     path('api/v1/webinars/', include('webinars.urls', namespace='webinars')),
     path('api/v1/analytics/', include('analytics.urls', namespace='analytics')),
+    path('api/v1/payments/', include('payments.urls', namespace='payments')),
 ]
 
 if settings.DEBUG:

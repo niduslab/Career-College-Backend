@@ -110,7 +110,30 @@ class EnrollmentAPITests(APITestCase):
             ).exists()
         )
 
-    def test_paid_course_enrolls_as_free_until_payment_integration_exists(self):
+    def test_paid_course_free_enroll_is_rejected_without_purchase(self):
+        self.auth()
+
+        response = self.client.post(
+            reverse('courses:course-enroll', kwargs={'slug': self.paid_course.slug})
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_422_UNPROCESSABLE_ENTITY)
+        self.assertFalse(response.data['success'])
+        self.assertFalse(
+            Enrollment.objects.filter(user=self.learner, course=self.paid_course).exists()
+        )
+
+    def test_paid_course_enroll_succeeds_with_paid_order(self):
+        from payments.models import Order
+
+        Order.objects.create(
+            user=self.learner,
+            course=self.paid_course,
+            amount=Decimal('49.00'),
+            tran_id='CCTESTPAIDORDER0000000001',
+            status=Order.Status.PAID,
+            paid_at=timezone.now(),
+        )
         self.auth()
 
         response = self.client.post(
@@ -118,7 +141,32 @@ class EnrollmentAPITests(APITestCase):
         )
 
         self.assertEqual(response.status_code, status.HTTP_201_CREATED)
-        self.assertEqual(response.data['data']['enrollment_type'], Enrollment.EnrollmentType.FREE)
+        self.assertEqual(response.data['data']['enrollment_type'], Enrollment.EnrollmentType.PAID)
+
+    def test_paid_course_reenroll_after_unenroll_reactivates_without_second_charge(self):
+        from payments.models import Order
+
+        Order.objects.create(
+            user=self.learner,
+            course=self.paid_course,
+            amount=Decimal('49.00'),
+            tran_id='CCTESTPAIDORDER0000000002',
+            status=Order.Status.PAID,
+            paid_at=timezone.now(),
+        )
+        self.auth()
+        enroll_url = reverse('courses:course-enroll', kwargs={'slug': self.paid_course.slug})
+        self.client.post(enroll_url)
+        self.client.post(reverse('courses:course-unenroll', kwargs={'slug': self.paid_course.slug}))
+
+        response = self.client.post(enroll_url)
+
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+        enrollment = Enrollment.objects.get(user=self.learner, course=self.paid_course)
+        self.assertTrue(enrollment.is_active)
+        self.assertEqual(enrollment.enrollment_type, Enrollment.EnrollmentType.PAID)
+        # Still exactly one order — reactivation never creates a new charge.
+        self.assertEqual(Order.objects.filter(user=self.learner, course=self.paid_course).count(), 1)
 
     def test_duplicate_enroll_returns_422(self):
         self.auth()

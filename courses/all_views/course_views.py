@@ -1,5 +1,4 @@
 from django.db import IntegrityError
-from django.db.models import Q
 from django.shortcuts import get_object_or_404
 from rest_framework import status
 from rest_framework.permissions import IsAuthenticated
@@ -13,7 +12,7 @@ from courses.serializers import (
     NidusCourseCreateUpdateSerializer,
     NidusCourseSerializer,
 )
-from courses.utils import guard_editable
+from courses.utils import guard_editable, owned_course_qs
 
 
 class CourseListAPIView(APIView):
@@ -23,11 +22,9 @@ class CourseListAPIView(APIView):
 
     def get(self, request):
         queryset = (
-            NidusCourse.objects
+            owned_course_qs(request.user)
             .select_related('created_by', 'category', 'partner_institution')
-            .prefetch_related('instructors', 'learning_objectives', 'prerequisites', 'audiences')
-            .filter(Q(instructors=request.user) | Q(created_by=request.user))
-            .distinct()
+            .prefetch_related('instructors')
             .order_by('-created_at')
         )
         paginator = StandardResultsSetPagination()
@@ -76,11 +73,9 @@ class CourseDetailView(APIView):
 
     def _get_course(self, request, pk):
         qs = (
-            NidusCourse.objects
+            owned_course_qs(request.user)
             .select_related('category', 'partner_institution')
-            .prefetch_related('instructors', 'learning_objectives', 'prerequisites', 'audiences')
-            .filter(Q(instructors=request.user) | Q(created_by=request.user))
-            .distinct()
+            .prefetch_related('instructors')
         )
         return get_object_or_404(qs, pk=pk)
 

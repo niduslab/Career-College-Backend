@@ -11,12 +11,8 @@ from core.permissions import IsVerifiedInstructor
 from courses.models import (
     Assignment,
     CodingExercise,
-    CourseAudience,
-    CourseLearningObjective,
-    CoursePreRequisite,
     CourseSection,
     Lecture,
-    NidusCourse,
     Quiz,
     QuizAnswer,
     QuizQuestion,
@@ -26,9 +22,6 @@ from courses.serializers import (
     AssignmentCreateUpdateSerializer,
     CodingExerciseCreateUpdateSerializer,
     CodingExerciseSerializer,
-    CourseAudienceSerializer,
-    CourseLearningObjectiveSerializer,
-    CoursePreRequisiteSerializer,
     CourseSectionCreateUpdateSerializer,
     CourseSectionSerializer,
     LectureCreateUpdateSerializer,
@@ -46,7 +39,7 @@ from courses.services import (
     get_section_lectures,
     reorder_section_content,
 )
-from courses.utils import guard_editable, save_authored
+from courses.utils import guard_editable, owned_course_qs, owned_section_qs, save_authored
 
 
 # =============================================================================
@@ -58,7 +51,7 @@ class CourseSectionListAPIView(APIView):
     parser_classes = [JSONParser, FormParser, MultiPartParser]
 
     def _get_owned_course(self, request, course_id):
-        return get_object_or_404(NidusCourse, pk=course_id, instructors=request.user)
+        return get_object_or_404(owned_course_qs(request.user), pk=course_id)
 
     def get(self, request, course_id):
         course = self._get_owned_course(request, course_id)
@@ -75,7 +68,7 @@ class CourseSectionCreateAPIView(APIView):
     parser_classes = [JSONParser, FormParser, MultiPartParser]
 
     def _get_owned_course(self, request, course_id):
-        return get_object_or_404(NidusCourse, pk=course_id, instructors=request.user)
+        return get_object_or_404(owned_course_qs(request.user), pk=course_id)
 
     def post(self, request, course_id):
         course = self._get_owned_course(request, course_id)
@@ -104,11 +97,7 @@ class CourseSectionDetailAPIView(APIView):
     parser_classes = [JSONParser, FormParser, MultiPartParser]
 
     def _get_owned_section(self, request, section_id):
-        return get_object_or_404(
-            CourseSection.objects.select_related('course'),
-            pk=section_id,
-            course__instructors=request.user,
-        )
+        return get_object_or_404(owned_section_qs(request.user), pk=section_id)
 
     def get(self, request, section_id):
         section = self._get_owned_section(request, section_id)
@@ -759,157 +748,6 @@ class QuizAnswerDetailAPIView(APIView):
         return Response(
             {'success': True, 'message': 'Answer deleted successfully.'}, status=status.HTTP_200_OK
         )
-
-
-# =============================================================================
-# Course item base classes
-# =============================================================================
-
-class CourseItemListCreateBaseAPIView(APIView):
-    permission_classes = [IsAuthenticated]
-    parser_classes = [JSONParser, FormParser, MultiPartParser]
-    model_class = None
-    serializer_class = None
-    item_label = 'Item'
-
-    def _get_owned_course(self, request, course_id):
-        return get_object_or_404(NidusCourse, pk=course_id, instructors=request.user)
-
-    def get(self, request, course_id):
-        course = self._get_owned_course(request, course_id)
-        queryset = self.model_class.objects.filter(course=course).order_by('display_order', 'id')
-        ordering = request.query_params.get('ordering')
-        if ordering in ('display_order', '-display_order'):
-            queryset = queryset.order_by(ordering, 'id')
-        serializer = self.serializer_class(queryset, many=True)
-        return Response({'success': True, 'data': serializer.data}, status=status.HTTP_200_OK)
-
-    def post(self, request, course_id):
-        course = self._get_owned_course(request, course_id)
-        if err := guard_editable(course): return err
-        serializer = self.serializer_class(data=request.data)
-        if not serializer.is_valid():
-            return Response(
-                {'success': False, 'message': 'Validation failed.', 'errors': serializer.errors},
-                status=status.HTTP_400_BAD_REQUEST,
-            )
-        try:
-            item = serializer.save(course=course)
-        except IntegrityError:
-            return Response(
-                {'success': False, 'message': f'{self.item_label} already exists for this course.'},
-                status=status.HTTP_400_BAD_REQUEST,
-            )
-        return Response(
-            {'success': True, 'message': f'{self.item_label} created successfully.', 'data': self.serializer_class(item).data},
-            status=status.HTTP_201_CREATED,
-        )
-
-
-class CourseItemDetailBaseAPIView(APIView):
-    permission_classes = [IsAuthenticated]
-    parser_classes = [JSONParser, FormParser, MultiPartParser]
-    model_class = None
-    serializer_class = None
-    item_label = 'Item'
-
-    def _get_owned_item(self, request, item_id):
-        return get_object_or_404(
-            self.model_class.objects.select_related('course'),
-            pk=item_id,
-            course__instructors=request.user,
-        )
-
-    def get(self, request, item_id):
-        item = self._get_owned_item(request, item_id)
-        return Response({'success': True, 'data': self.serializer_class(item).data}, status=status.HTTP_200_OK)
-
-    def patch(self, request, item_id):
-        item = self._get_owned_item(request, item_id)
-        if err := guard_editable(item.course): return err
-        serializer = self.serializer_class(item, data=request.data, partial=True)
-        if not serializer.is_valid():
-            return Response(
-                {'success': False, 'message': 'Validation failed.', 'errors': serializer.errors},
-                status=status.HTTP_400_BAD_REQUEST,
-            )
-        try:
-            item = serializer.save()
-        except IntegrityError:
-            return Response(
-                {'success': False, 'message': f'{self.item_label} already exists for this course.'},
-                status=status.HTTP_400_BAD_REQUEST,
-            )
-        return Response(
-            {'success': True, 'message': f'{self.item_label} updated successfully.', 'data': self.serializer_class(item).data},
-            status=status.HTTP_200_OK,
-        )
-
-    def put(self, request, item_id):
-        item = self._get_owned_item(request, item_id)
-        if err := guard_editable(item.course): return err
-        serializer = self.serializer_class(item, data=request.data)
-        if not serializer.is_valid():
-            return Response(
-                {'success': False, 'message': 'Validation failed.', 'errors': serializer.errors},
-                status=status.HTTP_400_BAD_REQUEST,
-            )
-        try:
-            item = serializer.save()
-        except IntegrityError:
-            return Response(
-                {'success': False, 'message': f'{self.item_label} already exists for this course.'},
-                status=status.HTTP_400_BAD_REQUEST,
-            )
-        return Response(
-            {'success': True, 'message': f'{self.item_label} replaced successfully.', 'data': self.serializer_class(item).data},
-            status=status.HTTP_200_OK,
-        )
-
-    def delete(self, request, item_id):
-        item = self._get_owned_item(request, item_id)
-        if err := guard_editable(item.course): return err
-        item.delete()
-        return Response(
-            {'success': True, 'message': f'{self.item_label} deleted successfully.'},
-            status=status.HTTP_200_OK,
-        )
-
-
-class CourseLearningObjectiveListCreateAPIView(CourseItemListCreateBaseAPIView):
-    model_class = CourseLearningObjective
-    serializer_class = CourseLearningObjectiveSerializer
-    item_label = 'Learning objective'
-
-
-class CourseLearningObjectiveDetailAPIView(CourseItemDetailBaseAPIView):
-    model_class = CourseLearningObjective
-    serializer_class = CourseLearningObjectiveSerializer
-    item_label = 'Learning objective'
-
-
-class CoursePreRequisiteListCreateAPIView(CourseItemListCreateBaseAPIView):
-    model_class = CoursePreRequisite
-    serializer_class = CoursePreRequisiteSerializer
-    item_label = 'Prerequisite'
-
-
-class CoursePreRequisiteDetailAPIView(CourseItemDetailBaseAPIView):
-    model_class = CoursePreRequisite
-    serializer_class = CoursePreRequisiteSerializer
-    item_label = 'Prerequisite'
-
-
-class CourseAudienceListCreateAPIView(CourseItemListCreateBaseAPIView):
-    model_class = CourseAudience
-    serializer_class = CourseAudienceSerializer
-    item_label = 'Audience'
-
-
-class CourseAudienceDetailAPIView(CourseItemDetailBaseAPIView):
-    model_class = CourseAudience
-    serializer_class = CourseAudienceSerializer
-    item_label = 'Audience'
 
 
 # =============================================================================

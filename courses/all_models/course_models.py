@@ -66,7 +66,6 @@ class CourseCategory(models.Model):
 
     name = models.CharField(max_length=120, unique=True)
     slug = models.SlugField(max_length=140, unique=True, db_index=True)
-    description = models.TextField(blank=True, default='')
     parent = models.ForeignKey(
         'self',
         on_delete=models.SET_NULL,
@@ -75,7 +74,6 @@ class CourseCategory(models.Model):
         related_name='children',
     )
     is_active = models.BooleanField(default=True, db_index=True)
-    display_order = models.PositiveIntegerField(default=0)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
@@ -83,9 +81,9 @@ class CourseCategory(models.Model):
         db_table = 'course_categories'
         verbose_name = 'Course Category'
         verbose_name_plural = 'Course Categories'
-        ordering = ['display_order', 'name']
+        ordering = ['name']
         indexes = [
-            models.Index(fields=['is_active', 'display_order'], name='idx_ccat_active_order'),
+            models.Index(fields=['is_active', 'name'], name='idx_ccat_active_name'),
         ]
 
     def save(self, *args, **kwargs):
@@ -98,6 +96,11 @@ class CourseCategory(models.Model):
                 suffix += 1
             self.slug = candidate
         super().save(*args, **kwargs)
+        if not self.is_active:
+            # Deactivating a parent must not leave still-active children
+            # invisible in the public tree (which only surfaces active
+            # top-level categories and their active children).
+            self.children.filter(is_active=True).update(is_active=False)
 
     def __str__(self):
         return self.name
@@ -151,6 +154,21 @@ class NidusCourse(models.Model):
     title = models.CharField(max_length=255, db_index=True)
     slug = models.SlugField(max_length=280, unique=True, db_index=True)
     description = models.TextField()
+    learning_objectives = models.TextField(
+        blank=True,
+        default='',
+        help_text='Outcome statements, one per line.',
+    )
+    prerequisites = models.TextField(
+        blank=True,
+        default='',
+        help_text='Pre-course requirements, one per line.',
+    )
+    audiences = models.TextField(
+        blank=True,
+        default='',
+        help_text='Intended audience segments, one per line.',
+    )
     thumbnail = models.ImageField(upload_to=course_thumbnail_upload_path, blank=True, null=True)
     price = models.DecimalField(
         max_digits=10,
@@ -384,87 +402,6 @@ class NidusCourse(models.Model):
 
         if errors:
             raise ValidationError(errors)
-
-
-class CourseLearningObjective(models.Model):
-    """Outcome statements describing what students will learn."""
-
-    course = models.ForeignKey(
-        NidusCourse,
-        on_delete=models.CASCADE,
-        related_name='learning_objectives',
-    )
-    text = models.CharField(max_length=255)
-    display_order = models.PositiveIntegerField(default=0, db_index=True)
-
-    class Meta:
-        db_table = 'course_learning_objectives'
-        verbose_name = 'Course Learning Objective'
-        verbose_name_plural = 'Course Learning Objectives'
-        ordering = ['display_order', 'id']
-        constraints = [
-            models.UniqueConstraint(fields=['course', 'text'], name='uniq_course_learning_objective_text'),
-        ]
-        indexes = [
-            models.Index(fields=['course', 'display_order'], name='idx_clo_course_order'),
-        ]
-
-    def __str__(self):
-        return self.text
-
-
-class CoursePreRequisite(models.Model):
-    """Pre-course requirements learners should satisfy beforehand."""
-
-    course = models.ForeignKey(
-        NidusCourse,
-        on_delete=models.CASCADE,
-        related_name='prerequisites',
-    )
-    text = models.CharField(max_length=255)
-    display_order = models.PositiveIntegerField(default=0, db_index=True)
-
-    class Meta:
-        db_table = 'course_prerequisites'
-        verbose_name = 'Course Pre Requisite'
-        verbose_name_plural = 'Course Pre Requisites'
-        ordering = ['display_order', 'id']
-        constraints = [
-            models.UniqueConstraint(fields=['course', 'text'], name='uniq_course_prerequisite_text'),
-        ]
-        indexes = [
-            models.Index(fields=['course', 'display_order'], name='idx_cpr_course_order'),
-        ]
-
-    def __str__(self):
-        return self.text
-
-
-class CourseAudience(models.Model):
-    """Audience segments for whom the course is intended."""
-
-    course = models.ForeignKey(
-        NidusCourse,
-        on_delete=models.CASCADE,
-        related_name='audiences',
-    )
-    text = models.CharField(max_length=255)
-    display_order = models.PositiveIntegerField(default=0, db_index=True)
-
-    class Meta:
-        db_table = 'course_audiences'
-        verbose_name = 'Course Audience'
-        verbose_name_plural = 'Course Audiences'
-        ordering = ['display_order', 'id']
-        constraints = [
-            models.UniqueConstraint(fields=['course', 'text'], name='uniq_course_audience_text'),
-        ]
-        indexes = [
-            models.Index(fields=['course', 'display_order'], name='idx_caud_course_order'),
-        ]
-
-    def __str__(self):
-        return self.text
 
 
 class CourseSection(AuthoredModel):

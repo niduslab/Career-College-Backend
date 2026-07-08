@@ -3,10 +3,7 @@ from rest_framework import serializers
 
 from authentication.models import PartnerInstitutionProfile, User
 from courses.models import (
-    CourseAudience,
     CourseCategory,
-    CourseLearningObjective,
-    CoursePreRequisite,
     NidusCourse,
 )
 
@@ -32,56 +29,95 @@ class CourseCategoryBriefSerializer(serializers.ModelSerializer):
         read_only_fields = fields
 
 
-# ---------------------------------------------------------------------------
-# Course item serializers (unchanged)
-# ---------------------------------------------------------------------------
+class CourseCategoryLeafSerializer(serializers.ModelSerializer):
+    """Read serializer for a second-level category.
 
-class CourseLearningObjectiveSerializer(serializers.ModelSerializer):
+    The tree is enforced to exactly two levels (see `CourseCategoryWriteSerializer.validate`),
+    so a child can never have children of its own — `children` is hard-coded to `[]` rather than
+    queried, keeping the shape symmetric with `CourseCategoryTreeSerializer` without recursing.
+    """
+
+    children = serializers.SerializerMethodField()
+
     class Meta:
-        model = CourseLearningObjective
-        fields = ['id', 'text', 'display_order']
-        read_only_fields = ['id']
+        model = CourseCategory
+        fields = ['id', 'name', 'slug', 'children']
+        read_only_fields = fields
 
-    def validate_text(self, value):
-        text = value.strip()
-        if not text:
-            raise serializers.ValidationError('Text cannot be empty.')
-        return text
+    def get_children(self, obj):
+        return []
 
 
-class CoursePreRequisiteSerializer(serializers.ModelSerializer):
+class CourseCategoryTreeSerializer(serializers.ModelSerializer):
+    """Public read serializer — top-level categories with their active children nested."""
+
+    children = serializers.SerializerMethodField()
+
     class Meta:
-        model = CoursePreRequisite
-        fields = ['id', 'text', 'display_order']
-        read_only_fields = ['id']
+        model = CourseCategory
+        fields = ['id', 'name', 'slug', 'children']
+        read_only_fields = fields
 
-    def validate_text(self, value):
-        text = value.strip()
-        if not text:
-            raise serializers.ValidationError('Text cannot be empty.')
-        return text
+    def get_children(self, obj):
+        # `.all()` reads from the view's prefetch cache; any further
+        # queryset-narrowing call here (e.g. `.filter()`) would bypass the
+        # cache and issue a fresh query per parent.
+        return CourseCategoryLeafSerializer(obj.children.all(), many=True).data
 
 
-class CourseAudienceSerializer(serializers.ModelSerializer):
+class CourseCategoryWriteSerializer(serializers.ModelSerializer):
+    """Admin create/update + detail serializer. Slug is optional (model.save() fills it)."""
+
+    parent = serializers.PrimaryKeyRelatedField(
+        queryset=CourseCategory.objects.filter(is_active=True),
+        required=False,
+        allow_null=True,
+    )
+
     class Meta:
-        model = CourseAudience
-        fields = ['id', 'text', 'display_order']
-        read_only_fields = ['id']
+        model = CourseCategory
+        fields = [
+            'id', 'name', 'slug', 'parent',
+            'is_active', 'created_at', 'updated_at',
+        ]
+        read_only_fields = ['id', 'created_at', 'updated_at']
+        extra_kwargs = {
+            'slug': {'required': False, 'allow_blank': True},
+        }
 
-    def validate_text(self, value):
-        text = value.strip()
-        if not text:
-            raise serializers.ValidationError('Text cannot be empty.')
-        return text
+    def validate_name(self, value):
+        name = value.strip()
+        if not name:
+            raise serializers.ValidationError('Name cannot be empty.')
+        return name
+
+    def validate(self, attrs):
+        parent = attrs.get('parent')
+        if parent is not None:
+            # Enforce a 2-level tree: a parent must itself be top-level.
+            if parent.parent_id is not None:
+                raise serializers.ValidationError(
+                    {'parent': 'Categories support only two levels; the parent must be a top-level category.'}
+                )
+            # Reject self-parenting on update.
+            if self.instance is not None and parent.pk == self.instance.pk:
+                raise serializers.ValidationError(
+                    {'parent': 'A category cannot be its own parent.'}
+                )
+            # A category with its own children must stay top-level, or its
+            # children would end up three levels deep.
+            if self.instance is not None and self.instance.children.exists():
+                raise serializers.ValidationError(
+                    {'parent': 'This category has subcategories and cannot be made a child category itself.'}
+                )
+        return attrs
+
 
 class NidusCourseSerializer(serializers.ModelSerializer):
     created_by = InstructorBriefSerializer(read_only=True)
     instructors = InstructorBriefSerializer(read_only=True, many=True)
     partner_institution = PartnerInstitutionBriefSerializer(read_only=True, allow_null=True)
     category = CourseCategoryBriefSerializer(read_only=True)
-    learning_objectives = CourseLearningObjectiveSerializer(read_only=True, many=True)
-    prerequisites = CoursePreRequisiteSerializer(read_only=True, many=True)
-    audiences = CourseAudienceSerializer(read_only=True, many=True)
 
     class Meta:
         model = NidusCourse
@@ -98,12 +134,9 @@ class NidusCourseSerializer(serializers.ModelSerializer):
 class NidusCourseCreateUpdateSerializer(serializers.ModelSerializer):
     category = serializers.PrimaryKeyRelatedField(
         queryset=CourseCategory.objects.filter(is_active=True),
-        required=False,
-        allow_null=True,
+        required=True,
+        allow_null=False,
     )
-    learning_objectives = CourseLearningObjectiveSerializer(many=True, required=False)
-    prerequisites = CoursePreRequisiteSerializer(many=True, required=False)
-    audiences = CourseAudienceSerializer(many=True, required=False)
 
     class Meta:
         model = NidusCourse
@@ -120,26 +153,21 @@ class NidusCourseCreateUpdateSerializer(serializers.ModelSerializer):
             raise serializers.ValidationError('Title must be at least 5 characters long.')
         return title
 
-    def _replace_items(self, model_class, course, items):
-        model_class.objects.filter(course=course).delete()
-        new_objects = [
-            model_class(
-                course=course,
-                text=item['text'].strip(),
-                display_order=item.get('display_order', index),
-            )
-            for index, item in enumerate(items)
-            if item.get('text', '').strip()
-        ]
-        if new_objects:
-            model_class.objects.bulk_create(new_objects)
+    def _normalize_multiline(self, value):
+        lines = [line.strip() for line in value.split('\n')]
+        return '\n'.join(line for line in lines if line)
+
+    def validate_learning_objectives(self, value):
+        return self._normalize_multiline(value)
+
+    def validate_prerequisites(self, value):
+        return self._normalize_multiline(value)
+
+    def validate_audiences(self, value):
+        return self._normalize_multiline(value)
 
     def create(self, validated_data):
         with transaction.atomic():
-            learning_objectives = validated_data.pop('learning_objectives', [])
-            prerequisites = validated_data.pop('prerequisites', [])
-            audiences = validated_data.pop('audiences', [])
-
             request_user = self.context['request'].user
             course = NidusCourse.objects.create(created_by=request_user, **validated_data)
 
@@ -150,26 +178,11 @@ class NidusCourseCreateUpdateSerializer(serializers.ModelSerializer):
             else:
                 course.instructors.set([request_user])
 
-            self._replace_items(CourseLearningObjective, course, learning_objectives)
-            self._replace_items(CoursePreRequisite, course, prerequisites)
-            self._replace_items(CourseAudience, course, audiences)
             return course
 
     def update(self, instance, validated_data):
         with transaction.atomic():
-            learning_objectives = validated_data.pop('learning_objectives', None)
-            prerequisites = validated_data.pop('prerequisites', None)
-            audiences = validated_data.pop('audiences', None)
-
             for attr, value in validated_data.items():
                 setattr(instance, attr, value)
             instance.save()
-
-            if learning_objectives is not None:
-                self._replace_items(CourseLearningObjective, instance, learning_objectives)
-            if prerequisites is not None:
-                self._replace_items(CoursePreRequisite, instance, prerequisites)
-            if audiences is not None:
-                self._replace_items(CourseAudience, instance, audiences)
-
             return instance

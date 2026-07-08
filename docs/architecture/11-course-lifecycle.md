@@ -99,11 +99,11 @@ POST /api/v1/courses/create/
 | `language` | No | |
 | `level` | No | `beginner / intermediate / advanced` |
 | `duration_minutes` | No | |
-| `category` | No | FK to `CourseCategory` |
+| `category` | Yes | FK to `CourseCategory` |
 | `instructors` | No | Additional instructor user PKs |
-| `learning_objectives` | No | List of objective texts |
-| `prerequisites` | No | List of prerequisite texts |
-| `audiences` | No | List of audience texts |
+| `learning_objectives` | No | Newline-separated text (one item per line) |
+| `prerequisites` | No | Newline-separated text (one item per line) |
+| `audiences` | No | Newline-separated text (one item per line) |
 
 `status` and `rejection_reason` are **not** in the serializer. A new course always starts as `draft`. Status can only change through the dedicated transition endpoints.
 

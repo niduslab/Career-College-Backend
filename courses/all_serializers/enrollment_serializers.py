@@ -2,9 +2,6 @@ from rest_framework import serializers
 
 from courses.all_serializers.course_serializers import (
     CourseCategoryBriefSerializer,
-    CourseAudienceSerializer,
-    CourseLearningObjectiveSerializer,
-    CoursePreRequisiteSerializer,
     InstructorBriefSerializer,
     PartnerInstitutionBriefSerializer,
 )
@@ -132,9 +129,6 @@ class CatalogCourseDetailSerializer(serializers.ModelSerializer):
     instructors = InstructorBriefSerializer(read_only=True, many=True)
     partner_institution = PartnerInstitutionBriefSerializer(read_only=True, allow_null=True)
     category = CourseCategoryBriefSerializer(read_only=True)
-    learning_objectives = CourseLearningObjectiveSerializer(read_only=True, many=True)
-    prerequisites = CoursePreRequisiteSerializer(read_only=True, many=True)
-    audiences = CourseAudienceSerializer(read_only=True, many=True)
     total_sections = serializers.SerializerMethodField()
     total_content_items = serializers.SerializerMethodField()
     sections = serializers.SerializerMethodField()
@@ -217,9 +211,6 @@ class _MyCourseMetaSerializer(serializers.ModelSerializer):
     instructors = InstructorBriefSerializer(read_only=True, many=True)
     partner_institution = PartnerInstitutionBriefSerializer(read_only=True, allow_null=True)
     category = CourseCategoryBriefSerializer(read_only=True)
-    learning_objectives = CourseLearningObjectiveSerializer(read_only=True, many=True)
-    prerequisites = CoursePreRequisiteSerializer(read_only=True, many=True)
-    audiences = CourseAudienceSerializer(read_only=True, many=True)
     total_sections = serializers.SerializerMethodField()
     total_content_items = serializers.SerializerMethodField()
 

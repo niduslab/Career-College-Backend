@@ -4,11 +4,8 @@ from courses.models import (
     CodingExercise,
     CodingExerciseLanguageConfig,
     CodingTestCase,
-    CourseAudience,
     CourseCategory,
     CourseInstructorInvite,
-    CourseLearningObjective,
-    CoursePreRequisite,
     CourseReview,
     CourseSection,
     Enrollment,
@@ -23,27 +20,6 @@ from courses.models import (
     VideoProcessingJob,
     WatchProgress,
 )
-
-
-class CourseLearningObjectiveInline(admin.TabularInline):
-    model = CourseLearningObjective
-    extra = 0
-    fields = ('text', 'display_order')
-    ordering = ('display_order', 'id')
-
-
-class CoursePreRequisiteInline(admin.TabularInline):
-    model = CoursePreRequisite
-    extra = 0
-    fields = ('text', 'display_order')
-    ordering = ('display_order', 'id')
-
-
-class CourseAudienceInline(admin.TabularInline):
-    model = CourseAudience
-    extra = 0
-    fields = ('text', 'display_order')
-    ordering = ('display_order', 'id')
 
 
 class CodingExerciseLanguageConfigInline(admin.TabularInline):
@@ -78,39 +54,14 @@ class NidusCourseAdmin(admin.ModelAdmin):
     readonly_fields = ('created_at', 'updated_at', 'published_at')
     raw_id_fields = ('created_by', 'partner_institution')
     filter_horizontal = ('instructors',)
-    inlines = (CourseLearningObjectiveInline, CoursePreRequisiteInline, CourseAudienceInline)
 
 
 @admin.register(CourseCategory)
 class CourseCategoryAdmin(admin.ModelAdmin):
-    list_display = ('id', 'name', 'slug', 'parent', 'is_active', 'display_order')
+    list_display = ('id', 'name', 'slug', 'parent', 'is_active')
     list_filter = ('is_active', 'parent')
     search_fields = ('name', 'slug')
-    ordering = ('display_order', 'name')
-
-
-@admin.register(CourseLearningObjective)
-class CourseLearningObjectiveAdmin(admin.ModelAdmin):
-    list_display = ('id', 'course', 'text', 'display_order')
-    search_fields = ('course__title', 'text')
-    list_filter = ('course',)
-    ordering = ('course', 'display_order', 'id')
-
-
-@admin.register(CoursePreRequisite)
-class CoursePreRequisiteAdmin(admin.ModelAdmin):
-    list_display = ('id', 'course', 'text', 'display_order')
-    search_fields = ('course__title', 'text')
-    list_filter = ('course',)
-    ordering = ('course', 'display_order', 'id')
-
-
-@admin.register(CourseAudience)
-class CourseAudienceAdmin(admin.ModelAdmin):
-    list_display = ('id', 'course', 'text', 'display_order')
-    search_fields = ('course__title', 'text')
-    list_filter = ('course',)
-    ordering = ('course', 'display_order', 'id')
+    ordering = ('name',)
 
 
 @admin.register(CourseSection)

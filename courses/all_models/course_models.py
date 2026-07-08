@@ -478,6 +478,11 @@ class CourseSection(AuthoredModel):
     title = models.CharField(max_length=255)
     description = models.TextField(blank=True, default='')
     position = models.PositiveIntegerField(default=1, db_index=True)
+    unlocks_at = models.DateTimeField(
+        blank=True,
+        null=True,
+        help_text='Drip-release time for scheduled cohorts. Null = unlocked immediately.',
+    )
 
     class Meta:
         db_table = 'course_sections'

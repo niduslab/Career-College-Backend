@@ -259,6 +259,32 @@ def get_learner_enrollments(user) -> QuerySet[Enrollment]:
     )
 
 
+def _assert_schedule_enrollable(schedule):
+    """Validate that a cohort schedule accepts enrollments right now.
+
+    Locks the schedule row (`select_for_update`) before counting seats so two
+    concurrent first-time enrollees can't both pass the capacity check — same
+    race fix as webinar registration. Returns the locked schedule row.
+    """
+    from courses.all_models.schedule_models import CourseSchedule
+
+    schedule = CourseSchedule.objects.select_for_update().get(pk=schedule.pk)
+
+    if schedule.status != CourseSchedule.Status.SCHEDULED:
+        raise ValidationError('Enrollment for this cohort is not open.')
+
+    now = timezone.now()
+    if not (schedule.enrollment_opens_at <= now <= schedule.enrollment_closes_at):
+        raise ValidationError('Enrollment for this cohort is not open.')
+
+    if schedule.max_seats is not None:
+        taken = Enrollment.objects.filter(schedule=schedule, is_active=True).count()
+        if taken >= schedule.max_seats:
+            raise ValidationError('This cohort is full.')
+
+    return schedule
+
+
 @transaction.atomic
 def enroll_learner(
     user,
@@ -266,12 +292,17 @@ def enroll_learner(
     *,
     enrollment_type: str = Enrollment.EnrollmentType.FREE,
     allow_unpublished: bool = False,
+    schedule=None,
 ) -> Enrollment:
     """Enroll a learner in a published course. Raises ValidationError on duplicate or unpublished.
 
     `enrollment_type` records how access was obtained (free/paid). `allow_unpublished`
     is reserved for the payment finalize path — a validated payment must be honored
-    even if the course was unpublished mid-transaction.
+    even if the course was unpublished mid-transaction. `schedule` (a CourseSchedule
+    of this course) enrolls the learner into that cohort: the enrollment window and
+    seat cap are enforced, and the created row carries `schedule` so the learner's
+    access follows the cohort's release timeline. `schedule=None` is the self-paced
+    path, byte-for-byte unchanged.
     """
     if user.user_type != 'learner':
         raise ValidationError('Only learners can enroll in courses.')
@@ -279,10 +310,13 @@ def enroll_learner(
     if not course.is_published and not allow_unpublished:
         raise ValidationError('Enrollment is only allowed for published courses.')
 
+    if schedule is not None:
+        schedule = _assert_schedule_enrollable(schedule)
+
     existing = (
         Enrollment.objects
         .select_for_update()
-        .filter(user=user, course=course)
+        .filter(user=user, course=course, schedule=schedule)
         .first()
     )
     now = timezone.now()
@@ -309,6 +343,7 @@ def enroll_learner(
         enrollment = Enrollment.objects.create(
             user=user,
             course=course,
+            schedule=schedule,
             enrollment_type=enrollment_type,
             is_active=True,
             last_accessed_at=now,

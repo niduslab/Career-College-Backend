@@ -15,6 +15,11 @@ from courses.views import (
     InviteDeclineView,
     MyInviteListView,
     InstitutionCourseInstructorView,
+    CourseScheduleActivateView,
+    CourseScheduleArchiveView,
+    CourseScheduleDetailView,
+    CourseScheduleListCreateView,
+    CourseScheduleReworkView,
     AssignmentDetailAPIView,
     AssignmentListAPIView,
     AssignmentQuestionDetailAPIView,
@@ -163,6 +168,15 @@ urlpatterns = [
     path('<int:pk>/rework/', CourseReworkView.as_view(), name='course-rework'),
     path('<int:pk>/archive/', CourseArchiveView.as_view(), name='course-archive'),
     path('<int:pk>/restore/', CourseRestoreView.as_view(), name='course-restore'),
+
+    # -------------------------------------------------------------------------
+    # Course schedules (cohorts)
+    # -------------------------------------------------------------------------
+    path('<int:pk>/schedules/', CourseScheduleListCreateView.as_view(), name='course-schedule-list-create'),
+    path('<int:pk>/schedules/<int:schedule_id>/', CourseScheduleDetailView.as_view(), name='course-schedule-detail'),
+    path('<int:pk>/schedules/<int:schedule_id>/activate/', CourseScheduleActivateView.as_view(), name='course-schedule-activate'),
+    path('<int:pk>/schedules/<int:schedule_id>/archive/', CourseScheduleArchiveView.as_view(), name='course-schedule-archive'),
+    path('<int:pk>/schedules/<int:schedule_id>/rework/', CourseScheduleReworkView.as_view(), name='course-schedule-rework'),
 
     # -------------------------------------------------------------------------
     # Course metadata (objectives / prerequisites / audiences)

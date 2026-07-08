@@ -62,6 +62,13 @@ from courses.all_views.invite_views import (
 from courses.all_views.institution_course_views import (
     InstitutionCourseInstructorView,
 )
+from courses.all_views.schedule_views import (
+    CourseScheduleActivateView,
+    CourseScheduleArchiveView,
+    CourseScheduleDetailView,
+    CourseScheduleListCreateView,
+    CourseScheduleReworkView,
+)
 from courses.all_views.certificate_views import (
     CertificateDownloadView,
     CertificateVerifyView,
@@ -102,6 +109,11 @@ __all__ = [
     'InviteDeclineView',
     'MyInviteListView',
     'InstitutionCourseInstructorView',
+    'CourseScheduleListCreateView',
+    'CourseScheduleDetailView',
+    'CourseScheduleActivateView',
+    'CourseScheduleArchiveView',
+    'CourseScheduleReworkView',
     'AssignmentListAPIView',
     'AssignmentDetailAPIView',
     'AssignmentQuestionListCreateAPIView',

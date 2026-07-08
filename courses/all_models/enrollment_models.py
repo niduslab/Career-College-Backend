@@ -32,6 +32,14 @@ class Enrollment(TimestampedModel):
         related_name='enrollments',
         help_text='Course the learner is enrolled in.',
     )
+    schedule = models.ForeignKey(
+        'courses.CourseSchedule',
+        on_delete=models.SET_NULL,
+        blank=True,
+        null=True,
+        related_name='enrollments',
+        help_text='Cohort the learner enrolled through. Null = self-paced enrollment.',
+    )
     enrollment_type = models.CharField(
         max_length=15,
         choices=EnrollmentType.choices,
@@ -65,9 +73,18 @@ class Enrollment(TimestampedModel):
         verbose_name_plural = 'Enrollments'
         ordering = ['-created_at']
         constraints = [
+            # Self-paced: one enrollment per (user, course) ever — the historical rule.
             models.UniqueConstraint(
                 fields=['user', 'course'],
-                name='uniq_enrollment_user_course',
+                condition=models.Q(schedule__isnull=True),
+                name='uniq_enrollment_user_course_selfpaced',
+            ),
+            # Cohort: one enrollment per (user, schedule); a learner may join a
+            # different schedule of the same course later (retake next term).
+            models.UniqueConstraint(
+                fields=['user', 'schedule'],
+                condition=models.Q(schedule__isnull=False),
+                name='uniq_enrollment_user_schedule',
             ),
             models.CheckConstraint(
                 check=models.Q(progress_percent__lte=100),

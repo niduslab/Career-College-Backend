@@ -283,6 +283,10 @@ CELERY_BEAT_SCHEDULE = {
         'task': 'payments.tasks.reap_stale_processing_orders_task',
         'schedule': 900.0,  # every 15 min
     },
+    'advance-course-schedules': {
+        'task': 'courses.tasks.advance_course_schedules_task',
+        'schedule': 300.0,  # every 5 min
+    },
 }
 
 INSTRUCTOR_INVITE_EXPIRY_DAYS = env.int('INSTRUCTOR_INVITE_EXPIRY_DAYS', default=7)

@@ -99,13 +99,25 @@ class CourseEnrollView(APIView):
     """
     POST /api/v1/courses/{slug}/enroll/
 
-    Enroll the authenticated learner in a published course.
+    Enroll the authenticated learner in a published course. Optional body
+    `{"schedule_id": <int>}` enrolls into that cohort schedule instead of
+    self-paced; the enrollment window and seat cap are enforced in the service.
     """
 
     permission_classes = [IsAuthenticated, IsEmailVerified, IsLearnerUser]
 
     def post(self, request, slug):
         course = get_object_or_404(NidusCourse, slug=slug, is_published=True)
+
+        schedule = None
+        schedule_id = request.data.get('schedule_id')
+        if schedule_id is not None:
+            schedule = course.schedules.filter(pk=schedule_id).first()
+            if schedule is None:
+                return Response(
+                    {'success': False, 'message': 'Schedule not found.'},
+                    status=status.HTTP_404_NOT_FOUND,
+                )
 
         enrollment_type = Enrollment.EnrollmentType.FREE
         if course.price > 0:
@@ -127,7 +139,11 @@ class CourseEnrollView(APIView):
             enrollment_type = Enrollment.EnrollmentType.PAID
 
         try:
-            enrollment = enroll_learner(request.user, course, enrollment_type=enrollment_type)
+            enrollment = enroll_learner(
+                request.user, course,
+                enrollment_type=enrollment_type,
+                schedule=schedule,
+            )
         except ValidationError as e:
             if hasattr(e, 'message_dict'):
                 return Response(

@@ -3,8 +3,19 @@ from rest_framework.response import Response
 
 
 def guard_editable(course):
-    """Return a 422 Response if the course is locked for editing, else None."""
+    """Return a 422 Response if the course is locked for editing, else None.
+
+    Carve-out for scheduled cohorts: a published course with an *ongoing*
+    CourseSchedule stays content-editable so instructors can drip-upload
+    week-by-week material mid-run. Self-paced courses keep the historical
+    lock-after-publish rule.
+    """
     if not course.is_editable():
+        if (
+            course.status == 'published'
+            and course.schedules.filter(status='ongoing').exists()
+        ):
+            return None
         return Response(
             {
                 'success': False,

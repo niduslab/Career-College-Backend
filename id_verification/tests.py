@@ -17,7 +17,7 @@ from rest_framework import status
 from rest_framework.test import APITestCase
 
 from authentication.models import InstructorProfile, PartnerInstitutionProfile, User
-from courses.models import NidusCourse
+from courses.models import CourseCategory, NidusCourse
 from id_verification.models import InstitutionVerification
 
 
@@ -243,9 +243,10 @@ class PartnerCourseCreationTests(PartnerInstitutionTestBase):
         self.client.force_authenticate(self.institution_user)
 
     def test_partner_can_create_course(self):
+        category = CourseCategory.objects.create(name='Institution Category')
         resp = self.client.post(
             reverse('courses:course-create'),
-            {'title': 'Institution Course', 'description': 'A self-paced course.'},
+            {'title': 'Institution Course', 'description': 'A self-paced course.', 'category': category.pk},
             format='json',
         )
         self.assertEqual(resp.status_code, status.HTTP_201_CREATED, resp.data)

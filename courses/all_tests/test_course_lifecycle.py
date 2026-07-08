@@ -147,6 +147,30 @@ class CourseSectionAccessTests(APITestCase):
         self.assertTrue(response.data['success'])
         self.assertEqual(response.data['data'], [])
 
+    def test_course_creator_can_get_patch_delete_own_section_without_instructor_membership(self):
+        user = User.objects.create_user(
+            email='creator2@example.com',
+            password='pw12345!',
+            full_name='Creator User 2',
+            user_type='instructor',
+            is_email_verified=True,
+        )
+        course = NidusCourse.objects.create(created_by=user, title='Owned Course 2', description='A course owned by creator.')
+        section = CourseSection.objects.create(course=course, title='Intro', position=1)
+
+        self.client.force_authenticate(user=user)
+        detail_url = reverse('courses:section-detail', kwargs={'section_id': section.pk})
+
+        get_response = self.client.get(detail_url)
+        self.assertEqual(get_response.status_code, status.HTTP_200_OK)
+
+        patch_response = self.client.patch(detail_url, {'title': 'Intro (updated)'}, format='json')
+        self.assertEqual(patch_response.status_code, status.HTTP_200_OK)
+
+        delete_response = self.client.delete(detail_url)
+        self.assertEqual(delete_response.status_code, status.HTTP_200_OK)
+        self.assertFalse(CourseSection.objects.filter(pk=section.pk).exists())
+
 
 class CourseSubmitTests(CourseLifecycleTestBase):
     """POST /{pk}/submit/ — draft → under_review."""

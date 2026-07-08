@@ -1,6 +1,8 @@
 from django.urls import path
 
 from courses.views import (
+    CourseCategoryDetailView,
+    CourseCategoryListCreateView,
     CertificateDownloadView,
     CertificateVerifyView,
     LearnerCertificateView,
@@ -32,16 +34,10 @@ from courses.views import (
     CourseInstitutionReviewView,
     CourseMarkFinishedView,
     CourseRestoreView,
-    CourseAudienceDetailAPIView,
-    CourseAudienceListCreateAPIView,
     CourseCreateAPIView,
     CourseDetailView,
     CourseEnrollView,
-    CourseLearningObjectiveDetailAPIView,
-    CourseLearningObjectiveListCreateAPIView,
     CourseListAPIView,
-    CoursePreRequisiteDetailAPIView,
-    CoursePreRequisiteListCreateAPIView,
     CourseReworkView,
     CourseSectionCreateAPIView,
     CourseSectionDetailAPIView,
@@ -84,6 +80,12 @@ urlpatterns = [
     # -------------------------------------------------------------------------
     path('catalog/', CatalogCourseListView.as_view(), name='catalog-list'),
     path('catalog/<slug:slug>/', CatalogCourseDetailView.as_view(), name='catalog-detail'),
+
+    # -------------------------------------------------------------------------
+    # Course categories (public list, admin create/update/delete)
+    # -------------------------------------------------------------------------
+    path('categories/', CourseCategoryListCreateView.as_view(), name='category-list-create'),
+    path('categories/<int:pk>/', CourseCategoryDetailView.as_view(), name='category-detail'),
 
     # -------------------------------------------------------------------------
     # Enrollment (authenticated learner)
@@ -163,16 +165,6 @@ urlpatterns = [
     path('<int:pk>/rework/', CourseReworkView.as_view(), name='course-rework'),
     path('<int:pk>/archive/', CourseArchiveView.as_view(), name='course-archive'),
     path('<int:pk>/restore/', CourseRestoreView.as_view(), name='course-restore'),
-
-    # -------------------------------------------------------------------------
-    # Course metadata (objectives / prerequisites / audiences)
-    # -------------------------------------------------------------------------
-    path('<int:course_id>/learning-objectives/', CourseLearningObjectiveListCreateAPIView.as_view(), name='learning-objective-list-create'),
-    path('learning-objectives/<int:item_id>/', CourseLearningObjectiveDetailAPIView.as_view(), name='learning-objective-detail'),
-    path('<int:course_id>/prerequisites/', CoursePreRequisiteListCreateAPIView.as_view(), name='prerequisite-list-create'),
-    path('prerequisites/<int:item_id>/', CoursePreRequisiteDetailAPIView.as_view(), name='prerequisite-detail'),
-    path('<int:course_id>/audiences/', CourseAudienceListCreateAPIView.as_view(), name='audience-list-create'),
-    path('audiences/<int:item_id>/', CourseAudienceDetailAPIView.as_view(), name='audience-detail'),
 
     # -------------------------------------------------------------------------
     # Sections

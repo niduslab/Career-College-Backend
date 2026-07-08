@@ -1,5 +1,8 @@
+from django.db.models import Q
 from rest_framework import status
 from rest_framework.response import Response
+
+from courses.models import CourseSection, NidusCourse
 
 
 def guard_editable(course):
@@ -28,6 +31,18 @@ def save_authored(serializer, user, **extra):
         extra['created_by'] = user
     extra['last_edited_by'] = user
     return serializer.save(**extra)
+
+
+def owned_course_qs(user):
+    """NidusCourse rows the user owns: assigned instructor or course creator."""
+    return NidusCourse.objects.filter(Q(instructors=user) | Q(created_by=user)).distinct()
+
+
+def owned_section_qs(user):
+    """CourseSection rows whose course the user owns (instructor or creator)."""
+    return CourseSection.objects.select_related('course').filter(
+        Q(course__instructors=user) | Q(course__created_by=user)
+    ).distinct()
 
 
 def guard_owner(course, user):

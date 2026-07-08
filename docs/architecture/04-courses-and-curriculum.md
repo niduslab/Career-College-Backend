@@ -4,7 +4,7 @@
 
 | File | Purpose |
 |------|---------|
-| `courses/all_models/course_models.py` | `NidusCourse`, `CourseSection`, `SectionContent`, `CourseCategory`, metadata text tables |
+| `courses/all_models/course_models.py` | `NidusCourse`, `CourseSection`, `SectionContent`, `CourseCategory`, metadata text fields |
 | `courses/all_models/content_models.py` | `Lecture`, `VideoAsset`, `VideoProcessingJob`, `WatchProgress` |
 | `courses/all_views/course_views.py` | Course list/create/detail (instructor authoring surface) |
 | `courses/all_views/content_views.py` | Sections, SectionContent, lectures, quizzes |
@@ -21,9 +21,9 @@
 ### `CourseCategory`
 
 - `name`, `slug` (unique)
-- `description`
-- `parent` (self-referential FK → `CourseCategory`, nullable) — supports subcategories
-- `is_active`, `display_order`
+- `parent` (self-referential FK → `CourseCategory`, nullable) — supports a 2-level tree; deactivating
+  a parent (`is_active=False`) cascades to its active children (`CourseCategory.save()`)
+- `is_active`
 
 ### `NidusCourse`
 
@@ -62,15 +62,14 @@ Roster changes (adding/removing co-instructors) are restricted to the owner insi
 
 See `13-multi-instructor-collaboration.md` for the full role table, enforcement details, and future extensions.
 
-### Supporting text tables
+### Supporting text fields
 
-Normalized 1-to-many off `NidusCourse`. Support independent autosave from a course builder UI:
-
-| Model | Fields |
-|-------|--------|
-| `CourseLearningObjective` | `course`, `text`, `display_order` |
-| `CoursePreRequisite` | `course`, `text`, `display_order` |
-| `CourseAudience` | `course`, `text`, `display_order` |
+`learning_objectives`, `prerequisites`, and `audiences` are plain `TextField`s directly on
+`NidusCourse` (blank-default), **one item per line** (newline-separated; the frontend splits on
+`\n`). They were previously three normalized 1-to-many tables
+(`CourseLearningObjective` / `CoursePreRequisite` / `CourseAudience`) with dedicated CRUD
+endpoints; that machinery was removed in favor of these fields. Set/read them as part of the
+normal course create / PATCH / detail payloads — there are no separate metadata endpoints.
 
 ---
 
@@ -260,12 +259,9 @@ GET    /api/v1/courses/{id}/                      → detail (instructor authori
 PATCH  /api/v1/courses/{id}/                      → partial update metadata
 DELETE /api/v1/courses/{id}/                      → delete course
 
-# Course metadata (independent autosave)
-GET/POST   /api/v1/courses/{id}/objectives/
-GET/POST   /api/v1/courses/{id}/prerequisites/
-GET/POST   /api/v1/courses/{id}/audiences/
-GET/PATCH/DELETE  /api/v1/courses/{id}/objectives/{obj_id}/
-# ... (same pattern for prerequisites, audiences)
+# Course metadata: learning_objectives / prerequisites / audiences are newline-separated
+# TextFields on the course — set/read them in the course create + PATCH + detail payloads
+# (no separate endpoints).
 
 # Sections
 GET/POST   /api/v1/courses/{course_id}/sections/
@@ -320,8 +316,10 @@ POST  /api/v1/courses/{id}/archive/  → published → archived
 
 ## Why this design
 
-- **Normalized metadata tables** (objectives, prerequisites, audiences) allow frontend to autosave
-  individual fields independently without locking the entire course record.
+- **Metadata as text fields** (objectives, prerequisites, audiences) — newline-separated
+  `TextField`s on `NidusCourse`, edited as part of the course record. Previously three normalized
+  tables with per-item endpoints; collapsed to text fields since they're just bullet lists and the
+  independent-autosave complexity wasn't worth the extra tables + endpoints.
 - **`SectionContent` as the single ordering layer** decouples placement/order from content object
   details — adding a new content type requires no change to the ordering system. The new model
   just needs a `GenericRelation` to `SectionContent`.

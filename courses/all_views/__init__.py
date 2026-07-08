@@ -62,6 +62,10 @@ from courses.all_views.invite_views import (
 from courses.all_views.institution_course_views import (
     InstitutionCourseInstructorView,
 )
+from courses.all_views.category_views import (
+    CourseCategoryDetailView,
+    CourseCategoryListCreateView,
+)
 from courses.all_views.certificate_views import (
     CertificateDownloadView,
     CertificateVerifyView,
@@ -74,12 +78,6 @@ from courses.all_views.review_views import (
     ReviewVoteView,
 )
 from courses.all_views.content_views import (
-    CourseAudienceDetailAPIView,
-    CourseAudienceListCreateAPIView,
-    CourseLearningObjectiveDetailAPIView,
-    CourseLearningObjectiveListCreateAPIView,
-    CoursePreRequisiteDetailAPIView,
-    CoursePreRequisiteListCreateAPIView,
     CourseSectionCreateAPIView,
     CourseSectionDetailAPIView,
     CourseSectionListAPIView,
@@ -115,12 +113,6 @@ __all__ = [
     'CourseListAPIView',
     'CourseCreateAPIView',
     'CourseDetailView',
-    'CourseLearningObjectiveListCreateAPIView',
-    'CourseLearningObjectiveDetailAPIView',
-    'CoursePreRequisiteListCreateAPIView',
-    'CoursePreRequisiteDetailAPIView',
-    'CourseAudienceListCreateAPIView',
-    'CourseAudienceDetailAPIView',
     'CourseSectionListAPIView',
     'CourseSectionCreateAPIView',
     'CourseSectionDetailAPIView',
@@ -168,4 +160,6 @@ __all__ = [
     'CourseReviewSummaryView',
     'MyReviewView',
     'ReviewVoteView',
+    'CourseCategoryListCreateView',
+    'CourseCategoryDetailView',
 ]

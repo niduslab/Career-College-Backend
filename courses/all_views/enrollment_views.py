@@ -77,9 +77,6 @@ class CatalogCourseDetailView(APIView):
         course = get_object_or_404(
             NidusCourse.objects.select_related('created_by', 'category', 'partner_institution').prefetch_related(
                 'instructors',
-                'learning_objectives',
-                'prerequisites',
-                'audiences',
             ),
             slug=slug,
             is_published=True,
@@ -246,9 +243,6 @@ class MyCoursesDetailView(APIView):
         course = get_object_or_404(
             NidusCourse.objects.select_related('created_by', 'category', 'partner_institution').prefetch_related(
                 'instructors',
-                'learning_objectives',
-                'prerequisites',
-                'audiences',
             ),
             slug=slug,
         )

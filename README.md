@@ -270,7 +270,7 @@ For **production / shared hosts** (or any local box you want to test the gVisor 
 ### 2. Course creation and publication
 
 1. `POST /api/v1/courses/create/` — create course (title, description, category, level, price). Status starts as `draft`.
-2. Add metadata: learning objectives, prerequisites, audience entries.
+2. Set metadata: `learning_objectives`, `prerequisites`, `audiences` — newline-separated text fields in the create/PATCH payload.
 3. `POST /api/v1/courses/{id}/sections/create/` — add one or more sections.
 4. Add content to each section via `POST /api/v1/courses/sections/{section_id}/contents/` with `item_type: lecture | quiz | coding | assignment`.
 5. For video lectures: upload file, Celery transcodes to HLS; poll until `active_video_asset.status == ready`.
@@ -629,14 +629,9 @@ Institution-facing — gated `IsEmailVerified` + a `user_type == 'partner_instit
 
 #### Course Metadata
 
-| Method | Endpoint | Description |
-|--------|----------|-------------|
-| GET/POST | `{id}/learning-objectives/` | List or add learning objectives |
-| GET/PATCH/DELETE | `learning-objectives/{item_id}/` | Detail |
-| GET/POST | `{id}/prerequisites/` | List or add prerequisites |
-| GET/PATCH/DELETE | `prerequisites/{item_id}/` | Detail |
-| GET/POST | `{id}/audiences/` | List or add audience entries |
-| GET/PATCH/DELETE | `audiences/{item_id}/` | Detail |
+`learning_objectives`, `prerequisites`, and `audiences` are newline-separated `TextField`s on the
+course (one item per line). Set/read them via the course create (`POST /courses/create/`), update
+(`PATCH /courses/{id}/`), and detail responses — there are no dedicated metadata endpoints.
 
 #### Sections
 

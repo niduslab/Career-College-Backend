@@ -4,9 +4,6 @@ from courses.models import NidusCourse
 def get_course_base_queryset():
     return NidusCourse.objects.select_related('created_by', 'category', 'partner_institution').prefetch_related(
         'instructors',
-        'learning_objectives',
-        'prerequisites',
-        'audiences',
     )
 
 

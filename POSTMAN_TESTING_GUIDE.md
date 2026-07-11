@@ -48,7 +48,7 @@ Learner Consumption endpoints.
 
 ### Course Authoring (Instructor)
 - [26. Courses — Create / List / Get / Patch](#26-courses)
-- [27. Course Metadata (Objectives / Prerequisites / Audiences)](#27-course-metadata)
+- [27. Course Metadata (Objectives / Prerequisites / Audiences — text fields)](#27-course-metadata)
 - [28. Sections](#28-sections)
 - [29. Section Content (single creation path)](#29-section-content)
 - [30. Lectures (read / update / delete)](#30-lectures)
@@ -67,6 +67,7 @@ Learner Consumption endpoints.
 
 ### Public Catalog (No Auth)
 - [35. Browse, Filter, and Sort the Catalog](#35-public-catalog)
+- [35A. Course Categories](#35a-course-categories)
 
 ### Learner — Enrollment & Dashboard
 - [36. Enrollment](#36-enrollment)
@@ -153,11 +154,10 @@ config_id       =
 tc_id           =
 assignment_id   =
 aq_id           =
-objective_id    =
-prerequisite_id =
-audience_id     =
+category_id     =
 certificate_uid =
 review_id       =
+admin_token     = <fill after login as an admin/staff user>
 ```
 
 Multi-actor flows (learner + instructor + admin in the same Postman
@@ -1528,6 +1528,11 @@ python manage.py createsuperuser
 }
 ```
 
+`category` is **required** on create (must be an **active** category id — see Section 35A). Omitting
+it → 400 `errors.category: ["This field is required."]`. Inactive or unknown id → 400
+`errors.category: ["Invalid pk \"999\" - object does not exist."]`. On PATCH, `category` stays
+optional (partial update), but if sent it must still resolve to an active id.
+
 **Expected 201:**
 ```json
 {
@@ -1561,94 +1566,44 @@ Save `data.id` as `{{course_id}}`.
 
 ## 27. Course Metadata
 
-Learning objectives, prerequisites, and audiences share the same contract — same fields, same response shape, same ownership/editable rules. Only the URL segment changes:
+`learning_objectives`, `prerequisites`, and `audiences` are **plain text fields on the course**
+(newline-separated — one item per line; the frontend splits on `\n`). There are **no separate
+metadata endpoints** — set them directly in the course create/PATCH payload (Section 26), and read
+them back on any course detail response.
 
-| Resource | List/Create URL | Detail URL |
-|---|---|---|
-| Learning objectives | `{{base_url}}/courses/{{course_id}}/learning-objectives/` | `{{base_url}}/courses/learning-objectives/{{objective_id}}/` |
-| Prerequisites | `{{base_url}}/courses/{{course_id}}/prerequisites/` | `{{base_url}}/courses/prerequisites/{{prerequisite_id}}/` |
-| Audiences | `{{base_url}}/courses/{{course_id}}/audiences/` | `{{base_url}}/courses/audiences/{{audience_id}}/` |
+### 27.1 Set on Create
 
-**Common rules:**
-- All write actions require an authenticated JWT for an instructor in `course.instructors`. Non-owners get `404`.
-- Writes (`POST`/`PATCH`/`PUT`/`DELETE`) only succeed while the course is editable (`draft` or `rejected`). On `published` / `under_review` / `archived`, writes return the `guard_editable` error (422).
-- Each item has one unique constraint per course: `(course, text)`. Duplicate text → 400 with `"<Resource> already exists for this course."`
-- List results are ordered by `display_order, id`. Supports `?ordering=display_order` and `?ordering=-display_order`.
-
-The examples below use **learning objectives**; substitute the URL segment for prerequisites and audiences.
-
-### 27.1 Create a Learning Objective
-
-**POST** `{{base_url}}/courses/{{course_id}}/learning-objectives/`
-
-```json
-{ "text": "Design RESTful endpoints using Django REST Framework.", "display_order": 1 }
-```
-
-**Expected 201:**
-```json
-{
-    "success": true,
-    "message": "Learning objective created successfully.",
-    "data": { "id": 12, "text": "Design RESTful endpoints using Django REST Framework.", "display_order": 1 }
-}
-```
-
-Save `data.id` as `{{objective_id}}`.
-
-`display_order` is optional and defaults to `0`. `text` is required and trimmed; whitespace-only values are rejected.
-
-### 27.2 List Learning Objectives
-
-**GET** `{{base_url}}/courses/{{course_id}}/learning-objectives/`
-
-Optional query: `?ordering=display_order` or `?ordering=-display_order`.
-
-### 27.3 Get / Patch / Put / Delete
-
-- **GET** `{{base_url}}/courses/learning-objectives/{{objective_id}}/`
-- **PATCH** `{{base_url}}/courses/learning-objectives/{{objective_id}}/` — `{ "display_order": 3 }`
-- **PUT** `{{base_url}}/courses/learning-objectives/{{objective_id}}/` — all writable fields
-- **DELETE** `{{base_url}}/courses/learning-objectives/{{objective_id}}/`
-
-Messages: `"Learning objective created/updated/replaced/deleted successfully."`
-
-### 27.4 Same Flow for Prerequisites and Audiences
-
-Substitute `prerequisites` / `audiences` in the URL. Messages: `"Prerequisite ..."` / `"Audience ..."`.
-
-### 27.5 Validation & Error Cases
-
-**Empty / whitespace-only `text`:** 400 → `errors.text: ["Text cannot be empty."]`
-
-**Missing `text` on create:** 400 → `errors.text: ["This field is required."]`
-
-**Duplicate `text` for the same course:** 400 → `"Learning objective already exists for this course."`
-
-**Edit while course is not editable** (`under_review` / `published` / `archived`): 422 → `"Course is not editable in its current status."`
-
-**Non-owner instructor:** 404 (existence not leaked).
-
-**Unauthenticated:** 401.
-
-### 27.6 Bulk-Set via Course Update
-
-`PATCH {{base_url}}/courses/{{course_id}}/` accepts nested arrays. Supplying any of these on PATCH **replaces the entire set** (delete + re-insert). Use the dedicated endpoints above for incremental edits.
+**POST** `{{base_url}}/courses/create/`
 
 ```json
 {
-    "learning_objectives": [
-        { "text": "Build production REST APIs.", "display_order": 1 },
-        { "text": "Containerize with Docker.", "display_order": 2 }
-    ],
-    "prerequisites": [
-        { "text": "Comfortable with Python.", "display_order": 1 }
-    ],
-    "audiences": [
-        { "text": "Backend engineers.", "display_order": 1 }
-    ]
+    "title": "Python Backend Bootcamp",
+    "description": "Build production APIs with Django and DRF.",
+    "learning_objectives": "Build production REST APIs.\nContainerize with Docker.",
+    "prerequisites": "Comfortable with Python.",
+    "audiences": "Backend engineers.\nAspiring DevOps engineers."
 }
 ```
+
+### 27.2 Update
+
+**PATCH** `{{base_url}}/courses/{{course_id}}/`
+
+Supplying any of the three fields **replaces that field's whole value** (it's a single string).
+
+```json
+{ "learning_objectives": "Design REST endpoints.\nWrite tests." }
+```
+
+### 27.3 Read
+
+Any course detail/list response (`GET /courses/{{course_id}}/`, `/catalog/<slug>/`,
+`/my-courses/<slug>/`) returns the three as strings, e.g. `"learning_objectives": "A\nB"`.
+Empty when unset (`""`).
+
+> Removed: the old `learning-objectives/`, `prerequisites/`, `audiences/` sub-resource endpoints
+> and the `objective_id`/`prerequisite_id`/`audience_id` variables no longer exist — the three
+> normalized tables were collapsed into these text fields.
 
 ---
 
@@ -2600,15 +2555,9 @@ No Authorization header needed.
         ],
         "partner_institution": null,
         "category": { "id": 1, "name": "Backend Development", "slug": "backend" },
-        "learning_objectives": [
-            { "id": 1, "text": "Build REST APIs with Django REST Framework." }
-        ],
-        "prerequisites": [
-            { "id": 1, "text": "Basic Python knowledge." }
-        ],
-        "audiences": [
-            { "id": 1, "text": "Developers who want to build backend APIs." }
-        ],
+        "learning_objectives": "Build REST APIs with Django REST Framework.",
+        "prerequisites": "Basic Python knowledge.",
+        "audiences": "Developers who want to build backend APIs.",
         "total_sections": 5,
         "total_content_items": 20,
         "published_at": "2026-05-10T09:00:00Z"
@@ -2617,6 +2566,133 @@ No Authorization header needed.
 ```
 
 **Error — course not found or not published:** 404 — `{ "detail": "No NidusCourse matches the given query." }`
+
+---
+
+## 35A. Course Categories
+
+Categories are a 2-level taxonomy (`parent` → `children`). The **list is public**;
+**create / update / delete are admin-only** (`IsPlatformAdmin` — a staff or
+`user_type=admin` account). Slug is auto-generated from `name` when omitted.
+Deleting soft-deactivates (`is_active=False`); the row and any course FKs remain.
+
+### 35A.1 List Categories (public, nested tree, paginated)
+
+**GET** `{{base_url}}/courses/categories/`
+
+No Authorization header needed. Returns active, top-level categories sorted
+alphabetically by `name`, each with its active children nested (also alphabetical).
+Paginated (page size 10, `?page=` / `?page_size=` up to 100).
+
+**Expected 200:**
+```json
+{
+    "success": true,
+    "data": {
+        "count": 1,
+        "next": null,
+        "previous": null,
+        "results": [
+            {
+                "id": 1,
+                "name": "Programming",
+                "slug": "programming",
+                "children": [
+                    {
+                        "id": 2,
+                        "name": "Python",
+                        "slug": "python",
+                        "children": []
+                    }
+                ]
+            }
+        ]
+    }
+}
+```
+
+### 35A.2 Create Category (admin)
+
+**POST** `{{base_url}}/courses/categories/`
+
+**Headers:** `Authorization: Bearer {{admin_token}}`
+
+```json
+{ "name": "Data Science" }
+```
+
+**Expected 201:**
+```json
+{
+    "success": true,
+    "message": "Category created.",
+    "data": {
+        "id": 3,
+        "name": "Data Science",
+        "slug": "data-science",
+        "parent": null,
+        "is_active": true,
+        "created_at": "...",
+        "updated_at": "..."
+    }
+}
+```
+
+Save `data.id` as `{{category_id}}`. `slug` is optional — pass one explicitly to
+override the auto value.
+
+**Create a subcategory** (pass a top-level `parent` id):
+```json
+{ "name": "Machine Learning", "parent": 3 }
+```
+
+### 35A.3 Get Category Detail (admin)
+
+**GET** `{{base_url}}/courses/categories/{{category_id}}/`
+
+**Headers:** `Authorization: Bearer {{admin_token}}`
+
+Returns the full record (all fields, including inactive rows).
+
+### 35A.4 Update Category (admin)
+
+**PATCH** `{{base_url}}/courses/categories/{{category_id}}/`
+
+```json
+{ "name": "Data & AI" }
+```
+
+**Expected 200:** `"message": "Category updated."` with the updated record.
+
+Deactivate (hides from the public list) by patching `is_active`:
+```json
+{ "is_active": false }
+```
+
+### 35A.5 Delete Category (admin, soft)
+
+**DELETE** `{{base_url}}/courses/categories/{{category_id}}/`
+
+**Expected 200:**
+```json
+{ "success": true, "message": "Category deactivated." }
+```
+
+The row still exists with `is_active=false`; courses keep their `category` FK.
+
+### 35A.6 Validation & Error Cases
+
+| Scenario | Status | Detail |
+|---|---|---|
+| Empty / whitespace `name` | 400 | `errors.name: ["Name cannot be empty."]` |
+| Parent is not top-level (3-level attempt) | 400 | `errors.parent: ["Categories support only two levels; the parent must be a top-level category."]` |
+| Self-parent on update | 400 | `errors.parent: ["A category cannot be its own parent."]` |
+| Duplicate `name` / `slug` | 422 | `"A category with this name or slug already exists."` |
+| Non-admin create / update / delete | 403 | `"Only administrators can perform this action."` |
+| Unknown `pk` on detail | 404 | `"Category not found."` |
+
+> Catalog filtering consumes these: `?category=<slug>` rolls a parent down to its
+> children, `?subcategory=<slug>` matches exactly. See Section 35.
 
 ---
 
@@ -2792,9 +2868,9 @@ Ordered by `last_accessed_at` (most recent first), then `created_at`. Only the c
             "instructors": [],
             "partner_institution": null,
             "category": {},
-            "learning_objectives": [],
-            "prerequisites": [],
-            "audiences": [],
+            "learning_objectives": "",
+            "prerequisites": "",
+            "audiences": "",
             "total_sections": 12,
             "total_content_items": 47
         }
@@ -4162,7 +4238,7 @@ Make sure `FRONTEND_GOOGLE_CALLBACK` is **not set** in `.env`.
 
 1. Login as a verified instructor and copy the access token.
 2. **Create course** (26.1) → save `course_id`.
-3. Add 1–2 **learning objectives**, **prerequisites**, and **audiences** (27).
+3. Set **learning_objectives / prerequisites / audiences** (newline-separated text) in the create or a follow-up PATCH (27).
 4. **Create section** (28.1) → save `section_id`.
 5. Create one **article lecture** via `sections/{id}/contents/` (29.1).
 6. Create one **quiz** via `sections/{id}/contents/` (29.3) → save `quiz_id`.

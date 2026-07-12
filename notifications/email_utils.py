@@ -12,6 +12,7 @@ _EVENT_TEMPLATE_MAP = {
     _ET.COURSE_REJECTED:         'notifications/emails/course_rejected.html',
     _ET.COURSE_MARKED_FINISHED:  'notifications/emails/course_marked_finished.html',
     _ET.COURSE_SENT_BACK:        'notifications/emails/course_sent_back.html',
+    _ET.COURSE_SCHEDULE_NEEDS_ATTENTION: 'notifications/emails/course_schedule_needs_attention.html',
     _ET.INVITE_SENT:             'notifications/emails/invite_sent.html',
     _ET.INVITE_ACCEPTED:         'notifications/emails/invite_accepted.html',
     _ET.INVITE_DECLINED:         'notifications/emails/invite_declined.html',

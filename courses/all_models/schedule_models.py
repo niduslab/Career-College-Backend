@@ -106,6 +106,23 @@ class CourseSchedule(AuthoredModel):
         self.status = new_status
         self.save()
 
+    def date_logic_errors(self):
+        """
+        Structural date-ordering problems only — no "is it still in the future"
+        check. Shared by _validate_activation() (which additionally checks
+        against "now") and NidusCourse._validate_course_completeness() (which
+        intentionally skips the "future" check, since submission and admin
+        approval can be far apart in time).
+        """
+        errors = {}
+        if self.enrollment_opens_at >= self.enrollment_closes_at:
+            errors['enrollment_opens_at'] = 'Enrollment must open before it closes.'
+        if self.enrollment_closes_at > self.start_date:
+            errors['enrollment_closes_at'] = 'Enrollment must close on or before the start date.'
+        if self.end_date is not None and self.end_date <= self.start_date:
+            errors['end_date'] = 'End date must be after the start date.'
+        return errors
+
     def _validate_activation(self):
         """Ensure the schedule is ready before activation. Collects all problems."""
         errors = {}
@@ -113,12 +130,7 @@ class CourseSchedule(AuthoredModel):
         if self.course.status != 'published':
             errors['course'] = 'The course must be published before a schedule can be activated.'
 
-        if self.enrollment_opens_at >= self.enrollment_closes_at:
-            errors['enrollment_opens_at'] = 'Enrollment must open before it closes.'
-        if self.enrollment_closes_at > self.start_date:
-            errors['enrollment_closes_at'] = 'Enrollment must close on or before the start date.'
-        if self.end_date is not None and self.end_date <= self.start_date:
-            errors['end_date'] = 'End date must be after the start date.'
+        errors.update(self.date_logic_errors())
 
         now = timezone.now()
         if self.enrollment_closes_at <= now:

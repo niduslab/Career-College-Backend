@@ -197,6 +197,56 @@ class ScheduleStateMachineTests(CourseScheduleTestBase):
         self.assertIn('start_date', ctx.exception.message_dict)
 
 
+class DateLogicErrorsTests(CourseScheduleTestBase):
+    """CourseSchedule.date_logic_errors() — structural ordering only, no 'now' check."""
+
+    def test_no_problems_returns_empty_dict(self):
+        schedule = self._make_schedule(self.solo_course)
+        self.assertEqual(schedule.date_logic_errors(), {})
+
+    def test_opens_after_closes_flagged(self):
+        now = timezone.now()
+        schedule = self._make_schedule(
+            self.solo_course,
+            enrollment_opens_at=now + timedelta(days=2),
+            enrollment_closes_at=now + timedelta(days=1),
+        )
+        self.assertIn('enrollment_opens_at', schedule.date_logic_errors())
+
+    def test_closes_after_start_flagged(self):
+        now = timezone.now()
+        start = now + timedelta(days=3)
+        schedule = self._make_schedule(
+            self.solo_course,
+            enrollment_opens_at=now,
+            enrollment_closes_at=start + timedelta(days=1),
+            start_date=start,
+        )
+        self.assertIn('enrollment_closes_at', schedule.date_logic_errors())
+
+    def test_end_before_start_flagged(self):
+        now = timezone.now()
+        start = now + timedelta(days=3)
+        schedule = self._make_schedule(
+            self.solo_course,
+            start_date=start,
+            end_date=start - timedelta(days=1),
+        )
+        self.assertIn('end_date', schedule.date_logic_errors())
+
+    def test_past_dates_pass_structural_check(self):
+        """No 'is it still in the future' check here — that's _validate_activation's job."""
+        now = timezone.now()
+        schedule = self._make_schedule(
+            self.solo_course,
+            enrollment_opens_at=now - timedelta(days=30),
+            enrollment_closes_at=now - timedelta(days=10),
+            start_date=now - timedelta(days=5),
+            end_date=now + timedelta(days=25),
+        )
+        self.assertEqual(schedule.date_logic_errors(), {})
+
+
 class SoloInstructorScheduleCrudTests(CourseScheduleTestBase):
     def test_create_list_get_patch_delete_happy_path(self):
         self.client.force_authenticate(self.solo)

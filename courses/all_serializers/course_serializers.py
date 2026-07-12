@@ -123,10 +123,10 @@ class NidusCourseSerializer(serializers.ModelSerializer):
         model = NidusCourse
         fields = [
             'id', 'title', 'slug', 'description', 'thumbnail', 'price',
-            'language', 'level', 'duration_minutes', 'status', 'is_published',
+            'language', 'level', 'duration_minutes', 'delivery_mode', 'status', 'is_published',
             'rejection_reason', 'published_at', 'created_by', 'instructors',
             'partner_institution', 'category', 'learning_objectives',
-            'prerequisites', 'audiences', 'created_at', 'updated_at',
+            'prerequisites', 'audiences', 'course_outline', 'created_at', 'updated_at',
         ]
         read_only_fields = fields
 
@@ -142,8 +142,8 @@ class NidusCourseCreateUpdateSerializer(serializers.ModelSerializer):
         model = NidusCourse
         fields = [
             'title', 'description', 'thumbnail', 'price', 'language', 'level',
-            'duration_minutes', 'category', 'learning_objectives',
-            'prerequisites', 'audiences',
+            'duration_minutes', 'delivery_mode', 'category', 'learning_objectives',
+            'prerequisites', 'audiences', 'course_outline',
         ]
         read_only_fields = ['created_by']
 
@@ -152,6 +152,11 @@ class NidusCourseCreateUpdateSerializer(serializers.ModelSerializer):
         if len(title) < 5:
             raise serializers.ValidationError('Title must be at least 5 characters long.')
         return title
+
+    def validate_delivery_mode(self, value):
+        if self.instance is not None and value != self.instance.delivery_mode:
+            raise serializers.ValidationError('delivery_mode cannot be changed after the course is created.')
+        return value
 
     def _normalize_multiline(self, value):
         lines = [line.strip() for line in value.split('\n')]
@@ -164,6 +169,9 @@ class NidusCourseCreateUpdateSerializer(serializers.ModelSerializer):
         return self._normalize_multiline(value)
 
     def validate_audiences(self, value):
+        return self._normalize_multiline(value)
+
+    def validate_course_outline(self, value):
         return self._normalize_multiline(value)
 
     def create(self, validated_data):

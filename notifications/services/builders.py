@@ -92,6 +92,17 @@ def _course_sent_back(recipient, ctx):
     )
 
 
+def _course_schedule_needs_attention(recipient, ctx):
+    labels = ', '.join(ctx['schedule_labels'])
+    return _build(
+        title='Schedule needs date fixes',
+        body=f'"{ctx["course_title"]}" was approved and published, but its schedule(s) '
+             f'({labels}) could not auto-activate because the dates no longer make sense. '
+             'Update the dates and activate the schedule manually.',
+        data={'course_slug': ctx['course_slug']},
+    )
+
+
 def _video_ready(recipient, ctx):
     return _build(
         title='Video ready',
@@ -302,6 +313,7 @@ _BUILDERS = {
     _ET.COURSE_ARCHIVED:         _course_archived,
     _ET.COURSE_MARKED_FINISHED:  _course_marked_finished,
     _ET.COURSE_SENT_BACK:        _course_sent_back,
+    _ET.COURSE_SCHEDULE_NEEDS_ATTENTION: _course_schedule_needs_attention,
     _ET.VIDEO_READY:             _video_ready,
     _ET.VIDEO_FAILED:            _video_failed,
     _ET.INVITE_SENT:             _invite_sent,

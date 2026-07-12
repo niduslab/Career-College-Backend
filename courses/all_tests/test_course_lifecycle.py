@@ -1,6 +1,9 @@
+from datetime import timedelta
+
 from django.contrib.contenttypes.models import ContentType
 from django.test import TestCase
 from django.urls import reverse
+from django.utils import timezone
 from rest_framework import status
 from rest_framework.test import APITestCase
 
@@ -8,6 +11,7 @@ from authentication.models import InstructorProfile, User
 from courses.models import (
     Assignment,
     AssignmentQuestion,
+    CourseSchedule,
     CourseSection,
     Lecture,
     NidusCourse,
@@ -18,6 +22,18 @@ from courses.serializers import (
     AssignmentSerializer,
     CodingExerciseCreateUpdateSerializer,
 )
+
+
+def _sane_schedule_dates(days_from_now=30, run_days=60):
+    """Structurally valid dates that may be past or future depending on days_from_now."""
+    now = timezone.now()
+    start = now + timedelta(days=days_from_now)
+    return {
+        'enrollment_opens_at': now - timedelta(days=1),
+        'enrollment_closes_at': start - timedelta(days=1),
+        'start_date': start,
+        'end_date': start + timedelta(days=run_days),
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -252,6 +268,108 @@ class CourseSubmitTests(CourseLifecycleTestBase):
 
 
 # ---------------------------------------------------------------------------
+# ScheduledCourseSubmitTests
+# ---------------------------------------------------------------------------
+
+class ScheduledCourseSubmitTests(CourseLifecycleTestBase):
+    """draft → under_review for delivery_mode='scheduled' courses."""
+
+    def _scheduled_course(self, **schedule_overrides):
+        course = NidusCourse.objects.create(
+            created_by=self.instructor,
+            title='Cohort Course',
+            description='A cohort-delivered course.',
+            delivery_mode=NidusCourse.DeliveryMode.SCHEDULED,
+            course_outline='Week 1: Intro\nWeek 2: Advanced Topics',
+        )
+        course.instructors.add(self.instructor)
+        if schedule_overrides is not None:
+            fields = _sane_schedule_dates()
+            fields.update(schedule_overrides)
+            CourseSchedule.objects.create(course=course, **fields)
+        return course
+
+    def test_outline_only_section_passes_when_schedule_attached(self):
+        course = self._scheduled_course()
+        url = reverse('courses:course-submit', kwargs={'pk': course.pk})
+        response = self.client.post(url)
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data['data']['status'], 'under_review')
+
+    def test_no_schedule_attached_returns_400(self):
+        course = NidusCourse.objects.create(
+            created_by=self.instructor,
+            title='Cohort Course No Schedule',
+            description='Missing a schedule.',
+            delivery_mode=NidusCourse.DeliveryMode.SCHEDULED,
+            course_outline='Week 1: Intro\nWeek 2: Advanced Topics',
+        )
+        course.instructors.add(self.instructor)
+        url = reverse('courses:course-submit', kwargs={'pk': course.pk})
+        response = self.client.post(url)
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn('schedules', response.data['errors'])
+        self.assertNotIn('empty_sections', response.data['errors'])
+        self.assertNotIn('sections', response.data['errors'])
+        self.assertNotIn('course_outline', response.data['errors'])
+
+    def test_no_course_outline_returns_400(self):
+        course = NidusCourse.objects.create(
+            created_by=self.instructor,
+            title='Cohort Course No Outline',
+            description='Missing a course outline.',
+            delivery_mode=NidusCourse.DeliveryMode.SCHEDULED,
+        )
+        course.instructors.add(self.instructor)
+        CourseSchedule.objects.create(course=course, **_sane_schedule_dates())
+        url = reverse('courses:course-submit', kwargs={'pk': course.pk})
+        response = self.client.post(url)
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn('course_outline', response.data['errors'])
+
+    def test_scheduled_course_with_zero_sections_submits(self):
+        """Scheduled courses need no sections at all — an outline stands in."""
+        course = NidusCourse.objects.create(
+            created_by=self.instructor,
+            title='Sectionless Cohort Course',
+            description='No curriculum yet, just a plan.',
+            delivery_mode=NidusCourse.DeliveryMode.SCHEDULED,
+            course_outline='Week 1: Intro\nWeek 2: Advanced Topics',
+        )
+        course.instructors.add(self.instructor)
+        CourseSchedule.objects.create(course=course, **_sane_schedule_dates())
+        url = reverse('courses:course-submit', kwargs={'pk': course.pk})
+        response = self.client.post(url)
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data['data']['status'], 'under_review')
+
+    def test_bad_schedule_dates_returns_400(self):
+        now = timezone.now()
+        course = self._scheduled_course(
+            enrollment_opens_at=now,
+            enrollment_closes_at=now - timedelta(days=1),
+        )
+        url = reverse('courses:course-submit', kwargs={'pk': course.pk})
+        response = self.client.post(url)
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn('schedule_dates', response.data['errors'])
+
+    def test_sane_but_past_schedule_dates_still_submits(self):
+        """Submit doesn't reuse _validate_activation's 'must be in the future' check."""
+        now = timezone.now()
+        course = self._scheduled_course(
+            enrollment_opens_at=now - timedelta(days=30),
+            enrollment_closes_at=now - timedelta(days=10),
+            start_date=now - timedelta(days=5),
+            end_date=now + timedelta(days=25),
+        )
+        url = reverse('courses:course-submit', kwargs={'pk': course.pk})
+        response = self.client.post(url)
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data['data']['status'], 'under_review')
+
+
+# ---------------------------------------------------------------------------
 # CourseAdminReviewTests
 # ---------------------------------------------------------------------------
 
@@ -300,6 +418,36 @@ class CourseAdminReviewTests(CourseLifecycleTestBase):
         self._set_status('draft')
         response = self.client.post(self._review_url(), {'action': 'approve'}, format='json')
         self.assertEqual(response.status_code, status.HTTP_422_UNPROCESSABLE_ENTITY)
+
+    def test_approve_activates_valid_draft_schedule(self):
+        self.course.delivery_mode = NidusCourse.DeliveryMode.SCHEDULED
+        self.course.save(update_fields=['delivery_mode'])
+        schedule = CourseSchedule.objects.create(course=self.course, **_sane_schedule_dates())
+
+        response = self.client.post(self._review_url(), {'action': 'approve'}, format='json')
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        schedule.refresh_from_db()
+        self.assertEqual(schedule.status, 'scheduled')
+
+    def test_approve_leaves_stale_schedule_draft_but_still_publishes(self):
+        self.course.delivery_mode = NidusCourse.DeliveryMode.SCHEDULED
+        self.course.save(update_fields=['delivery_mode'])
+        now = timezone.now()
+        schedule = CourseSchedule.objects.create(
+            course=self.course,
+            enrollment_opens_at=now - timedelta(days=30),
+            enrollment_closes_at=now - timedelta(days=10),
+            start_date=now - timedelta(days=5),
+            end_date=now + timedelta(days=25),
+        )
+
+        response = self.client.post(self._review_url(), {'action': 'approve'}, format='json')
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data['data']['status'], 'published')
+        schedule.refresh_from_db()
+        self.assertEqual(schedule.status, 'draft')
 
 
 # ---------------------------------------------------------------------------

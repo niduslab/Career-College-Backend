@@ -206,7 +206,17 @@ Pattern: define dedicated `Learner*Serializer` classes that simply don't declare
 
 ### Scheduled Courses (Cohorts)
 
-Cohort delivery layered on the existing course — see `docs/architecture/22-scheduled-courses.md` and `docs/api-testing/postman-schedules.md`. `CourseSchedule` (`courses/all_models/schedule_models.py`, inherits `AuthoredModel`) wraps a `NidusCourse` (`course.schedules`, many per course — re-runs are new schedules, never duplicated courses): `cohort_label`, `timezone` (unvalidated, mirrors `Webinar.timezone`), `enrollment_opens_at`/`enrollment_closes_at`, `start_date`, `end_date` (nullable = open-ended), `max_seats` (nullable = unlimited), `status`. A course with no schedules is plain self-paced — untouched.
+Cohort delivery layered on the existing course — see `docs/architecture/22-scheduled-courses.md`, `docs/architecture/23-scheduled-course-lifecycle.md`, and `docs/api-testing/postman-schedules.md`. `CourseSchedule` (`courses/all_models/schedule_models.py`, inherits `AuthoredModel`) wraps a `NidusCourse` (`course.schedules`, many per course — re-runs are new schedules, never duplicated courses): `cohort_label`, `timezone` (unvalidated, mirrors `Webinar.timezone`), `enrollment_opens_at`/`enrollment_closes_at`, `start_date`, `end_date` (nullable = open-ended), `max_seats` (nullable = unlimited), `status`. A course with no schedules is plain self-paced — untouched.
+
+**`delivery_mode`** (`NidusCourse.DeliveryMode`: `self_paced` | `scheduled`) is set at creation and **immutable afterward** (`validate_delivery_mode()` on the update serializer rejects any change). It changes what `_validate_course_completeness()` demands of the curriculum:
+
+| | `self_paced` | `scheduled` |
+|---|---|---|
+| Sections | required (≥1), and every section must have content | **not required at all** — a scheduled course may submit with zero sections |
+| `NidusCourse.course_outline` (plain `TextField`, blank by default) | not required | **required** — must be non-blank before submission; stands in for a fully-authored curriculum so the admin can judge scope |
+| Attached `CourseSchedule` | n/a | required (≥1), with structurally sane dates (`date_logic_errors()`) |
+
+Sections/content are still fully supported for scheduled courses (drip content added later, see below) — they're just optional at submission time. `course_outline` is exposed read-only on `NidusCourseSerializer`, `CatalogCourseDetailSerializer`, and the my-courses meta serializer, and writable on `NidusCourseCreateUpdateSerializer` (normalized like `learning_objectives`/`prerequisites`/`audiences`).
 
 **State machine** (`transition_to(new_status, actor=None)`, single entry point — never set `status` directly): `draft → scheduled → ongoing → completed → archived → draft`, plus `scheduled → draft` (rework valve for premature activation). `draft → scheduled` runs `_validate_activation()`: course `published`, `opens < closes <= start`, `end > start` if set, close/start in future (dict `ValidationError` → 400 with `errors`; illegal transition → plain string → 422). `scheduled → ongoing` and `ongoing → completed` flip **automatically** via the beat task `advance_course_schedules_task` (every 5 min, per-row `transition_to` in per-row try/except — **no info logs in schedule code; error/exception only**). `is_editable()` = `draft|scheduled` (dates PATCHable until start, frozen once `ongoing`); DELETE draft-only → 422 otherwise.
 
@@ -352,7 +362,7 @@ Two corollaries:
 
 **Two-stage submission for institution-owned courses** (`partner_institution` set): the expert calls `/finish/` (→ `institution_review`, content then frozen), and the institution forwards to the admin (`/institution-review/` `submit`) or returns it to the expert (`send_back`). Individual-instructor courses (no `partner_institution`) keep the direct `/submit/` → `under_review` path. `transition_to()` enforces this by ownership: leaving `draft`, an institution course may only go to `institution_review` and an individual course only to `under_review` (cross-routing → `ValidationError`). Expert `/finish/` is scoped to `instructors` (institution user → 404); `/institution-review/` is `IsVerifiedPartnerInstitution`-gated and scoped to the owning institution. See `docs/future_implementations/INSTITUTION_COURSE_SUBMISSION_FLOW.md`.
 
-Leaving `draft` (to either `under_review` or `institution_review`) runs `_validate_course_completeness()`: checks title/description, at least one section, each section has content, all videos `status=ready`, all quizzes have questions with correct answers. `institution_review` is **not** editable (content frozen, like `under_review`).
+Leaving `draft` (to either `under_review` or `institution_review`) runs `_validate_course_completeness()`: checks title/description, all videos `status=ready`, all quizzes have questions with correct answers, plus a `delivery_mode`-dependent curriculum check — see *Scheduled Courses (Cohorts)* below for the self-paced-vs-scheduled split. `institution_review` is **not** editable (content frozen, like `under_review`).
 
 **Never set `status` directly on `NidusCourse` outside of `transition_to()`.**
 

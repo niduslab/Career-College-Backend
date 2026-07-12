@@ -1,7 +1,7 @@
 from rest_framework import serializers
 
 from courses.all_models.schedule_models import CourseSchedule
-from courses.all_serializers.course_serializers import InstructorBriefSerializer
+from courses.all_serializers.course_serializers import InstructorBriefSerializer, NidusCourseSerializer
 
 
 class CourseScheduleSerializer(serializers.ModelSerializer):
@@ -72,3 +72,20 @@ class CourseScheduleCreateUpdateSerializer(serializers.ModelSerializer):
         if errors:
             raise serializers.ValidationError(errors)
         return attrs
+
+
+class CourseAdminReviewDetailSerializer(NidusCourseSerializer):
+    """
+    Admin-review context: base course fields + attached schedules + outline
+    stats, so a platform admin can judge a thin cohort outline before approving.
+    """
+
+    schedules = CourseScheduleSerializer(many=True, read_only=True)
+    outline_stats = serializers.SerializerMethodField()
+
+    class Meta(NidusCourseSerializer.Meta):
+        fields = NidusCourseSerializer.Meta.fields + ['schedules', 'outline_stats']
+        read_only_fields = fields
+
+    def get_outline_stats(self, obj):
+        return obj.content_outline_stats()

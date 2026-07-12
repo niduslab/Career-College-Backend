@@ -16,8 +16,11 @@ from core.permissions import (
     IsVerifiedCourseCreator,
     IsVerifiedPartnerInstitution,
 )
+from courses.all_models.schedule_models import CourseSchedule
+from courses.all_serializers.schedule_serializers import CourseAdminReviewDetailSerializer
 from courses.models import NidusCourse
 from courses.serializers import NidusCourseSerializer
+from courses.services.schedule_service import activate_schedule
 
 logger = logging.getLogger(__name__)
 
@@ -257,6 +260,18 @@ class CourseAdminReviewView(APIView):
     permission_classes = [IsAuthenticated, IsEmailVerified, IsPlatformAdmin]
     parser_classes = [JSONParser, FormParser, MultiPartParser]
 
+    def get(self, request, pk):
+        course = get_object_or_404(
+            NidusCourse.objects
+            .select_related('created_by', 'category', 'partner_institution')
+            .prefetch_related('instructors', 'schedules', 'sections__contents'),
+            pk=pk,
+        )
+        return Response(
+            {'success': True, 'data': CourseAdminReviewDetailSerializer(course).data},
+            status=status.HTTP_200_OK,
+        )
+
     def post(self, request, pk):
         course = get_object_or_404(NidusCourse, pk=pk)
 
@@ -287,11 +302,24 @@ class CourseAdminReviewView(APIView):
                 status=status.HTTP_422_UNPROCESSABLE_ENTITY,
             )
 
+        _stale_schedule_labels = []
+        if action == 'approve':
+            for schedule in course.schedules.filter(status=CourseSchedule.Status.DRAFT):
+                try:
+                    activate_schedule(schedule, request.user)
+                except Exception:
+                    logger.exception(
+                        'Failed to auto-activate schedule %s for course %s on approval',
+                        schedule.pk, course.pk,
+                    )
+                    _stale_schedule_labels.append(schedule.cohort_label or f'Schedule {schedule.pk}')
+
         _course_title = course.title
         _course_slug = course.slug
         _rejection_reason = rejection_reason
         _action = action
         _instructors_snapshot = list(course.instructors.all())
+        _schedule_owner_id = course.partner_institution.user_id if course.partner_institution_id else None
 
         def _notify_review_decision():
             from notifications.models import NotificationEventType
@@ -302,6 +330,23 @@ class CourseAdminReviewView(APIView):
                     _instructors_snapshot,
                     context={'course_title': _course_title, 'course_slug': _course_slug},
                 )
+                if _stale_schedule_labels:
+                    from authentication.models import User
+                    if _schedule_owner_id is not None:
+                        owner = User.objects.filter(pk=_schedule_owner_id).first()
+                        recipients = [owner] if owner else []
+                    else:
+                        recipients = _instructors_snapshot
+                    if recipients:
+                        dispatch(
+                            NotificationEventType.COURSE_SCHEDULE_NEEDS_ATTENTION,
+                            recipients,
+                            context={
+                                'course_title': _course_title,
+                                'course_slug': _course_slug,
+                                'schedule_labels': _stale_schedule_labels,
+                            },
+                        )
             else:
                 dispatch(
                     NotificationEventType.COURSE_REJECTED,

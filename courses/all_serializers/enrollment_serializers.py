@@ -139,7 +139,7 @@ class CatalogCourseDetailSerializer(serializers.ModelSerializer):
             'id', 'title', 'slug', 'description', 'thumbnail', 'price',
             'language', 'level', 'duration_minutes',
             'instructors', 'partner_institution', 'category',
-            'learning_objectives', 'prerequisites', 'audiences',
+            'learning_objectives', 'prerequisites', 'audiences', 'course_outline',
             'total_sections', 'total_content_items', 'sections',
             'published_at',
         ]
@@ -220,7 +220,7 @@ class _MyCourseMetaSerializer(serializers.ModelSerializer):
             'id', 'title', 'slug', 'description', 'thumbnail', 'price',
             'language', 'level', 'duration_minutes', 'status', 'is_published',
             'published_at', 'instructors', 'partner_institution', 'category',
-            'learning_objectives', 'prerequisites', 'audiences',
+            'learning_objectives', 'prerequisites', 'audiences', 'course_outline',
             'total_sections', 'total_content_items',
         ]
         read_only_fields = fields

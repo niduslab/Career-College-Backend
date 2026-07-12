@@ -214,7 +214,18 @@ class SectionContentSerializer(serializers.ModelSerializer):
         if obj.item_type == SectionContent.ItemType.LECTURE:
             lecture = lectures.get(obj.object_id)
             if lecture:
-                return {'id': lecture.id, 'title': lecture.title, 'lecture_type': lecture.lecture_type}
+                actives = [a for a in lecture.video_assets.all() if a.is_active]
+                active_video_asset = None
+                if actives:
+                    actives.sort(key=lambda a: a.created_at, reverse=True)
+                    active_video_asset = VideoAssetSerializer(actives[0]).data
+                return {
+                    'id': lecture.id,
+                    'title': lecture.title,
+                    'lecture_type': lecture.lecture_type,
+                    'is_preview': lecture.is_preview,
+                    'active_video_asset': active_video_asset,
+                }
 
         elif obj.item_type == SectionContent.ItemType.QUIZ:
             quiz = quizzes.get(obj.object_id)

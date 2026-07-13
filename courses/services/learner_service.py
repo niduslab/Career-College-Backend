@@ -18,7 +18,8 @@ from collections import defaultdict
 from typing import Optional, Tuple
 
 from django.db import transaction
-from django.db.models import Prefetch
+from django.db.models import F, Prefetch
+from django.utils import timezone
 
 from courses.models import (
     Assignment,
@@ -61,10 +62,54 @@ def resolve_course_access(user, course: NidusCourse) -> Tuple[bool, Optional[Enr
     if is_instructor:
         return True, None
 
-    enrollment = Enrollment.objects.filter(
-        user=user, course=course, is_active=True,
-    ).first()
+    # A learner can hold both a self-paced and a cohort enrollment for the
+    # same course; self-paced (schedule NULL) sorts first because it is the
+    # most permissive — no release-timeline gates apply to it.
+    enrollment = (
+        Enrollment.objects
+        .filter(user=user, course=course, is_active=True)
+        .select_related('schedule')
+        .order_by(F('schedule_id').asc(nulls_first=True))
+        .first()
+    )
     return False, enrollment
+
+
+class ContentNotReleasedError(Exception):
+    """An enrolled learner requested content whose release time hasn't arrived.
+
+    Raised for cohort enrollments before the schedule's start_date, and for
+    sections whose `unlocks_at` is still in the future (drip lock). Views map
+    it to 422 — the caller has legitimate access, this is a timing rule, not
+    an access-denied case (so never 403/404).
+    """
+
+    def __init__(self, message='This content has not been released yet.'):
+        super().__init__(message)
+        self.message = message
+        self.http_status = 422
+
+
+def assert_content_released(enrollment, section: CourseSection) -> None:
+    """Enforce the release-timeline gates for a learner's enrollment.
+
+    No-op when `enrollment` is None (instructor preview bypass) or when no
+    gate applies. Two independent gates:
+      1. Cohort window — a schedule-bound enrollment gets no content before
+         the cohort's start_date.
+      2. Section drip lock — a section with a future `unlocks_at` is locked
+         for every learner regardless of enrollment type.
+    """
+    if enrollment is None:
+        return
+
+    now = timezone.now()
+    schedule = enrollment.schedule
+    if schedule is not None and schedule.start_date > now:
+        raise ContentNotReleasedError('This course has not started yet.')
+
+    if section.unlocks_at is not None and section.unlocks_at > now:
+        raise ContentNotReleasedError('This content has not been released yet.')
 
 
 def _load_sections_and_contents(course) -> Tuple[list, dict]:
@@ -74,7 +119,7 @@ def _load_sections_and_contents(course) -> Tuple[list, dict]:
     sections = list(
         CourseSection.objects
         .filter(course=course)
-        .only('id', 'title', 'position')
+        .only('id', 'title', 'position', 'unlocks_at')
         .order_by('position', 'id')
     )
     section_ids = [s.id for s in sections]
@@ -119,7 +164,12 @@ def _lecture_durations(lecture_ids: list[int]) -> dict[int, Optional[int]]:
     return {row['lecture_id']: row['duration_seconds'] for row in rows}
 
 
-def load_learner_curriculum(course: NidusCourse, user, is_instructor: bool) -> dict:
+def load_learner_curriculum(
+    course: NidusCourse,
+    user,
+    is_instructor: bool,
+    enrollment: Optional[Enrollment] = None,
+) -> dict:
     """
     Light-weight curriculum outline for the learner sidebar.
 
@@ -169,8 +219,23 @@ def load_learner_curriculum(course: NidusCourse, user, is_instructor: bool) -> d
 
     durations = _lecture_durations(list(lectures.keys()))
 
+    # Release-timeline lock markers. Structure stays visible either way —
+    # locked sections are listed so the learner sees what's coming; only
+    # the per-item detail endpoints refuse locked content (422).
+    now = timezone.now()
+    schedule = enrollment.schedule if enrollment is not None else None
+    course_not_started = (
+        not is_instructor
+        and schedule is not None
+        and schedule.start_date > now
+    )
+
     sections_payload = []
     for section in sections:
+        is_locked = not is_instructor and (
+            course_not_started
+            or (section.unlocks_at is not None and section.unlocks_at > now)
+        )
         items_payload = []
         for row in contents_by_section.get(section.id, []):
             item = {
@@ -212,6 +277,8 @@ def load_learner_curriculum(course: NidusCourse, user, is_instructor: bool) -> d
             'id': section.id,
             'title': section.title,
             'position': section.position,
+            'unlocks_at': section.unlocks_at,
+            'is_locked': is_locked,
             'items': items_payload,
         })
 
@@ -248,6 +315,7 @@ def get_consumption_lecture(user, lecture_id: int):
     is_instructor, enrollment = resolve_course_access(user, course)
     if not is_instructor and enrollment is None:
         raise Lecture.DoesNotExist
+    assert_content_released(enrollment, lecture.section)
 
     watch_progress = None
     if not is_instructor:
@@ -342,6 +410,7 @@ def get_quiz_for_consumption(user, quiz_id: int):
     is_instructor, enrollment = resolve_course_access(user, course)
     if not is_instructor and enrollment is None:
         raise Quiz.DoesNotExist
+    assert_content_released(enrollment, quiz.section)
 
     latest_attempt = None
     if not is_instructor:
@@ -478,6 +547,7 @@ def get_assignment_for_consumption(user, assignment_id: int):
     is_instructor, enrollment = resolve_course_access(user, course)
     if not is_instructor and enrollment is None:
         raise Assignment.DoesNotExist
+    assert_content_released(enrollment, assignment.section)
 
     latest_submission = None
     if not is_instructor:
@@ -690,6 +760,7 @@ def get_coding_exercise_for_consumption(user, exercise_id: int):
     is_instructor, enrollment = resolve_course_access(user, course)
     if not is_instructor and enrollment is None:
         raise CodingExercise.DoesNotExist
+    assert_content_released(enrollment, exercise.section)
 
     # Test cases: learners only get visible ones; instructors preview both.
     tc_qs = exercise.test_cases.all().order_by('position', 'id')

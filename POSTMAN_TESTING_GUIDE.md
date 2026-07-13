@@ -1529,7 +1529,9 @@ python manage.py createsuperuser
 ```
 
 `category` is **required** on create (must be an **active** category id — see Section 35A). Omitting
-it → 400 `errors.category: ["This field is required."]`.
+it → 400 `errors.category: ["This field is required."]`. Inactive or unknown id → 400
+`errors.category: ["Invalid pk \"999\" - object does not exist."]`. On PATCH, `category` stays
+optional (partial update), but if sent it must still resolve to an active id.
 
 **Expected 201:**
 ```json

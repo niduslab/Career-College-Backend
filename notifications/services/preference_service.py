@@ -11,6 +11,7 @@ EVENT_TO_CATEGORY: dict[str, str] = {
     NotificationEventType.COURSE_ARCHIVED:         NotificationCategory.COURSE_MANAGEMENT,
     NotificationEventType.COURSE_MARKED_FINISHED:  NotificationCategory.COURSE_MANAGEMENT,
     NotificationEventType.COURSE_SENT_BACK:        NotificationCategory.COURSE_MANAGEMENT,
+    NotificationEventType.COURSE_SCHEDULE_NEEDS_ATTENTION: NotificationCategory.COURSE_MANAGEMENT,
     NotificationEventType.VIDEO_READY:             NotificationCategory.COURSE_MANAGEMENT,
     NotificationEventType.VIDEO_FAILED:            NotificationCategory.COURSE_MANAGEMENT,
     NotificationEventType.INVITE_SENT:             NotificationCategory.COLLABORATION,

@@ -26,6 +26,8 @@ a full tour, or jump to the subsystem you're working on.
 18. `18-partner-institutions.md` — institution verification, expert onboarding, departments, course creation + roster assignment
 19. `19-webinars.md` — institution-owned webinars, presenter roles, publish state machine, catalog + registration
 20. `20-analytics-dashboard.md` — partner-institution analytics: metrics, institution-scoping, query strategy, revenue/attendance caveats
+21. `21-payments.md` — SSLCommerz hosted checkout: order state machine, validation trust model, callback topology
+22. `22-scheduled-courses.md` — cohort schedules: schedule state machine, cohort enrollment, drip release, learner gates
 
 ## Scope
 

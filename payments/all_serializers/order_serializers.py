@@ -20,7 +20,7 @@ class OrderSerializer(serializers.ModelSerializer):
     class Meta:
         model = Order
         fields = [
-            'id', 'item_type', 'course_title', 'course_slug',
+            'id', 'item_type', 'course_title', 'course_slug', 'schedule_id',
             'webinar_title', 'webinar_slug', 'amount', 'currency',
             'status', 'tran_id', 'paid_at', 'created_at',
         ]

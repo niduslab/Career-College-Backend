@@ -109,7 +109,7 @@ class AssignmentDetailAPIView(APIView):
     def patch(self, request, assignment_id):
         # Confirm ownership before delegating to the service.
         assignment = self._get_owned_assignment(request, assignment_id)
-        if err := guard_editable(assignment.section.course):
+        if err := guard_editable(assignment.section.course, section=assignment.section):
             return err
 
         # Pass the instance so cross-field validation (e.g. passing_score
@@ -145,7 +145,7 @@ class AssignmentDetailAPIView(APIView):
     def delete(self, request, assignment_id):
         # Confirm ownership before delegating.
         assignment = self._get_owned_assignment(request, assignment_id)
-        if err := guard_editable(assignment.section.course):
+        if err := guard_editable(assignment.section.course, section=assignment.section):
             return err
         try:
             delete_assignment(assignment_id, request.user)
@@ -260,7 +260,7 @@ class AssignmentQuestionDetailAPIView(APIView):
 
     def patch(self, request, question_id):
         question = self._get_owned_question(request, question_id)
-        if err := guard_editable(question.assignment.section.course):
+        if err := guard_editable(question.assignment.section.course, section=question.assignment.section):
             return err
 
         # Pass the instance so the rubric / points cross-field validator can
@@ -299,7 +299,7 @@ class AssignmentQuestionDetailAPIView(APIView):
 
     def delete(self, request, question_id):
         question = self._get_owned_question(request, question_id)
-        if err := guard_editable(question.assignment.section.course):
+        if err := guard_editable(question.assignment.section.course, section=question.assignment.section):
             return err
         try:
             delete_question(question_id, request.user)
@@ -338,7 +338,7 @@ class AssignmentQuestionReorderAPIView(APIView):
             pk=assignment_id,
             section__course__instructors=request.user,
         )
-        if err := guard_editable(assignment.section.course):
+        if err := guard_editable(assignment.section.course, section=assignment.section):
             return err
 
         try:

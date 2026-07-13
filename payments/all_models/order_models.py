@@ -36,6 +36,14 @@ class Order(TimestampedModel):
         blank=True,
         help_text='Course being purchased (mutually exclusive with webinar).',
     )
+    schedule = models.ForeignKey(
+        'courses.CourseSchedule',
+        on_delete=models.PROTECT,
+        related_name='payment_orders',
+        null=True,
+        blank=True,
+        help_text='Cohort schedule being purchased, if this is a cohort seat. Null = self-paced.',
+    )
     webinar = models.ForeignKey(
         'webinars.Webinar',
         on_delete=models.PROTECT,
@@ -90,10 +98,18 @@ class Order(TimestampedModel):
             ),
             # At most one successful purchase per (user, target); pending /
             # failed / cancelled attempts may pile up freely.
+            # Self-paced course purchase: one PAID order per (user, course) ever.
             models.UniqueConstraint(
                 fields=['user', 'course'],
-                condition=models.Q(status='paid'),
-                name='uniq_paid_order_user_course',
+                condition=models.Q(status='paid', schedule__isnull=True),
+                name='uniq_paid_order_user_course_selfpaced',
+            ),
+            # Cohort seat purchase: one PAID order per (user, schedule); a learner
+            # may buy into a different cohort of the same course later.
+            models.UniqueConstraint(
+                fields=['user', 'schedule'],
+                condition=models.Q(status='paid', schedule__isnull=False),
+                name='uniq_paid_order_user_schedule',
             ),
             models.UniqueConstraint(
                 fields=['user', 'webinar'],

@@ -139,7 +139,7 @@ class CatalogCourseDetailSerializer(serializers.ModelSerializer):
             'id', 'title', 'slug', 'description', 'thumbnail', 'price',
             'language', 'level', 'duration_minutes',
             'instructors', 'partner_institution', 'category',
-            'learning_objectives', 'prerequisites', 'audiences',
+            'learning_objectives', 'prerequisites', 'audiences', 'course_outline',
             'total_sections', 'total_content_items', 'sections',
             'published_at',
         ]
@@ -176,7 +176,7 @@ class EnrollmentSerializer(serializers.ModelSerializer):
     class Meta:
         model = Enrollment
         fields = [
-            'id', 'course', 'enrollment_type', 'is_active',
+            'id', 'course', 'schedule', 'enrollment_type', 'is_active',
             'progress_percent', 'completed_at', 'last_accessed_at',
             'created_at',
         ]
@@ -220,7 +220,7 @@ class _MyCourseMetaSerializer(serializers.ModelSerializer):
             'id', 'title', 'slug', 'description', 'thumbnail', 'price',
             'language', 'level', 'duration_minutes', 'status', 'is_published',
             'published_at', 'instructors', 'partner_institution', 'category',
-            'learning_objectives', 'prerequisites', 'audiences',
+            'learning_objectives', 'prerequisites', 'audiences', 'course_outline',
             'total_sections', 'total_content_items',
         ]
         read_only_fields = fields

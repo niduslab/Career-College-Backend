@@ -574,3 +574,43 @@ def expire_instructor_invites_task():
     if count:
         logger.info('expire_instructor_invites_task: expired %d invite(s).', count)
     return {'expired': count}
+
+
+@shared_task
+def advance_course_schedules_task():
+    """Auto-advance course schedules whose dates have passed.
+
+    scheduled → ongoing when start_date is reached; ongoing → completed when
+    end_date is reached (null end_date stays ongoing). Per-row transition_to()
+    (not bulk update) so validation applies; one bad row never blocks the
+    sweep. Runs via CELERY_BEAT_SCHEDULE.
+    """
+    from courses.models import CourseSchedule
+
+    now = timezone.now()
+    started = completed = 0
+
+    due_to_start = CourseSchedule.objects.filter(
+        status=CourseSchedule.Status.SCHEDULED,
+        start_date__lte=now,
+    )
+    for schedule in due_to_start:
+        try:
+            schedule.transition_to(CourseSchedule.Status.ONGOING)
+            started += 1
+        except Exception:
+            logger.exception('Failed to advance schedule %s to ongoing', schedule.pk)
+
+    due_to_end = CourseSchedule.objects.filter(
+        status=CourseSchedule.Status.ONGOING,
+        end_date__isnull=False,
+        end_date__lte=now,
+    )
+    for schedule in due_to_end:
+        try:
+            schedule.transition_to(CourseSchedule.Status.COMPLETED)
+            completed += 1
+        except Exception:
+            logger.exception('Failed to advance schedule %s to completed', schedule.pk)
+
+    return {'started': started, 'completed': completed}

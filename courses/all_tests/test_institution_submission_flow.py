@@ -243,3 +243,59 @@ class InstitutionSubmissionFlowTests(APITestCase):
         self.client.post(self._finish_url())
         self.course.refresh_from_db()
         self.assertEqual(self.course.status, 'institution_review')
+
+    # ---- institution review queue -------------------------------------------
+
+    def _queue_url(self):
+        return reverse('courses:course-institution-review-queue')
+
+    def test_institution_sees_only_own_institution_review_courses(self):
+        self.course.transition_to('institution_review')
+        other_course = self._make_complete_course(
+            created_by=self.other_inst_user,
+            institution=self.other_inst_user.partner_institution_profile,
+            title='Other Institute Course',
+        )
+        other_course.transition_to('institution_review')
+
+        self.client.force_authenticate(self.institution_user)
+        response = self.client.get(self._queue_url())
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        ids = [row['id'] for row in response.data['data']['results']]
+        self.assertIn(self.course.pk, ids)
+        self.assertNotIn(other_course.pk, ids)
+
+    def test_draft_course_not_in_queue(self):
+        self.client.force_authenticate(self.institution_user)
+        response = self.client.get(self._queue_url())
+        ids = [row['id'] for row in response.data['data']['results']]
+        self.assertNotIn(self.course.pk, ids)
+
+    def test_expert_forbidden_on_queue(self):
+        self.client.force_authenticate(self.expert)
+        response = self.client.get(self._queue_url())
+        self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
+
+    def test_queue_delivery_mode_filter(self):
+        self.course.transition_to('institution_review')
+
+        scheduled_course = NidusCourse.objects.create(
+            created_by=self.institution_user, partner_institution=self.institution,
+            title='Cohort Institution Course', description='Cohort-based.',
+            delivery_mode=NidusCourse.DeliveryMode.SCHEDULED,
+            course_outline='Week 1: Intro', status='institution_review',
+        )
+
+        self.client.force_authenticate(self.institution_user)
+        response = self.client.get(self._queue_url(), {'delivery_mode': 'scheduled'})
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        ids = [row['id'] for row in response.data['data']['results']]
+        self.assertIn(scheduled_course.pk, ids)
+        self.assertNotIn(self.course.pk, ids)
+
+    def test_queue_invalid_delivery_mode_returns_400(self):
+        self.client.force_authenticate(self.institution_user)
+        response = self.client.get(self._queue_url(), {'delivery_mode': 'bogus'})
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)

@@ -18,6 +18,7 @@ service module so that sensitive instructor-only fields cannot leak.
 
 import logging
 
+from django.db.models import F
 from django.shortcuts import get_object_or_404
 from rest_framework import status
 from rest_framework.permissions import IsAuthenticated
@@ -54,6 +55,8 @@ from courses.serializers import (
 from courses.services import (
     AssignmentSubmissionError,
     CodingSubmissionError,
+    ContentNotReleasedError,
+    assert_content_released,
     get_assignment_for_consumption,
     get_coding_exercise_for_consumption,
     get_consumption_lecture,
@@ -73,6 +76,14 @@ from courses.services import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+def _not_released_response(exc):
+    """422 for release-timeline violations (cohort pre-start / drip lock)."""
+    return Response(
+        {'success': False, 'message': exc.message},
+        status=exc.http_status,
+    )
 
 
 class LearnerCurriculumView(APIView):
@@ -103,7 +114,7 @@ class LearnerCurriculumView(APIView):
         if enrollment is not None:
             update_last_accessed(enrollment)
 
-        data = load_learner_curriculum(course, request.user, is_instructor)
+        data = load_learner_curriculum(course, request.user, is_instructor, enrollment=enrollment)
         return Response({'success': True, 'data': data}, status=status.HTTP_200_OK)
 
 
@@ -128,6 +139,8 @@ class LearnerLectureDetailView(APIView):
                 {'success': False, 'message': 'Lecture not found.'},
                 status=status.HTTP_404_NOT_FOUND,
             )
+        except ContentNotReleasedError as exc:
+            return _not_released_response(exc)
 
         duration_seconds = None
         active_asset = lecture.video_assets.filter(is_active=True).order_by('-created_at').first()
@@ -175,12 +188,17 @@ class LearnerLectureProgressView(APIView):
             user=request.user,
             course=lecture.section.course,
             is_active=True,
-        ).first()
+        ).select_related('schedule').order_by(F('schedule_id').asc(nulls_first=True)).first()
         if enrollment is None:
             return Response(
                 {'success': False, 'message': 'Lecture not found.'},
                 status=status.HTTP_404_NOT_FOUND,
             )
+
+        try:
+            assert_content_released(enrollment, lecture.section)
+        except ContentNotReleasedError as exc:
+            return _not_released_response(exc)
 
         serializer = WatchProgressUpsertSerializer(data=request.data)
         if not serializer.is_valid():
@@ -249,6 +267,8 @@ class LearnerQuizDetailView(APIView):
                 {'success': False, 'message': 'Quiz not found.'},
                 status=status.HTTP_404_NOT_FOUND,
             )
+        except ContentNotReleasedError as exc:
+            return _not_released_response(exc)
 
         serializer = LearnerQuizDetailSerializer(
             quiz, context={'latest_attempt': latest_attempt},
@@ -290,12 +310,17 @@ class LearnerQuizSubmitView(APIView):
             user=request.user,
             course=quiz.section.course,
             is_active=True,
-        ).first()
+        ).select_related('schedule').order_by(F('schedule_id').asc(nulls_first=True)).first()
         if enrollment is None:
             return Response(
                 {'success': False, 'message': 'Quiz not found.'},
                 status=status.HTTP_404_NOT_FOUND,
             )
+
+        try:
+            assert_content_released(enrollment, quiz.section)
+        except ContentNotReleasedError as exc:
+            return _not_released_response(exc)
 
         serializer = QuizSubmissionSerializer(data=request.data, context={'quiz': quiz})
         if not serializer.is_valid():
@@ -358,6 +383,8 @@ class LearnerAssignmentDetailView(APIView):
                 {'success': False, 'message': 'Assignment not found.'},
                 status=status.HTTP_404_NOT_FOUND,
             )
+        except ContentNotReleasedError as exc:
+            return _not_released_response(exc)
 
         serializer = LearnerAssignmentDetailSerializer(
             assignment, context={'latest_submission': latest_submission},
@@ -400,12 +427,17 @@ class LearnerAssignmentSubmitView(APIView):
             user=request.user,
             course=assignment.section.course,
             is_active=True,
-        ).first()
+        ).select_related('schedule').order_by(F('schedule_id').asc(nulls_first=True)).first()
         if enrollment is None:
             return Response(
                 {'success': False, 'message': 'Assignment not found.'},
                 status=status.HTTP_404_NOT_FOUND,
             )
+
+        try:
+            assert_content_released(enrollment, assignment.section)
+        except ContentNotReleasedError as exc:
+            return _not_released_response(exc)
 
         serializer = AssignmentSubmissionInputSerializer(
             data=request.data, context={'assignment': assignment},
@@ -576,6 +608,8 @@ class LearnerCodingExerciseDetailView(APIView):
                 {'success': False, 'message': 'Coding exercise not found.'},
                 status=status.HTTP_404_NOT_FOUND,
             )
+        except ContentNotReleasedError as exc:
+            return _not_released_response(exc)
 
         serializer = LearnerCodingExerciseDetailSerializer(
             exercise,
@@ -610,6 +644,8 @@ class LearnerCodingRunView(APIView):
                 {'success': False, 'message': 'Coding exercise not found.'},
                 status=status.HTTP_404_NOT_FOUND,
             )
+        except ContentNotReleasedError as exc:
+            return _not_released_response(exc)
 
         input_serializer = CodingRunSubmitSerializer(data=request.data)
         if not input_serializer.is_valid():
@@ -671,6 +707,8 @@ class LearnerCodingSubmitView(APIView):
                 {'success': False, 'message': 'Coding exercise not found.'},
                 status=status.HTTP_404_NOT_FOUND,
             )
+        except ContentNotReleasedError as exc:
+            return _not_released_response(exc)
 
         input_serializer = CodingRunSubmitSerializer(data=request.data)
         if not input_serializer.is_valid():

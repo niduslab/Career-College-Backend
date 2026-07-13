@@ -122,6 +122,10 @@ class NidusCourse(models.Model):
         INTERMEDIATE = 'intermediate', 'Intermediate'
         ADVANCED = 'advanced', 'Advanced'
 
+    class DeliveryMode(models.TextChoices):
+        SELF_PACED = 'self_paced', 'Self-Paced'
+        SCHEDULED = 'scheduled', 'Scheduled (Cohort-Based)'
+
     created_by = models.ForeignKey(
         settings.AUTH_USER_MODEL,
         on_delete=models.CASCADE,
@@ -169,6 +173,13 @@ class NidusCourse(models.Model):
         default='',
         help_text='Intended audience segments, one per line.',
     )
+    course_outline = models.TextField(
+        blank=True,
+        default='',
+        help_text='Full topic/week-by-week outline. Required at submission for '
+                   'scheduled (cohort) courses in place of fully-authored sections; '
+                   'optional for self-paced courses.',
+    )
     thumbnail = models.ImageField(upload_to=course_thumbnail_upload_path, blank=True, null=True)
     price = models.DecimalField(
         max_digits=10,
@@ -187,6 +198,15 @@ class NidusCourse(models.Model):
     duration_minutes = models.PositiveIntegerField(
         default=0,
         help_text='Total course video duration in minutes.',
+    )
+    delivery_mode = models.CharField(
+        max_length=20,
+        choices=DeliveryMode.choices,
+        default=DeliveryMode.SELF_PACED,
+        db_index=True,
+        help_text='Set at creation, immutable afterward. Scheduled courses do not '
+                   'require sections at submission (a written course_outline stands '
+                   'in) and require an attached CourseSchedule.',
     )
     status = models.CharField(
         max_length=20,
@@ -337,6 +357,19 @@ class NidusCourse(models.Model):
             reviewer.email if reviewer else 'instructor',
         )
 
+    def content_outline_stats(self):
+        """
+        Section/content-authoring snapshot — pure read, never raises. Shared by
+        submission validation and the admin review endpoint.
+        """
+        sections = list(self.sections.all())
+        empty_titles = [s.title for s in sections if not s.contents.exists()]
+        return {
+            'total_sections': len(sections),
+            'sections_with_content': len(sections) - len(empty_titles),
+            'empty_section_titles': empty_titles,
+        }
+
     def _validate_course_completeness(self):
         """
         Ensure the course meets minimum quality standards before submission.
@@ -350,20 +383,26 @@ class NidusCourse(models.Model):
             if not value or (isinstance(value, str) and not value.strip()):
                 errors[field_name] = f'{field_name} is required before submitting.'
 
-        # Must have at least one section
-        section_count = self.sections.count()
-        if section_count == 0:
-            errors['sections'] = 'Course must have at least one section.'
-
-        # Every section must have at least one content item
-        if section_count > 0:
-            empty_sections = []
-            for section in self.sections.all():
-                if not section.contents.exists():
-                    empty_sections.append(section.title)
-            if empty_sections:
-                errors['empty_sections'] = (
-                    f'These sections have no content: {", ".join(empty_sections)}.'
+        if self.delivery_mode == self.DeliveryMode.SELF_PACED:
+            # Self-paced courses have no later "unlock" moment, so the full
+            # curriculum must exist (and be filled in) up front.
+            section_count = self.sections.count()
+            if section_count == 0:
+                errors['sections'] = 'Course must have at least one section.'
+            else:
+                stats = self.content_outline_stats()
+                if stats['empty_section_titles']:
+                    errors['empty_sections'] = (
+                        f'These sections have no content: {", ".join(stats["empty_section_titles"])}.'
+                    )
+        else:
+            # Scheduled (cohort) courses don't need sections at submission —
+            # content can drip in over the run. A written outline stands in
+            # for the curriculum so the admin can judge scope before approving.
+            if not self.course_outline.strip():
+                errors['course_outline'] = (
+                    'A scheduled (cohort) course must have a course outline before '
+                    'it can be submitted for review.'
                 )
 
         #All video lectures must be done transcoding
@@ -400,6 +439,24 @@ class NidusCourse(models.Model):
         if incomplete_quizzes:
             errors['quizzes'] = f'Incomplete quizzes: {"; ".join(incomplete_quizzes)}.'
 
+        # Scheduled (cohort) courses must have an attached schedule with sane dates.
+        if self.delivery_mode == self.DeliveryMode.SCHEDULED:
+            schedules = list(self.schedules.all())
+            if not schedules:
+                errors['schedules'] = (
+                    'A scheduled (cohort) course must have at least one schedule attached '
+                    'before it can be submitted for review.'
+                )
+            else:
+                bad = []
+                for sch in schedules:
+                    problems = sch.date_logic_errors()
+                    if problems:
+                        label = sch.cohort_label or f'Schedule {sch.pk}'
+                        bad.append(f'{label}: ' + '; '.join(problems.values()))
+                if bad:
+                    errors['schedule_dates'] = ' | '.join(bad)
+
         if errors:
             raise ValidationError(errors)
 
@@ -415,6 +472,11 @@ class CourseSection(AuthoredModel):
     title = models.CharField(max_length=255)
     description = models.TextField(blank=True, default='')
     position = models.PositiveIntegerField(default=1, db_index=True)
+    unlocks_at = models.DateTimeField(
+        blank=True,
+        null=True,
+        help_text='Drip-release time for scheduled cohorts. Null = unlocked immediately.',
+    )
 
     class Meta:
         db_table = 'course_sections'

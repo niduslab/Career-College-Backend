@@ -18,8 +18,10 @@ from courses.all_views.course_views import (
     CourseListAPIView,
 )
 from courses.all_views.status_views import (
+    CourseAdminPendingReviewListView,
     CourseAdminReviewView,
     CourseArchiveView,
+    CourseInstitutionReviewQueueView,
     CourseInstitutionReviewView,
     CourseMarkFinishedView,
     CourseRestoreView,
@@ -62,6 +64,13 @@ from courses.all_views.invite_views import (
 from courses.all_views.institution_course_views import (
     InstitutionCourseInstructorView,
 )
+from courses.all_views.schedule_views import (
+    CourseScheduleActivateView,
+    CourseScheduleArchiveView,
+    CourseScheduleDetailView,
+    CourseScheduleListCreateView,
+    CourseScheduleReworkView,
+)
 from courses.all_views.category_views import (
     CourseCategoryDetailView,
     CourseCategoryListCreateView,
@@ -100,6 +109,11 @@ __all__ = [
     'InviteDeclineView',
     'MyInviteListView',
     'InstitutionCourseInstructorView',
+    'CourseScheduleListCreateView',
+    'CourseScheduleDetailView',
+    'CourseScheduleActivateView',
+    'CourseScheduleArchiveView',
+    'CourseScheduleReworkView',
     'AssignmentListAPIView',
     'AssignmentDetailAPIView',
     'AssignmentQuestionListCreateAPIView',
@@ -127,7 +141,9 @@ __all__ = [
     'QuizAnswerDetailAPIView',
     'CourseSubmitForReviewView',
     'CourseMarkFinishedView',
+    'CourseInstitutionReviewQueueView',
     'CourseInstitutionReviewView',
+    'CourseAdminPendingReviewListView',
     'CourseAdminReviewView',
     'CourseReworkView',
     'CourseArchiveView',

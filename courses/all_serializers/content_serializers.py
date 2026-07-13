@@ -64,7 +64,7 @@ class CourseSectionSerializer(serializers.ModelSerializer):
         model = CourseSection
         fields = [
             'id', 'course_id', 'course_title', 'title', 'description',
-            'position', 'created_by', 'last_edited_by', 'created_at', 'updated_at',
+            'position', 'unlocks_at', 'created_by', 'last_edited_by', 'created_at', 'updated_at',
         ]
         read_only_fields = ['id', 'course_id', 'course_title', 'created_by', 'last_edited_by', 'created_at', 'updated_at']
 
@@ -72,7 +72,7 @@ class CourseSectionSerializer(serializers.ModelSerializer):
 class CourseSectionCreateUpdateSerializer(serializers.ModelSerializer):
     class Meta:
         model = CourseSection
-        fields = ['title', 'description', 'position']
+        fields = ['title', 'description', 'position', 'unlocks_at']
 
     def validate_title(self, value):
         title = value.strip()

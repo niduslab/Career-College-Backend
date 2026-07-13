@@ -313,12 +313,18 @@ content, all videos `ready`, all quizzes have questions with a correct answer.
 **Partner-institution course** (two-stage):
 
 1. Expert: **POST** `{{base_url}}/courses/{{course_id}}/finish/` → `draft` → `institution_review`.
-2. Institution: **POST** `{{base_url}}/courses/{{course_id}}/institution-review/` with
+2. Institution browses its queue: **GET** `{{base_url}}/courses/institution-review-queue/` — lists
+   the caller institution's own `institution_review` courses, paginated. No course id needed; scope
+   comes entirely from the authenticated institution.
+3. Institution: **POST** `{{base_url}}/courses/{{course_id}}/institution-review/` with
    `{ "action": "submit" }` → `under_review`, or `{ "action": "send_back", "rejection_reason": "..." }`
    → `rejected`.
 
 Other transitions: `/rework/` (`rejected` → `draft`), `/archive/` (`published` → `archived`,
-`archived` → `draft`). Admin approves via `/review/`.
+`archived` → `draft`). Admin first browses **GET** `{{base_url}}/courses/admin/pending-review/`
+(all `under_review` courses, oldest-first, paginated) to find work, then approves/rejects the chosen
+course via `/review/`. Both queue endpoints accept `?delivery_mode=self_paced|scheduled` to narrow
+the list; an unrecognized value → `400`.
 
 ---
 

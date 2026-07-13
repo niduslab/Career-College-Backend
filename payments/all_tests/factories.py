@@ -18,7 +18,7 @@ def make_user(email, user_type='learner', name=None):
     )
 
 
-def make_course(instructor, *, slug, price='49.00', published=True):
+def make_course(instructor, *, slug, price='49.00', published=True, delivery_mode=None):
     course = NidusCourse.objects.create(
         created_by=instructor,
         title=slug.replace('-', ' ').title(),
@@ -29,6 +29,7 @@ def make_course(instructor, *, slug, price='49.00', published=True):
             else NidusCourse.CourseStatus.DRAFT
         ),
         price=Decimal(price),
+        delivery_mode=delivery_mode or NidusCourse.DeliveryMode.SELF_PACED,
     )
     course.instructors.add(instructor)
     return course

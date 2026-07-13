@@ -17,6 +17,11 @@ from courses.views import (
     InviteDeclineView,
     MyInviteListView,
     InstitutionCourseInstructorView,
+    CourseScheduleActivateView,
+    CourseScheduleArchiveView,
+    CourseScheduleDetailView,
+    CourseScheduleListCreateView,
+    CourseScheduleReworkView,
     AssignmentDetailAPIView,
     AssignmentListAPIView,
     AssignmentQuestionDetailAPIView,
@@ -29,8 +34,10 @@ from courses.views import (
     CodingExerciseLanguageConfigListCreateAPIView,
     CodingTestCaseDetailAPIView,
     CodingTestCaseListCreateAPIView,
+    CourseAdminPendingReviewListView,
     CourseAdminReviewView,
     CourseArchiveView,
+    CourseInstitutionReviewQueueView,
     CourseInstitutionReviewView,
     CourseMarkFinishedView,
     CourseRestoreView,
@@ -160,13 +167,22 @@ urlpatterns = [
     # -------------------------------------------------------------------------
     path('<int:pk>/submit/', CourseSubmitForReviewView.as_view(), name='course-submit'),
     path('<int:pk>/finish/', CourseMarkFinishedView.as_view(), name='course-finish'),
+    path('institution-review-queue/', CourseInstitutionReviewQueueView.as_view(), name='course-institution-review-queue'),
     path('<int:pk>/institution-review/', CourseInstitutionReviewView.as_view(), name='course-institution-review'),
+    path('admin/pending-review/', CourseAdminPendingReviewListView.as_view(), name='course-admin-pending-review'),
     path('<int:pk>/review/', CourseAdminReviewView.as_view(), name='course-review'),
     path('<int:pk>/rework/', CourseReworkView.as_view(), name='course-rework'),
     path('<int:pk>/archive/', CourseArchiveView.as_view(), name='course-archive'),
     path('<int:pk>/restore/', CourseRestoreView.as_view(), name='course-restore'),
 
     # -------------------------------------------------------------------------
+    # Course schedules (cohorts)
+    # -------------------------------------------------------------------------
+    path('<int:pk>/schedules/', CourseScheduleListCreateView.as_view(), name='course-schedule-list-create'),
+    path('<int:pk>/schedules/<int:schedule_id>/', CourseScheduleDetailView.as_view(), name='course-schedule-detail'),
+    path('<int:pk>/schedules/<int:schedule_id>/activate/', CourseScheduleActivateView.as_view(), name='course-schedule-activate'),
+    path('<int:pk>/schedules/<int:schedule_id>/archive/', CourseScheduleArchiveView.as_view(), name='course-schedule-archive'),
+    path('<int:pk>/schedules/<int:schedule_id>/rework/', CourseScheduleReworkView.as_view(), name='course-schedule-rework'),
     # Sections
     # -------------------------------------------------------------------------
     path('<int:course_id>/sections/', CourseSectionListAPIView.as_view(), name='section-list'),

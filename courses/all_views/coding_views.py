@@ -49,7 +49,7 @@ class CodingExerciseDetailAPIView(APIView):
 
     def patch(self, request, exercise_id):
         exercise = self._get_owned_exercise(request, exercise_id)
-        if err := guard_editable(exercise.section.course): return err
+        if err := guard_editable(exercise.section.course, section=exercise.section): return err
         serializer = CodingExerciseCreateUpdateSerializer(exercise, data=request.data, partial=True)
         if not serializer.is_valid():
             return Response(
@@ -75,7 +75,7 @@ class CodingExerciseDetailAPIView(APIView):
 
     def delete(self, request, exercise_id):
         exercise = self._get_owned_exercise(request, exercise_id)
-        if err := guard_editable(exercise.section.course): return err
+        if err := guard_editable(exercise.section.course, section=exercise.section): return err
         # GenericRelation on CodingExercise cascades SectionContent deletion automatically.
         exercise.delete()
         return Response(
@@ -152,7 +152,7 @@ class CodingExerciseLanguageConfigDetailAPIView(APIView):
 
     def patch(self, request, exercise_id, config_id):
         config = self._get_owned_config(request, exercise_id, config_id)
-        if err := guard_editable(config.exercise.section.course): return err
+        if err := guard_editable(config.exercise.section.course, section=config.exercise.section): return err
         serializer = CodingExerciseLanguageConfigSerializer(config, data=request.data, partial=True)
         if not serializer.is_valid():
             return Response(
@@ -177,7 +177,7 @@ class CodingExerciseLanguageConfigDetailAPIView(APIView):
 
     def delete(self, request, exercise_id, config_id):
         config = self._get_owned_config(request, exercise_id, config_id)
-        if err := guard_editable(config.exercise.section.course): return err
+        if err := guard_editable(config.exercise.section.course, section=config.exercise.section): return err
         config.delete()
         return Response(
             {'success': True, 'message': 'Language config deleted successfully.'},
@@ -251,7 +251,7 @@ class CodingTestCaseDetailAPIView(APIView):
 
     def patch(self, request, exercise_id, tc_id):
         test_case = self._get_owned_test_case(request, exercise_id, tc_id)
-        if err := guard_editable(test_case.exercise.section.course): return err
+        if err := guard_editable(test_case.exercise.section.course, section=test_case.exercise.section): return err
         serializer = CodingTestCaseSerializer(test_case, data=request.data, partial=True)
         if not serializer.is_valid():
             return Response(
@@ -276,7 +276,7 @@ class CodingTestCaseDetailAPIView(APIView):
 
     def delete(self, request, exercise_id, tc_id):
         test_case = self._get_owned_test_case(request, exercise_id, tc_id)
-        if err := guard_editable(test_case.exercise.section.course): return err
+        if err := guard_editable(test_case.exercise.section.course, section=test_case.exercise.section): return err
         with transaction.atomic():
             deleted_position = test_case.position
             owned_exercise_id = test_case.exercise_id

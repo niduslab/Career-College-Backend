@@ -103,6 +103,7 @@ class CourseScheduleTestBase(APITestCase):
         self.inst_course.instructors.add(self.expert)
         NidusCourse.objects.filter(pk=self.inst_course.pk).update(
             status='published', is_published=True, published_at=timezone.now(),
+            delivery_mode=NidusCourse.DeliveryMode.SCHEDULED,
         )
         self.inst_course.refresh_from_db()
 
@@ -112,6 +113,7 @@ class CourseScheduleTestBase(APITestCase):
         self.solo_course.instructors.add(self.solo)
         NidusCourse.objects.filter(pk=self.solo_course.pk).update(
             status='published', is_published=True, published_at=timezone.now(),
+            delivery_mode=NidusCourse.DeliveryMode.SCHEDULED,
         )
         self.solo_course.refresh_from_db()
 
@@ -303,6 +305,15 @@ class SoloInstructorScheduleCrudTests(CourseScheduleTestBase):
         self.client.force_authenticate(self.solo)
         r = self.client.post(self._action_url(self.solo_course, schedule, 'archive'))
         self.assertEqual(r.status_code, status.HTTP_422_UNPROCESSABLE_ENTITY)
+
+    def test_self_paced_course_rejects_schedule_creation(self):
+        NidusCourse.objects.filter(pk=self.solo_course.pk).update(
+            delivery_mode=NidusCourse.DeliveryMode.SELF_PACED,
+        )
+        self.client.force_authenticate(self.solo)
+        r = self.client.post(self._list_url(self.solo_course), _dates(), format='json')
+        self.assertEqual(r.status_code, status.HTTP_422_UNPROCESSABLE_ENTITY)
+        self.assertEqual(CourseSchedule.objects.filter(course=self.solo_course).count(), 0)
 
 
 class ScheduleEditPolicyTests(CourseScheduleTestBase):
@@ -617,7 +628,9 @@ class DripAuthoringTests(CourseScheduleTestBase):
         section = CourseSection.objects.get(course=self.solo_course, title='Week 2')
         self.assertIsNotNone(section.unlocks_at)
 
-    def test_published_course_without_ongoing_schedule_still_locked(self):
+    def test_published_course_with_scheduled_not_yet_started_is_editable(self):
+        # Carve-out also covers `scheduled` (pre-start), not just `ongoing` —
+        # instructors can author ahead of the cohort's start_date.
         self._make_schedule(self.solo_course, status_value='scheduled')
         self.client.force_authenticate(self.solo)
         r = self.client.post(
@@ -625,7 +638,58 @@ class DripAuthoringTests(CourseScheduleTestBase):
             {'title': 'Week 2', 'position': 1},
             format='json',
         )
+        self.assertEqual(r.status_code, status.HTTP_201_CREATED)
+
+    def test_published_course_without_any_live_schedule_still_locked(self):
+        self._make_schedule(
+            self.solo_course, status_value='completed',
+            start_date=timezone.now() - timedelta(days=60),
+            end_date=timezone.now() - timedelta(days=10),
+        )
+        self.client.force_authenticate(self.solo)
+        r = self.client.post(
+            self._section_create_url(self.solo_course),
+            {'title': 'Week 2', 'position': 1},
+            format='json',
+        )
         self.assertEqual(r.status_code, status.HTTP_422_UNPROCESSABLE_ENTITY)
+
+    def test_edit_of_already_released_section_blocked(self):
+        self._make_schedule(
+            self.solo_course, status_value='ongoing',
+            enrollment_opens_at=timezone.now() - timedelta(days=10),
+            enrollment_closes_at=timezone.now() - timedelta(days=5),
+            start_date=timezone.now() - timedelta(days=4),
+            end_date=timezone.now() + timedelta(days=30),
+        )
+        section = CourseSection.objects.create(
+            course=self.solo_course, title='Week 1', position=1,
+        )
+        self.client.force_authenticate(self.solo)
+        url = reverse('courses:section-detail', kwargs={'section_id': section.pk})
+        r = self.client.patch(url, {'title': 'Week 1 (revised)'}, format='json')
+        self.assertEqual(r.status_code, status.HTTP_422_UNPROCESSABLE_ENTITY)
+        self.assertEqual(
+            r.data['message'],
+            'This content has already been released to learners and cannot be edited.',
+        )
+
+    def test_edit_of_not_yet_released_section_allowed(self):
+        self._make_schedule(
+            self.solo_course, status_value='ongoing',
+            enrollment_opens_at=timezone.now() - timedelta(days=10),
+            enrollment_closes_at=timezone.now() - timedelta(days=5),
+            start_date=timezone.now() - timedelta(days=4),
+            end_date=timezone.now() + timedelta(days=30),
+        )
+        section = CourseSection.objects.create(
+            course=self.solo_course, title='Week 2', position=2,
+            unlocks_at=timezone.now() + timedelta(days=3),
+        )
+        self.client.force_authenticate(self.solo)
+        url = reverse('courses:section-detail', kwargs={'section_id': section.pk})
+        r = self.client.patch(url, {'title': 'Week 2 (revised)'}, format='json')
+        self.assertEqual(r.status_code, status.HTTP_200_OK)
 
 
 # =============================================================================

@@ -451,6 +451,69 @@ class CourseAdminReviewTests(CourseLifecycleTestBase):
 
 
 # ---------------------------------------------------------------------------
+# CourseAdminPendingReviewListTests
+# ---------------------------------------------------------------------------
+
+class CourseAdminPendingReviewListTests(CourseLifecycleTestBase):
+    """GET /admin/pending-review/ — admin queue of status=under_review courses."""
+
+    def _url(self):
+        return reverse('courses:course-admin-pending-review')
+
+    def setUp(self):
+        super().setUp()
+        self.client.force_authenticate(user=self.admin)
+
+    def test_admin_sees_only_under_review_courses(self):
+        self._set_status('under_review')
+        other = NidusCourse.objects.create(
+            created_by=self.other_instructor,
+            title='Draft Course',
+            description='Still being written.',
+        )
+
+        response = self.client.get(self._url())
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        ids = [row['id'] for row in response.data['data']['results']]
+        self.assertIn(self.course.pk, ids)
+        self.assertNotIn(other.pk, ids)
+
+    def test_non_admin_forbidden(self):
+        self._set_status('under_review')
+        self.client.force_authenticate(user=self.instructor)
+        response = self.client.get(self._url())
+        self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
+
+    def test_delivery_mode_filter(self):
+        self._set_status('under_review')
+        scheduled_course = self._scheduled_course_under_review()
+
+        response = self.client.get(self._url(), {'delivery_mode': 'scheduled'})
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        ids = [row['id'] for row in response.data['data']['results']]
+        self.assertIn(scheduled_course.pk, ids)
+        self.assertNotIn(self.course.pk, ids)
+
+    def test_invalid_delivery_mode_returns_400(self):
+        response = self.client.get(self._url(), {'delivery_mode': 'bogus'})
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+
+    def _scheduled_course_under_review(self):
+        course = NidusCourse.objects.create(
+            created_by=self.instructor,
+            title='Cohort Course For Queue',
+            description='A cohort-delivered course.',
+            delivery_mode=NidusCourse.DeliveryMode.SCHEDULED,
+            course_outline='Week 1: Intro',
+            status='under_review',
+        )
+        course.instructors.add(self.instructor)
+        return course
+
+
+# ---------------------------------------------------------------------------
 # CourseReworkTests
 # ---------------------------------------------------------------------------
 

@@ -105,7 +105,7 @@ class CourseSectionDetailAPIView(APIView):
 
     def patch(self, request, section_id):
         section = self._get_owned_section(request, section_id)
-        if err := guard_editable(section.course): return err
+        if err := guard_editable(section.course, section=section): return err
         serializer = CourseSectionCreateUpdateSerializer(section, data=request.data, partial=True)
         if not serializer.is_valid():
             return Response(
@@ -126,7 +126,7 @@ class CourseSectionDetailAPIView(APIView):
 
     def put(self, request, section_id):
         section = self._get_owned_section(request, section_id)
-        if err := guard_editable(section.course): return err
+        if err := guard_editable(section.course, section=section): return err
         serializer = CourseSectionCreateUpdateSerializer(section, data=request.data)
         if not serializer.is_valid():
             return Response(
@@ -147,7 +147,7 @@ class CourseSectionDetailAPIView(APIView):
 
     def delete(self, request, section_id):
         section = self._get_owned_section(request, section_id)
-        if err := guard_editable(section.course): return err
+        if err := guard_editable(section.course, section=section): return err
         section.delete()
         return Response({'success': True, 'message': 'Section deleted successfully.'}, status=status.HTTP_200_OK)
 
@@ -190,7 +190,7 @@ class LectureDetailAPIView(APIView):
 
     def patch(self, request, lecture_id):
         lecture = self._get_owned_lecture(request, lecture_id)
-        if err := guard_editable(lecture.section.course): return err
+        if err := guard_editable(lecture.section.course, section=lecture.section): return err
         serializer = LectureCreateUpdateSerializer(
             lecture, data=request.data, partial=True, context={'section': lecture.section}
         )
@@ -210,7 +210,7 @@ class LectureDetailAPIView(APIView):
 
     def put(self, request, lecture_id):
         lecture = self._get_owned_lecture(request, lecture_id)
-        if err := guard_editable(lecture.section.course): return err
+        if err := guard_editable(lecture.section.course, section=lecture.section): return err
         serializer = LectureCreateUpdateSerializer(
             lecture, data=request.data, context={'section': lecture.section}
         )
@@ -230,7 +230,7 @@ class LectureDetailAPIView(APIView):
 
     def delete(self, request, lecture_id):
         lecture = self._get_owned_lecture(request, lecture_id)
-        if err := guard_editable(lecture.section.course): return err
+        if err := guard_editable(lecture.section.course, section=lecture.section): return err
         # GenericRelation on Lecture cascades SectionContent deletion automatically.
         lecture.delete()
         return Response({'success': True, 'message': 'Lecture deleted successfully.'}, status=status.HTTP_200_OK)
@@ -502,7 +502,7 @@ class SectionContentReorderAPIView(APIView):
 
     def patch(self, request, content_id):
         sc = self._get_owned_content(request, content_id)
-        if err := guard_editable(sc.section.course): return err
+        if err := guard_editable(sc.section.course, section=sc.section): return err
 
         new_position = request.data.get('position')
         if new_position is None:
@@ -558,7 +558,7 @@ class QuizDetailAPIView(APIView):
 
     def patch(self, request, quiz_id):
         quiz = self._get_owned_quiz(request, quiz_id)
-        if err := guard_editable(quiz.section.course): return err
+        if err := guard_editable(quiz.section.course, section=quiz.section): return err
         serializer = QuizCreateUpdateSerializer(quiz, data=request.data, partial=True)
         if not serializer.is_valid():
             return Response(
@@ -573,7 +573,7 @@ class QuizDetailAPIView(APIView):
 
     def delete(self, request, quiz_id):
         quiz = self._get_owned_quiz(request, quiz_id)
-        if err := guard_editable(quiz.section.course): return err
+        if err := guard_editable(quiz.section.course, section=quiz.section): return err
         # GenericRelation on Quiz cascades SectionContent deletion automatically.
         with transaction.atomic():
             quiz.delete()
@@ -644,7 +644,7 @@ class QuizQuestionDetailAPIView(APIView):
 
     def patch(self, request, question_id):
         question = self._get_owned_question(request, question_id)
-        if err := guard_editable(question.quiz.section.course): return err
+        if err := guard_editable(question.quiz.section.course, section=question.quiz.section): return err
         serializer = QuizQuestionSerializer(question, data=request.data, partial=True)
         if not serializer.is_valid():
             return Response(
@@ -665,7 +665,7 @@ class QuizQuestionDetailAPIView(APIView):
 
     def delete(self, request, question_id):
         question = self._get_owned_question(request, question_id)
-        if err := guard_editable(question.quiz.section.course): return err
+        if err := guard_editable(question.quiz.section.course, section=question.quiz.section): return err
         question.delete()
         return Response(
             {'success': True, 'message': 'Question deleted successfully.'}, status=status.HTTP_200_OK
@@ -728,7 +728,7 @@ class QuizAnswerDetailAPIView(APIView):
 
     def patch(self, request, answer_id):
         answer = self._get_owned_answer(request, answer_id)
-        if err := guard_editable(answer.question.quiz.section.course): return err
+        if err := guard_editable(answer.question.quiz.section.course, section=answer.question.quiz.section): return err
         serializer = QuizAnswerSerializer(answer, data=request.data, partial=True)
         if not serializer.is_valid():
             return Response(
@@ -743,7 +743,7 @@ class QuizAnswerDetailAPIView(APIView):
 
     def delete(self, request, answer_id):
         answer = self._get_owned_answer(request, answer_id)
-        if err := guard_editable(answer.question.quiz.section.course): return err
+        if err := guard_editable(answer.question.quiz.section.course, section=answer.question.quiz.section): return err
         answer.delete()
         return Response(
             {'success': True, 'message': 'Answer deleted successfully.'}, status=status.HTTP_200_OK

@@ -14,6 +14,8 @@ Architecture: `docs/architecture/21-payments.md`.
 | `institution_token` | `Bearer eyJ...` | verified partner institution — webinar seeding |
 | `paid_course_slug` | `advanced-django` | a **published** course with `price > 0` |
 | `free_course_slug` | `intro-python` | a published course with `price = 0` |
+| `paid_scheduled_course_slug` | `cohort-bootcamp` | a **published, `delivery_mode=scheduled`** course with `price > 0` |
+| `schedule_id` | `1` | a `CourseSchedule` of `paid_scheduled_course_slug` with `status=scheduled` and an open enrollment window |
 | `paid_webinar_slug` | `scaling-django-live` | a **published, future-scheduled** webinar with `price > 0` |
 | `free_webinar_slug` | `career-qna` | a published webinar with `price = 0` |
 
@@ -63,6 +65,7 @@ Content-Type: application/json
   "order_id": 1,
   "tran_id": "CC9F2A...",
   "item_type": "course",
+  "schedule_id": null,
   "amount": "49.00",
   "currency": "BDT"
 }}
@@ -80,6 +83,7 @@ Content-Type: application/json
 | Already actively enrolled | 422 "You are already enrolled in this course." |
 | Already purchased (`paid` order exists) | 422 pointing at the enroll endpoint |
 | Unknown / unpublished slug | 404 |
+| `{"webinar_slug": "...", "schedule_id": 1}` | 400 "schedule_id is only valid for course checkout." |
 
 **Re-checkout:** POST 1.1 twice without paying. Second response has a **new**
 `tran_id`; the first order flips to `cancelled` (verify in 5.1). Only the
@@ -117,6 +121,77 @@ Then, as the **paying** learner:
 `POST .../enroll/` again → **201**, enrollment reactivated with
 `enrollment_type: "paid"`, and `GET /payments/orders/` still shows exactly
 **one** order — no second charge.
+
+---
+
+## Group 1B: Cohort (scheduled course) checkout
+
+Paying for a seat in a specific `CourseSchedule` cohort instead of self-paced
+access. Same course, an extra `schedule_id` in the checkout body. See
+`docs/api-testing/postman-schedules.md` for creating/activating a schedule
+first — it must be `status: "scheduled"` with an open enrollment window
+(`enrollment_opens_at <= now <= enrollment_closes_at`) before checkout will
+accept it.
+
+### 1B.1 Open a cohort checkout session
+
+```
+POST {{base_url}}/payments/checkout/
+Authorization: {{learner_token}}
+Content-Type: application/json
+
+{"course_slug": "{{paid_scheduled_course_slug}}", "schedule_id": {{schedule_id}}}
+```
+
+**201:**
+
+```json
+{"success": true, "message": "Checkout session created.", "data": {
+  "gateway_url": "https://sandbox.sslcommerz.com/gwprocess/v4/gw.php?Q=PAY&SESSIONKEY=...",
+  "order_id": 3,
+  "tran_id": "CC7B1D...",
+  "item_type": "course",
+  "schedule_id": 1,
+  "amount": "49.99",
+  "currency": "BDT"
+}}
+```
+
+**Negative checks:**
+
+| Request | Expect |
+|---|---|
+| `schedule_id` belonging to a **different** course | 404 "Schedule not found for this course." |
+| Unknown `schedule_id` | 404 |
+| Schedule `status` not `scheduled` (still `draft`, or already `ongoing`/`completed`/`archived`) | 422 "Enrollment for this cohort is not open." |
+| Before `enrollment_opens_at` or after `enrollment_closes_at` | 422 "Enrollment for this cohort is not open." |
+| Cohort at `max_seats` (active enrollments for that schedule) | 422 "This cohort is full." |
+| Already actively enrolled **in that schedule** | 422 "You are already enrolled in this course." (a self-paced enrollment for the same course does **not** block a cohort checkout, and vice versa) |
+| Already purchased that schedule (`paid` order exists for `(user, schedule)`) | 422 pointing at the enroll endpoint |
+
+> **Checkout-time seat check is advisory only.** It runs without a row lock
+> (the gateway round-trip can take a while). The authoritative,
+> lock-protected seat check runs again at payment finalize
+> (`enroll_learner`'s `_assert_schedule_enrollable`) — same pattern as the
+> free cohort-enroll path in `postman-schedules.md`. A seat can still fill
+> between checkout and completed payment; finalize is the source of truth.
+
+### 1B.2 Pay and verify
+
+Same as 1.2/1.3 — pay on the gateway page, then:
+
+1. **Order paid** — `GET {{base_url}}/payments/orders/` → the row has
+   `schedule_id` matching what you sent, `item_type: "course"`.
+2. **Cohort enrollment granted** — `GET {{base_url}}/courses/my-courses/` →
+   enrollment `enrollment_type: "paid"`, tied to the schedule (verify via
+   admin or the schedule's roster endpoint in `postman-schedules.md`) — not
+   a self-paced row.
+3. Repeat 1.1 (no `schedule_id`) for the **same course** as the **same
+   learner** → separate **self-paced** checkout succeeds independently;
+   `GET /payments/orders/` shows **two** paid orders for the same course —
+   one `schedule_id: null`, one with the cohort's id. Confirms the
+   self-paced/cohort partial-unique split (`uniq_paid_order_user_course_selfpaced`
+   / `uniq_paid_order_user_schedule`) doesn't collide.
 
 ---
 
@@ -262,6 +337,7 @@ Authorization: {{learner_token}}
   "item_type": "webinar",
   "course_title": null,
   "course_slug": null,
+  "schedule_id": null,
   "webinar_title": "Scaling Django Live",
   "webinar_slug": "scaling-django-live",
   "amount": "15.00",
@@ -272,6 +348,9 @@ Authorization: {{learner_token}}
   "created_at": "2026-07-05T10:09:31Z"
 }
 ```
+
+`schedule_id` is non-null only on a cohort-seat course order (Group 1B);
+null for self-paced course orders and always null for webinar orders.
 
 **Checks:**
 - Exactly one of the `course_*` / `webinar_*` pairs is non-null per row,
@@ -309,3 +388,8 @@ policy). Unknown id → 404.
 | 14 | Replayed success callback | `POST payments/success/` | 302, no duplicate access |
 | 15 | Cross-user order detail | `GET payments/orders/<id>/` | 404 |
 | 16 | Invalid `?status=` filter | `GET payments/orders/` | 400 |
+| 17 | Checkout course + `schedule_id`, cohort open | `POST payments/checkout/` | 201 + `schedule_id` set |
+| 18 | Checkout webinar + `schedule_id` | `POST payments/checkout/` | 400 |
+| 19 | Checkout `schedule_id` from a different course | `POST payments/checkout/` | 404 |
+| 20 | Checkout cohort closed/not-yet-open/full | `POST payments/checkout/` | 422 |
+| 21 | Same course, one self-paced + one cohort paid order | `GET payments/orders/` | both rows present, distinct `schedule_id` |

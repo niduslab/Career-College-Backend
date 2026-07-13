@@ -10,6 +10,7 @@ from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
+from core.pagination import StandardResultsSetPagination
 from core.permissions import (
     IsPlatformAdmin,
     IsEmailVerified,
@@ -23,6 +24,21 @@ from courses.serializers import NidusCourseSerializer
 from courses.services.schedule_service import activate_schedule
 
 logger = logging.getLogger(__name__)
+
+
+def _filter_by_delivery_mode(queryset, request):
+    """Optional `?delivery_mode=self_paced|scheduled` filter shared by the review-queue list views."""
+    delivery_mode = request.query_params.get('delivery_mode')
+    if not delivery_mode:
+        return queryset, None
+
+    valid = {value for value, _ in NidusCourse.DeliveryMode.choices}
+    if delivery_mode not in valid:
+        return None, Response(
+            {'success': False, 'message': f'Invalid delivery_mode. Choices: {", ".join(sorted(valid))}.'},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+    return queryset.filter(delivery_mode=delivery_mode), None
 
 
 class CourseSubmitForReviewView(APIView):
@@ -156,6 +172,34 @@ class CourseMarkFinishedView(APIView):
         )
 
 
+class CourseInstitutionReviewQueueView(APIView):
+    """GET list of the caller institution's courses awaiting institution review."""
+
+    permission_classes = [IsAuthenticated, IsEmailVerified, IsVerifiedPartnerInstitution]
+
+    def get(self, request):
+        queryset = (
+            NidusCourse.objects
+            .filter(
+                status=NidusCourse.CourseStatus.INSTITUTION_REVIEW,
+                partner_institution=request.user.partner_institution_profile,
+            )
+            .select_related('created_by', 'category', 'partner_institution')
+            .prefetch_related('instructors')
+            .order_by('created_at')
+        )
+        queryset, error = _filter_by_delivery_mode(queryset, request)
+        if error:
+            return error
+
+        paginator = StandardResultsSetPagination()
+        page = paginator.paginate_queryset(queryset, request)
+        serializer = NidusCourseSerializer(page, many=True)
+        paginated_response = paginator.get_paginated_response(serializer.data)
+        paginated_response.data = {'success': True, 'data': paginated_response.data}
+        return paginated_response
+
+
 class CourseInstitutionReviewView(APIView):
     """
     POST {pk}/institution-review/ — the owning institution acts on a course an
@@ -253,6 +297,31 @@ class CourseInstitutionReviewView(APIView):
             {'success': True, 'message': message, 'data': NidusCourseSerializer(course).data},
             status=status.HTTP_200_OK,
         )
+
+
+class CourseAdminPendingReviewListView(APIView):
+    """GET list of courses awaiting platform-admin review (status=under_review)."""
+
+    permission_classes = [IsAuthenticated, IsEmailVerified, IsPlatformAdmin]
+
+    def get(self, request):
+        queryset = (
+            NidusCourse.objects
+            .filter(status=NidusCourse.CourseStatus.UNDER_REVIEW)
+            .select_related('created_by', 'category', 'partner_institution')
+            .prefetch_related('instructors')
+            .order_by('created_at')
+        )
+        queryset, error = _filter_by_delivery_mode(queryset, request)
+        if error:
+            return error
+
+        paginator = StandardResultsSetPagination()
+        page = paginator.paginate_queryset(queryset, request)
+        serializer = NidusCourseSerializer(page, many=True)
+        paginated_response = paginator.get_paginated_response(serializer.data)
+        paginated_response.data = {'success': True, 'data': paginated_response.data}
+        return paginated_response
 
 
 class CourseAdminReviewView(APIView):

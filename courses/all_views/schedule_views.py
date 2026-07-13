@@ -16,6 +16,7 @@ from courses.services.schedule_service import (
     ScheduleError,
     activate_schedule,
     archive_schedule,
+    assert_course_supports_schedules,
     delete_schedule,
     get_course_for_schedule_manage,
     get_course_for_schedule_read,
@@ -72,6 +73,7 @@ class CourseScheduleListCreateView(APIView):
     def post(self, request, pk):
         try:
             course = get_course_for_schedule_manage(request.user, pk)
+            assert_course_supports_schedules(course)
         except ScheduleError as exc:
             return _schedule_error_response(exc)
 

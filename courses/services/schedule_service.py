@@ -64,6 +64,17 @@ def get_course_for_schedule_read(user, course_pk):
         return course
 
 
+def assert_course_supports_schedules(course):
+    """Cohorts belong only to scheduled-delivery courses. A self-paced course
+    must never carry a CourseSchedule — enforce the invariant at create time
+    (nothing downstream re-checks `delivery_mode`)."""
+    if course.delivery_mode != NidusCourse.DeliveryMode.SCHEDULED:
+        raise ScheduleError(
+            'Schedules can only be added to scheduled (cohort-based) courses.',
+            http_status=422,
+        )
+
+
 def get_schedule(course, schedule_id):
     """Fetch a schedule scoped to *course*; wrong-course or missing id → 404."""
     schedule = (

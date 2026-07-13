@@ -18,6 +18,7 @@ from django.db import IntegrityError, transaction
 from django.utils import timezone
 
 from courses.all_models.enrollment_models import Enrollment
+from courses.all_models.schedule_models import CourseSchedule
 from courses.services.enrollment_service import enroll_learner
 from payments.all_models.order_models import Order
 from payments.services.exceptions import PaymentError
@@ -48,18 +49,34 @@ class _ValidationRejected(Exception):
         self.reason = reason
 
 
-def _guard_course_checkout(user, course):
+def _guard_course_checkout(user, course, schedule=None):
     if not course.is_published:
         raise PaymentError('Course not found.', http_status=404)
     if course.price <= 0:
         raise PaymentError('This course is free. Use the enroll endpoint instead.', http_status=422)
-    if Enrollment.objects.filter(user=user, course=course, is_active=True).exists():
+    if Enrollment.objects.filter(user=user, course=course, schedule=schedule, is_active=True).exists():
         raise PaymentError('You are already enrolled in this course.', http_status=422)
-    if Order.objects.filter(user=user, course=course, status=Order.Status.PAID).exists():
+    if Order.objects.filter(user=user, course=course, schedule=schedule, status=Order.Status.PAID).exists():
         raise PaymentError(
             'You already purchased this course. Use the enroll endpoint to regain access.',
             http_status=422,
         )
+    if schedule is not None:
+        _guard_schedule_checkout(course, schedule)
+
+
+def _guard_schedule_checkout(course, schedule):
+    if schedule.course_id != course.id:
+        raise PaymentError('Schedule not found for this course.', http_status=404)
+    if schedule.status != CourseSchedule.Status.SCHEDULED:
+        raise PaymentError('Enrollment for this cohort is not open.', http_status=422)
+    now = timezone.now()
+    if not (schedule.enrollment_opens_at <= now <= schedule.enrollment_closes_at):
+        raise PaymentError('Enrollment for this cohort is not open.', http_status=422)
+    if schedule.max_seats is not None:
+        taken = Enrollment.objects.filter(schedule=schedule, is_active=True).count()
+        if taken >= schedule.max_seats:
+            raise PaymentError('This cohort is full.', http_status=422)
 
 
 def _guard_webinar_checkout(user, webinar):
@@ -84,9 +101,12 @@ def _guard_webinar_checkout(user, webinar):
         )
 
 
-def create_checkout(user, course=None, webinar=None):
+def create_checkout(user, course=None, webinar=None, schedule=None):
     """Create an Order for a paid course OR webinar and open a gateway session.
     Returns (order, gateway_url). Exactly one target must be given.
+
+    `schedule` (a CourseSchedule of `course`) targets a cohort seat instead of
+    self-paced access — ignored/invalid when `webinar` is given.
 
     Raises PaymentError on any guard violation or gateway failure.
     """
@@ -94,10 +114,12 @@ def create_checkout(user, course=None, webinar=None):
         raise PaymentError('Provide exactly one of course or webinar.', http_status=400)
 
     if course is not None:
-        _guard_course_checkout(user, course)
-        target_filter = {'course': course}
+        _guard_course_checkout(user, course, schedule=schedule)
+        target_filter = {'course': course, 'schedule': schedule}
         amount = course.price
     else:
+        if schedule is not None:
+            raise PaymentError('schedule_id is only valid for course checkout.', http_status=400)
         _guard_webinar_checkout(user, webinar)
         target_filter = {'webinar': webinar}
         amount = webinar.price
@@ -182,7 +204,7 @@ def finalize_payment(tran_id, val_id):
     Raises PaymentError(404) for an unknown tran_id, PaymentError(422) when
     validation fails, PaymentError(503) when the gateway is unreachable.
     """
-    order = Order.objects.filter(tran_id=tran_id).select_related('course', 'webinar', 'user').first()
+    order = Order.objects.filter(tran_id=tran_id).select_related('course', 'schedule', 'webinar', 'user').first()
     if order is None:
         raise PaymentError('Order not found.', http_status=404)
 
@@ -199,7 +221,7 @@ def finalize_payment(tran_id, val_id):
             order = (
                 Order.objects
                 .select_for_update(of=('self',))
-                .select_related('course', 'webinar', 'user')
+                .select_related('course', 'schedule', 'webinar', 'user')
                 .get(pk=order.pk)
             )
             if order.status == Order.Status.PAID:  # lost the race — already finalized
@@ -219,7 +241,8 @@ def finalize_payment(tran_id, val_id):
             # save (caught as IntegrityError below). Both route to the same
             # record-and-flag-for-refund handling. ──
             target_filter = (
-                {'course': order.course} if order.course_id else {'webinar': order.webinar}
+                {'course': order.course, 'schedule': order.schedule}
+                if order.course_id else {'webinar': order.webinar}
             )
             already_paid = (
                 Order.objects
@@ -251,7 +274,7 @@ def finalize_payment(tran_id, val_id):
             dup = (
                 Order.objects
                 .select_for_update(of=('self',))
-                .select_related('course', 'webinar', 'user')
+                .select_related('course', 'schedule', 'webinar', 'user')
                 .get(pk=order.pk)
             )
             return _record_duplicate_payment(dup, data, val_id)
@@ -289,10 +312,18 @@ def _grant_access(order):
                 order.course,
                 enrollment_type=Enrollment.EnrollmentType.PAID,
                 allow_unpublished=True,  # money already moved; honor it regardless of publish state
+                schedule=order.schedule,
+                via_payment=True,  # honor over a closed/advanced/full cohort window too
             )
-        except ValidationError:
-            # Already actively enrolled (e.g. admin granted access mid-payment) — nothing to do.
-            pass
+        except ValidationError as exc:
+            # Expected: learner already actively enrolled (double IPN / admin
+            # grant mid-payment). via_payment already bypasses the schedule
+            # gate, so nothing else should decline here — log if it does so a
+            # silent no-grant after a captured payment is never invisible.
+            logger.warning(
+                'enroll_learner declined during paid finalize: order=%s reason=%s',
+                order.tran_id, exc.messages[0] if exc.messages else exc,
+            )
         return
 
     from webinars.services.registration_service import register_for_webinar

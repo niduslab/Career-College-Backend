@@ -57,6 +57,181 @@ Flow under test:
 
 ---
 
+## Group 0: Full Lifecycle — Create Course + Schedule → Submit → Admin Approval
+
+**Real frontend flow, not two separate journeys.** A user building a cohort course doesn't create a
+plain course in one screen and come back later to "add scheduling" — they pick "Scheduled
+(Cohort-Based)" up front and fill in course metadata + the cohort dates in the same sitting, then
+submit once. So this walkthrough calls `POST /create/` immediately followed by
+`POST /<pk>/schedules/` on the still-`draft` course — schedule creation has **no** "course must be
+published" requirement; only `/activate/` does (see 0.7). Individual-instructor path shown
+(`instructor_token` + `POST /submit/`); institution-owned swaps in `institution_token`/`expert_token`
+and goes through `POST /finish/` → `POST /institution-review/` `{"action":"submit"}` before admin
+review — the admin step (0.6–0.8) is identical either way. Full narrative:
+[23-scheduled-course-lifecycle.md](../architecture/23-scheduled-course-lifecycle.md).
+
+> **Important — admin approval is NOT skipped.** `delivery_mode: "scheduled"` changes only what
+> counts as "complete enough to submit" (a written `course_outline` instead of built-out sections —
+> see 0.4/0.5). It does **not** bypass the normal `draft → under_review → published` state machine.
+> An admin (or, for institution-owned courses, the institution first) still has to approve every
+> scheduled course exactly like a self-paced one. The one thing that *is* automatic post-approval is
+> the schedule itself flipping `draft → scheduled` (0.8) — not the course's publish gate.
+
+### 0.1 Create the course as `scheduled`
+
+```
+POST {{base_url}}/courses/create/
+Authorization: {{instructor_token}}
+Content-Type: application/json
+
+{
+    "title": "Full-Stack Bootcamp — Fall Cohort",
+    "description": "12-week cohort-based bootcamp.",
+    "price": "49.99",
+    "language": "English",
+    "level": "beginner",
+    "category": {{category_id}},
+    "delivery_mode": "scheduled",
+    "course_outline": "Week 1: HTML/CSS\nWeek 2: JavaScript\nWeek 3: React\n... (full plan)"
+}
+```
+
+**Expect 201.** `data.status = "draft"`, `data.delivery_mode = "scheduled"`. Save `data.id` →
+`course_pk`. `delivery_mode` is **immutable after creation** — a later `PATCH .../{{course_pk}}/`
+attempting to change it → **400** `errors.delivery_mode`.
+
+### 0.2 Attach the schedule — same sitting, course still `draft`
+
+```
+POST {{base_url}}/courses/{{course_pk}}/schedules/
+Authorization: {{instructor_token}}
+
+{
+    "cohort_label": "Fall 2026 Batch",
+    "timezone": "Asia/Dhaka",
+    "enrollment_opens_at": "2026-08-01T00:00:00Z",
+    "enrollment_closes_at": "2026-08-31T23:59:59Z",
+    "start_date": "2026-09-01T09:00:00Z",
+    "end_date": "2026-12-15T00:00:00Z",
+    "max_seats": 50
+}
+```
+
+**Expect 201**, `data.status = "draft"`. Save `data.id` → `schedule_id`. Note the course is still
+`draft` at this point — scheduling doesn't require (or trigger) publication.
+
+### 0.3 (Optional) add curriculum now, or leave it for later
+
+```
+POST {{base_url}}/courses/{{course_pk}}/sections/create/
+Authorization: {{instructor_token}}
+{ "title": "Week 1 — HTML/CSS", "position": 1 }
+```
+
+**Expect 201.** Entirely optional for a scheduled course — skip this and go straight to 0.5 to prove
+the outline-only path works (see Group 4 for adding sections later, mid-cohort).
+
+### 0.4 Negative: submit with no schedule attached → 400
+
+On a **second** scratch course (`delivery_mode: "scheduled"`, `course_outline` filled, skip 0.2):
+
+```
+POST {{base_url}}/courses/{{scratch_course_pk}}/submit/
+```
+
+**Expect 400**, `errors.schedules` — `"A scheduled (cohort) course must have at least one schedule
+attached before it can be submitted for review."`
+
+### 0.5 Negative: submit with a blank `course_outline` → 400
+
+On a **third** scratch course (`delivery_mode: "scheduled"`, `course_outline` omitted/blank, schedule
+attached):
+
+**Expect 400**, `errors.course_outline` — `"A scheduled (cohort) course must have a course outline
+before it can be submitted for review."`
+
+> Self-paced courses are unaffected by either check — they still require ≥1 section with content
+> instead, and never require `course_outline`.
+
+### 0.6 Submit for review
+
+```
+POST {{base_url}}/courses/{{course_pk}}/submit/
+Authorization: {{instructor_token}}
+```
+
+**Expect 200**, `data.status = "under_review"`. (Content is now frozen, same as any submitted
+course — `POST .../sections/create/` here → **422**.)
+
+### 0.7 Admin finds the course in the review queue, then views context
+
+```
+GET {{base_url}}/courses/admin/pending-review/
+Authorization: {{admin_token}}
+```
+
+**Expect 200**, standard paginated envelope; `results` includes `course_pk`, oldest-submitted-first.
+This is the admin's only discovery surface for pending courses — there's no other listing, so this
+is how an admin finds work without already knowing a course id from the `COURSE_SUBMITTED`
+notification. Filter to just cohort courses with `?delivery_mode=scheduled` (or `self_paced`); an
+unrecognized value → **400**.
+
+```
+GET {{base_url}}/courses/{{course_pk}}/review/
+Authorization: {{admin_token}}
+```
+
+**Expect 200.** Response includes the normal course fields (incl. `course_outline`,
+`delivery_mode: "scheduled"`) plus:
+
+```json
+{
+  "schedules": [ { "id": ..., "cohort_label": "Fall 2026 Batch", "status": "draft", ... } ],
+  "outline_stats": { "total_sections": 0, "sections_with_content": 0, "empty_section_titles": [] }
+}
+```
+
+`outline_stats` is all-zero here if 0.3 was skipped — expected for a scheduled course that submitted
+on outline alone. The admin's judgment call rests on `course_outline` + the schedule dates, exactly
+the same approve/reject action as any other course:
+
+### 0.8 Admin approves — course publishes, schedule auto-activates
+
+```
+POST {{base_url}}/courses/{{course_pk}}/review/
+Authorization: {{admin_token}}
+Content-Type: application/json
+
+{ "action": "approve" }
+```
+
+**Expect 200**, `data.status = "published"`. Then:
+
+```
+GET {{base_url}}/courses/{{course_pk}}/schedules/{{schedule_id}}/
+```
+
+**Expect `data.status = "scheduled"`** — the approval auto-ran `activate_schedule()` for every
+`draft` schedule on the course, no separate `/activate/` call needed.
+
+### 0.9 Stale-dates fallback — schedule doesn't auto-activate
+
+Repeat 0.1–0.7 with a schedule whose `enrollment_closes_at` / `start_date` will have **already
+passed** by the time you approve (e.g. shell-update the schedule's dates into the past right before
+0.8, or simply wait past them). Then approve:
+
+**Expect 200**, `data.status = "published"` — **the course still publishes**; publishing is never
+blocked by a stale schedule. But `GET .../schedules/{{schedule_id}}/` → `data.status` is still
+`"draft"` (activation failed silently server-side, logged, not raised to the caller). The instructor
+(or institution owner, if institution-owned) receives a `COURSE_SCHEDULE_NEEDS_ATTENTION`
+notification naming the stale schedule. Recovery: fix the dates via `PATCH .../schedules/{{schedule_id}}/`
+then manually `POST .../schedules/{{schedule_id}}/activate/` (→ 1.5).
+
+You now have exactly the state Group 1 assumes going in — a published course with an activated
+schedule. Continue there, or skip to Group 3 (enrollment).
+
+---
+
 ## Group 1: Schedule Authoring (course owner)
 
 > Group 1 uses `instructor_token` on the instructor-owned `course_pk`. The same requests work with

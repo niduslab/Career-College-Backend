@@ -1,23 +1,45 @@
 from django.db.models import Q
+from django.utils import timezone
 from rest_framework import status
 from rest_framework.response import Response
 
 from courses.models import CourseSection, NidusCourse
 
 
-def guard_editable(course):
+def guard_editable(course, section=None):
     """Return a 422 Response if the course is locked for editing, else None.
 
-    Carve-out for scheduled cohorts: a published course with an *ongoing*
-    CourseSchedule stays content-editable so instructors can drip-upload
-    week-by-week material mid-run. Self-paced courses keep the historical
+    Carve-out for scheduled cohorts: a published course with a *scheduled*
+    or *ongoing* CourseSchedule stays content-editable — instructors may
+    author/upload new content at any point before the cohort run ends, not
+    just once it's live. Self-paced courses keep the historical
     lock-after-publish rule.
+
+    Pass `section` when guarding an edit/delete of something that already
+    exists (not a brand-new create): if that section has already been
+    released to learners (`unlocks_at` null or in the past), the edit is
+    blocked even though the course itself is still in the carve-out window —
+    content already visible to a cohort can't be rewritten out from under
+    them. New content elsewhere in the course is unaffected.
     """
     if not course.is_editable():
         if (
             course.status == 'published'
-            and course.schedules.filter(status='ongoing').exists()
+            and course.schedules.filter(status__in=['scheduled', 'ongoing']).exists()
         ):
+            if section is not None and (
+                section.unlocks_at is None or section.unlocks_at <= timezone.now()
+            ):
+                return Response(
+                    {
+                        'success': False,
+                        'message': (
+                            'This content has already been released to learners '
+                            'and cannot be edited.'
+                        ),
+                    },
+                    status=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                )
             return None
         return Response(
             {

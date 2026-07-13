@@ -158,11 +158,13 @@ The admin then decides via the existing action endpoint:
 
 ---
 
-## 9. Instructor keeps adding material while the cohort is running
+## 9. Instructor keeps adding material — before, during, and up to the end of the cohort
 
-**User action:** Instructor uploads next week's lecture, adds a quiz, etc. — no new admin review requested or required.
+**User action:** Instructor uploads next week's lecture, adds a quiz, etc. — no new admin review requested or required. This isn't limited to once the cohort is `ongoing`: an instructor can author ahead, right after the schedule is activated (`scheduled`, before `start_date`), so the first week's content doesn't have to be a last-minute scramble.
 
-**Backend:** `guard_editable(course)` (`courses/utils.py`) has one narrow carve-out for this: a `published` course whose schedule is `ongoing` stays content-editable. This closes again once the schedule reaches `completed`. There's no re-review step for drip content — `AuthoredModel`'s `created_by`/`last_edited_by` stamping is the audit trail, and the admin already saw this coming (step 5's `outline_stats`) when they approved.
+**Backend:** `guard_editable(course, section=None)` (`courses/utils.py`) has a carve-out for this: a `published` course with a schedule that's `scheduled` **or** `ongoing` stays content-**creatable**. This closes again once every schedule reaches `completed`/`archived`. There's no re-review step for drip content — `AuthoredModel`'s `created_by`/`last_edited_by` stamping is the audit trail, and the admin already saw this coming (step 5's `outline_stats`) when they approved.
+
+Editing or deleting something that **already exists** is a narrower case: `guard_editable` additionally takes the `section` being touched, and blocks the request (422) if that section has already been released to learners (`unlocks_at` is null or in the past) — content a cohort has already seen can't be silently rewritten out from under them. Adding brand-new content elsewhere in the course is unaffected by another section already being live.
 
 Each new section/content the instructor adds can set its own `unlocks_at` — this is how "coming out next Monday" content gets scheduled without another submit/approve round-trip.
 
@@ -182,7 +184,7 @@ Each new section/content the instructor adds can set its own `unlocks_at` — th
 
 **Backend:** `advance_course_schedules_task` flips `ongoing → completed` once `now > end_date`. This is bookkeeping only:
 - New enrollments into this schedule stop (it's no longer `scheduled`).
-- `guard_editable`'s ongoing-carve-out no longer applies, so instructor edits freeze again.
+- `guard_editable`'s carve-out no longer applies **once every schedule on the course is `completed`/`archived`** — if a course has another schedule still `scheduled`/`ongoing` (a future re-run cohort), editing stays open for that reason instead. With only this one schedule, instructor edits freeze again.
 - Nothing is revoked from learners already in — no re-lock, no content removal, certificates/progress stay exactly as earned. A `null` `end_date` means the schedule just never reaches `completed` on its own (open-ended).
 
 Manual admin/institution path: `POST /<pk>/schedules/<schedule_id>/archive/` (`completed → archived`) and `POST /<pk>/schedules/<schedule_id>/rework/` (`archived → draft`, or pulls back a premature `scheduled → draft` activation) exist for cleanup/undo, alongside the automatic transitions.
@@ -226,8 +228,10 @@ archived --(manual /rework/)--> draft
 | Submit (individual) | `POST /<pk>/submit/` | `CourseSubmitForReviewView` |
 | Submit (institution expert) | `POST /<pk>/finish/` | `CourseMarkFinishedView` |
 | Institution forwards/sends back | `POST /<pk>/institution-review/` | `CourseInstitutionReviewView` |
+| Admin browses the review queue | `GET /admin/pending-review/` | `CourseAdminPendingReviewListView` |
 | Admin views review context | `GET /<pk>/review/` | `CourseAdminReviewView` |
 | Admin approves/rejects | `POST /<pk>/review/` | `CourseAdminReviewView` |
+| Institution browses its own review queue | `GET /institution-review-queue/` | `CourseInstitutionReviewQueueView` |
 | Manual schedule activate | `POST /<pk>/schedules/<schedule_id>/activate/` | `CourseScheduleActivateView` |
 | Manual schedule archive | `POST /<pk>/schedules/<schedule_id>/archive/` | `CourseScheduleArchiveView` |
 | Manual schedule rework | `POST /<pk>/schedules/<schedule_id>/rework/` | `CourseScheduleReworkView` |

@@ -4,9 +4,15 @@ File-by-file record of every change made to ship cohort scheduling. Grouped by p
 feature explained end-to-end (not file-by-file), see `docs/architecture/22-scheduled-courses.md`.
 For the original design plan, see `docs/future_implementations/SCHEDULED_COURSES.md`.
 
-**Known gap (not yet fixed):** `guard_editable()` only checks course-level state. Once a schedule is
-`ongoing`, **every** section is editable — including sections already released to learners (past
-`unlocks_at`), not just new/future ones. No per-section freeze exists yet. See §6 of the design doc.
+**Resolved (was a known gap):** `guard_editable()` used to check course-level state only — once a
+schedule was `ongoing`, every section (including already-released ones) was editable. It now takes an
+optional `section=` argument and blocks edits/deletes of a section already released to learners
+(`unlocks_at` null or in the past) with a 422, while still allowing new content elsewhere. The carve-out
+also widened to `scheduled`-or-`ongoing` (author ahead of `start_date`) and closes once every schedule is
+`completed`/`archived`. See `docs/CHANGELOG_SELF_PACED_IMPACT.md` §9 and §4.
+
+**Self-paced ripple effects:** for the changes this feature forced onto the pre-existing self-paced path,
+see `docs/CHANGELOG_SELF_PACED_IMPACT.md`.
 
 ---
 

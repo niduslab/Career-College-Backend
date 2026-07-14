@@ -1,7 +1,15 @@
 """Reusable DRF permission classes used across apps."""
 
+from django.conf import settings
+from django.utils import timezone
+
 from authentication.models import InstructorProfile, PartnerInstitutionProfile
 from rest_framework.permissions import BasePermission
+
+# Session key stamped by the admin-console login view; kept as a literal here to
+# avoid importing admin_console (which imports this module) — single source of
+# truth is admin_console.all_views.auth_views.ADMIN_LOGIN_AT_SESSION_KEY.
+_ADMIN_LOGIN_AT_SESSION_KEY = 'admin_login_at'
 
 
 class IsPlatformAdmin(BasePermission):
@@ -15,6 +23,32 @@ class IsPlatformAdmin(BasePermission):
             and request.user.is_authenticated
             and (request.user.is_staff or request.user.user_type == 'admin')
         )
+
+
+class IsRecentlyAuthenticatedAdmin(IsPlatformAdmin):
+    """
+    Admin whose session login is recent enough for a sensitive action.
+
+    Extends the admin gate with a freshness check against
+    ``ADMIN_REAUTH_MAX_AGE``: the session must carry a login timestamp no older
+    than that window. Wired onto sensitive admin-console endpoints as they are
+    built; requires a session login (a JWT-only admin has no timestamp and is
+    asked to re-authenticate).
+    """
+
+    message = 'Please re-authenticate to perform this action.'
+
+    def has_permission(self, request, view):
+        if not super().has_permission(request, view):
+            return False
+
+        session = getattr(request, 'session', None)
+        login_at = session.get(_ADMIN_LOGIN_AT_SESSION_KEY) if session else None
+        if not login_at:
+            return False
+
+        max_age = getattr(settings, 'ADMIN_REAUTH_MAX_AGE', 900)
+        return (timezone.now().timestamp() - login_at) <= max_age
 
 
 class IsAdminOrReadOnly(BasePermission):

@@ -1,6 +1,9 @@
 import logging
 
 from django.conf import settings
+from django.contrib.auth import login as django_login
+from django.middleware.csrf import get_token
+from django.utils import timezone
 from rest_framework import serializers, status
 from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.response import Response
@@ -124,6 +127,12 @@ class UserLoginView(APIView):
                 },
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR,
             )
+
+        # Admins additionally get a server-side session + csrf cookie
+        if user.is_staff or user.user_type == 'admin':
+            django_login(request, user)
+            request.session['admin_login_at'] = timezone.now().timestamp()
+            get_token(request)  # primes the csrftoken cookie on the response
 
         response = Response(
             {

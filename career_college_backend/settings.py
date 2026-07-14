@@ -65,6 +65,7 @@ INSTALLED_APPS = [
     'webinars.apps.WebinarsConfig',
     'analytics.apps.AnalyticsConfig',
     'payments.apps.PaymentsConfig',
+    'admin_console.apps.AdminConsoleConfig',
 ]
 
 MIDDLEWARE = [
@@ -204,6 +205,22 @@ JWT_COOKIE_DOMAIN = env('JWT_COOKIE_DOMAIN', default='') or None
 JWT_COOKIE_PATH = env('JWT_COOKIE_PATH', default='/')
 JWT_ACCESS_COOKIE_NAME = env('JWT_ACCESS_COOKIE_NAME', default='access_token')
 JWT_REFRESH_COOKIE_NAME = env('JWT_REFRESH_COOKIE_NAME', default='refresh_token')
+# Admin-console session auth (scoped to /api/v1/admin-console/ views via
+# per-view authentication_classes; deliberately NOT in the global DRF auth
+# classes, so the JWT API keeps working without CSRF tokens).
+ADMIN_SESSION_IDLE_TIMEOUT = env.int('ADMIN_SESSION_IDLE_TIMEOUT', default=1800)  # 30 min sliding
+ADMIN_REAUTH_MAX_AGE = env.int('ADMIN_REAUTH_MAX_AGE', default=900)               # 15 min for sensitive actions
+SESSION_COOKIE_AGE = ADMIN_SESSION_IDLE_TIMEOUT
+SESSION_SAVE_EVERY_REQUEST = True            # sliding idle expiry (resets on each request)
+SESSION_EXPIRE_AT_BROWSER_CLOSE = env.bool('SESSION_EXPIRE_AT_BROWSER_CLOSE', default=True)
+SESSION_COOKIE_HTTPONLY = True
+SESSION_COOKIE_SECURE = env.bool('SESSION_COOKIE_SECURE', default=not DEBUG)
+SESSION_COOKIE_SAMESITE = env('SESSION_COOKIE_SAMESITE', default='Lax')
+CSRF_COOKIE_SECURE = env.bool('CSRF_COOKIE_SECURE', default=not DEBUG)
+CSRF_COOKIE_SAMESITE = env('CSRF_COOKIE_SAMESITE', default='Lax')
+CSRF_COOKIE_HTTPONLY = False                 # JS must read csrftoken to send X-CSRFToken
+CSRF_TRUSTED_ORIGINS = env.list('CSRF_TRUSTED_ORIGINS', default=[FRONTEND_URL])
+
 ACCOUNT_UNIQUE_EMAIL = True
 ACCOUNT_EMAIL_VERIFICATION = 'none'
 ACCOUNT_LOGIN_METHODS = {'email'}
@@ -213,7 +230,7 @@ ACCOUNT_USER_MODEL_USERNAME_FIELD = None
 # Internationalization
 LANGUAGE_CODE = 'en-us'
 
-TIME_ZONE = 'UTC'
+TIME_ZONE = env('TIME_ZONE')
 
 USE_I18N = True
 
@@ -316,6 +333,7 @@ DEFAULT_FROM_EMAIL = env('DEFAULT_FROM_EMAIL', default=EMAIL_HOST_USER)
 # Rate Limiting
 OTP_RATE_LIMIT = env('OTP_RATE_LIMIT', default='20/min')
 LOGIN_RATE_LIMIT = env('LOGIN_RATE_LIMIT', default='10/min')
+ADMIN_LOGIN_RATE_LIMIT = env('ADMIN_LOGIN_RATE_LIMIT', default='10/min')
 
 
 # Logging

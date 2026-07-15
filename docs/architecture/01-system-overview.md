@@ -174,6 +174,8 @@ REST prefixes defined in `career_college_backend/urls.py`; WebSocket in `realtim
 | `/api/v1/notifications/` | `notifications` | `/notifications/`, `/notifications/unread-count/`, `/notifications/preferences/` |
 | `/api/v1/webinars/` | `webinars` | `/webinars/catalog/`, `/webinars/create/`, `/webinars/{pk}/publish/`, `/webinars/{slug}/register/` |
 | `/api/v1/analytics/` | `analytics` | `/analytics/partner/summary/`, `/analytics/partner/enrollments/trend/`, `/analytics/partner/top-courses/` |
+| `/api/v1/payments/` | `payments` | `/payments/checkout/`, `/payments/ipn/`, `/payments/success/`, `/payments/orders/` |
+| `/api/v1/admin-console/` | `admin_console` | `/admin-console/auth/session/`, `/admin-console/sessions/`, `/admin-console/users/`, `/admin-console/audit/` (login is the shared `/auth/login/`) |
 | `/ws/` | `realtime` | `ws://host/ws/?token=<JWT>` — streams `notifications`, `messaging` |
 | `/admin/` | Django admin | staff console |
 

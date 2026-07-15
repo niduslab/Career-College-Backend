@@ -105,6 +105,18 @@ class LogoutSerializer(serializers.Serializer):
             raise serializers.ValidationError('Invalid or expired refresh token.')
         return value
 
+    def validate(self, attrs):
+        # A caller may only blacklist their OWN refresh token — otherwise any
+        # authenticated user could revoke someone else's session by submitting
+        # its token. Compare the token's subject to the request user.
+        request = self.context.get('request')
+        user = getattr(request, 'user', None)
+        if user is not None and getattr(user, 'is_authenticated', False):
+            token_uid = self.token.payload.get('user_id')
+            if token_uid is not None and str(token_uid) != str(user.id):
+                raise serializers.ValidationError('Token does not belong to the authenticated user.')
+        return attrs
+
     def save(self):
         self.token.blacklist()
 

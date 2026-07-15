@@ -1,21 +1,27 @@
-from admin_console.all_views.auth_views import (
-    AdminLoginView,
-    AdminLogoutView,
-    AdminSessionView,
-    CsrfTokenView,
-)
+from admin_console.all_views.auth_views import AdminSessionView
 from admin_console.all_views.session_views import (
     AdminSessionListView,
     AdminSessionRevokeOthersView,
     AdminSessionRevokeView,
 )
+from admin_console.all_views.user_views import (
+    AdminAuditLogListView,
+    AdminUserDetailView,
+    AdminUserListView,
+    AdminUserReactivateView,
+    AdminUserRoleView,
+    AdminUserSuspendView,
+)
 
 __all__ = [
-    'AdminLoginView',
-    'AdminLogoutView',
     'AdminSessionView',
-    'CsrfTokenView',
     'AdminSessionListView',
     'AdminSessionRevokeView',
     'AdminSessionRevokeOthersView',
+    'AdminUserListView',
+    'AdminUserDetailView',
+    'AdminUserSuspendView',
+    'AdminUserReactivateView',
+    'AdminUserRoleView',
+    'AdminAuditLogListView',
 ]

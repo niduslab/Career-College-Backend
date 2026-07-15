@@ -1,6 +1,7 @@
 from django.db import models
 from django.db.models.functions import Lower
 from django.contrib.auth.models import AbstractUser, BaseUserManager
+from django.contrib.postgres.indexes import GinIndex
 from django.core.exceptions import ValidationError
 from django.utils import timezone
 from django.utils.text import slugify
@@ -185,6 +186,11 @@ class User(AbstractUser):
             models.Index(fields=['is_email_verified', 'user_type'], name='idx_user_verified_type'),
             # Admin restriction lookups
             models.Index(fields=['is_restricted_by_admin', 'is_active'], name='idx_user_restricted'),
+            # Trigram GIN indexes so the admin user-search (email/full_name
+            # icontains → ILIKE '%term%') uses an index instead of a full
+            # sequential scan. gin_trgm_ops on the raw column supports ILIKE.
+            GinIndex(fields=['email'], name='idx_user_email_trgm', opclasses=['gin_trgm_ops']),
+            GinIndex(fields=['full_name'], name='idx_user_fullname_trgm', opclasses=['gin_trgm_ops']),
         ]
     
     def __str__(self):

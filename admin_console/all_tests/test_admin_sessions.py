@@ -37,19 +37,25 @@ class AdminSessionTrackingTests(APITestCase):
         )
 
     def setUp(self):
-        cache.clear()  # reset the admin-login throttle between tests
-        self.login_url = reverse('admin_console:auth-login')
+        cache.clear()  # reset the shared-login throttle between tests
+        self.login_url = '/api/v1/auth/login/'  # shared login opens the admin session
         self.list_url = reverse('admin_console:session-list')
         self.revoke_others_url = reverse('admin_console:session-revoke-others')
         self.session_url = reverse('admin_console:auth-session')
 
     def _login(self, client, ua):
-        return client.post(
+        resp = client.post(
             self.login_url,
             {'email': 'admin@example.com', 'password': 'pw12345!'},
             format='json',
             HTTP_USER_AGENT=ua,
         )
+        # Shared login also issues JWT cookies; drop them so these tests exercise
+        # the *session* path only (otherwise a revoked session still authenticates
+        # via the lingering access_token cookie).
+        for name in ('access_token', 'refresh_token'):
+            client.cookies.pop(name, None)
+        return resp
 
     # --- capture on login -------------------------------------------------
     def test_admin_login_records_session_with_parsed_ua(self):
@@ -60,13 +66,14 @@ class AdminSessionTrackingTests(APITestCase):
         self.assertEqual(row.user_agent, _CHROME_UA)
 
     def test_non_admin_login_creates_no_record(self):
-        # Non-admin is rejected at the admin-console login (403); no session.
+        # A learner logs in via the shared login: JWT only, no django session,
+        # so the login-signal receiver records nothing.
         resp = self.client.post(
             self.login_url,
             {'email': 'learner@example.com', 'password': 'pw12345!'},
             format='json',
         )
-        self.assertEqual(resp.status_code, status.HTTP_403_FORBIDDEN)
+        self.assertEqual(resp.status_code, status.HTTP_200_OK)
         self.assertEqual(AdminSession.objects.count(), 0)
 
     # --- list -------------------------------------------------------------

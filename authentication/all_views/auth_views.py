@@ -2,6 +2,7 @@ import logging
 
 from django.conf import settings
 from django.contrib.auth import login as django_login
+from django.contrib.auth import logout as django_logout
 from django.middleware.csrf import get_token
 from django.utils import timezone
 from rest_framework import serializers, status
@@ -156,7 +157,7 @@ class LogoutView(APIView):
     permission_classes = [IsAuthenticated]
 
     def post(self, request):
-        serializer = LogoutSerializer(data=request.data)
+        serializer = LogoutSerializer(data=request.data, context={'request': request})
         if not serializer.is_valid():
             return Response(
                 {
@@ -178,6 +179,10 @@ class LogoutView(APIView):
                 },
                 status=status.HTTP_400_BAD_REQUEST,
             )
+
+        # admin logout needs csrf cookie cleared and session invalidated
+        if getattr(request, 'session', None) is not None and request.session.session_key:
+            django_logout(request)
 
         response = Response(
             {

@@ -28,11 +28,13 @@ a full tour, or jump to the subsystem you're working on.
 20. `20-analytics-dashboard.md` — partner-institution analytics: metrics, institution-scoping, query strategy, revenue/attendance caveats
 21. `21-payments.md` — SSLCommerz hosted checkout: order state machine, validation trust model, callback topology
 22. `22-scheduled-courses.md` — cohort schedules: schedule state machine, cohort enrollment, drip release, learner gates
+23. `23-scheduled-course-lifecycle.md` — scheduled-course user journey paired with the backend flow at each step
+24. `24-admin-console-auth.md` — admin console: session login, device/session tracking + remote logout, user management + audit log
 
 ## Scope
 
 - API base: `/api/v1/`
-- Main apps: `authentication`, `courses`, `id_verification`, `messaging`, `notifications`, `realtime`, `webinars`, `analytics`, `core`
+- Main apps: `authentication`, `courses`, `id_verification`, `messaging`, `notifications`, `realtime`, `webinars`, `analytics`, `payments`, `admin_console`, `core`
 - This guide explains:
   - Database model fields (key entities)
   - System processes (request/flow behavior)

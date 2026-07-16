@@ -332,8 +332,11 @@ DEFAULT_FROM_EMAIL = env('DEFAULT_FROM_EMAIL', default=EMAIL_HOST_USER)
 
 # Rate Limiting
 OTP_RATE_LIMIT = env('OTP_RATE_LIMIT', default='20/min')
+# Shared login (LoginThrottle) also throttles admin logins — the admin console
+# has no separate login endpoint; it rides POST /api/v1/auth/login/.
 LOGIN_RATE_LIMIT = env('LOGIN_RATE_LIMIT', default='10/min')
-ADMIN_LOGIN_RATE_LIMIT = env('ADMIN_LOGIN_RATE_LIMIT', default='10/min')
+# Per-admin cap on user-management mutations (suspend/reactivate/role).
+ADMIN_ACTION_RATE_LIMIT = env('ADMIN_ACTION_RATE_LIMIT', default='30/min')
 
 
 # Logging

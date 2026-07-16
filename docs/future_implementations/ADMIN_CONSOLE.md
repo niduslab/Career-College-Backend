@@ -20,23 +20,25 @@ Each feature below is grouped, given a short plain-language description, and mar
 
 **Why:** the admin console is a back-office tool used from a browser, not the SPA. Session auth gives CSRF-protected writes, easy "log out everywhere", and short idle timeouts — all awkward to bolt onto the 12-hour JWT access tokens the public API uses.
 
-**Shipped:** new `admin_console/` app (model-less, mirrors `analytics/`). Endpoints: `GET auth/csrf/`, `POST auth/login/`, `POST auth/logout/`, `GET auth/session/`. `AdminConsoleAPIView` base sets `authentication_classes = [SessionAuthentication, CookieJWTAuthentication, JWTAuthentication]` (session-primary, JWT fallback) + the admin triad; session auth is enabled **per-view only**, never globally, so the JWT API keeps working without CSRF. Idle timeout via `SESSION_SAVE_EVERY_REQUEST` + `SESSION_COOKIE_AGE` (`ADMIN_SESSION_IDLE_TIMEOUT`, default 30 min). Re-auth hook: `IsRecentlyAuthenticatedAdmin` (`core/permissions.py`) checks `session['admin_login_at']` age against `ADMIN_REAUTH_MAX_AGE` — wired onto sensitive endpoints as they're built. Tests: `admin_console/all_tests/test_admin_session_auth.py`. See `docs/architecture/24-admin-console-auth.md` and `docs/api-testing/postman-admin-console.md`.
+**Shipped:** new `admin_console/` app. **Login and logout are the shared `POST /api/v1/auth/login/` and `POST /api/v1/auth/logout/`** — for an admin, login opens a Django session + primes CSRF alongside the usual JWT, and logout flushes that session; the console needs no auth endpoints of its own (early dedicated `auth/login/` + `auth/csrf/` + `auth/logout/` were removed as redundant). The console exposes only `GET auth/session/` (who-am-I). `AdminConsoleAPIView` base sets `authentication_classes = [SessionAuthentication, CookieJWTAuthentication, JWTAuthentication]` (session-primary, JWT fallback) + the admin triad; session auth is enabled **per-view only**, never globally, so the JWT API keeps working without CSRF. Idle timeout via `SESSION_SAVE_EVERY_REQUEST` + `SESSION_COOKIE_AGE` (`ADMIN_SESSION_IDLE_TIMEOUT`, default 30 min). Re-auth hook: `IsRecentlyAuthenticatedAdmin` (`core/permissions.py`) checks `session['admin_login_at']` age against `ADMIN_REAUTH_MAX_AGE`. Tests: `admin_console/all_tests/test_admin_session_auth.py`. See `docs/architecture/24-admin-console-auth.md` and `docs/api-testing/postman-admin-console.md`.
 
 **Deferred:** TOTP 2FA (no library installed yet).
 
 ---
 
-## 1. Dedicated user-management console
+## 1. Dedicated user-management console 🟡 **partially built**
 
 **What:** a first-class place to administer every account on the platform.
 
-- Search / filter accounts (by email, role/`user_type`, verification state, signup date, activity).
-- Role editing (change `user_type`, grant/revoke staff/admin).
-- Suspend / deactivate / reactivate accounts.
-- Dispute & support-ticket handling (view, assign, resolve).
-- Per-user activity & audit logs (who did what, when).
+- Search / filter accounts (by email, role/`user_type`, verification state, signup date, activity). ✅ **built** (`GET admin-console/users/`).
+- Role editing (change `user_type`, grant/revoke staff/admin). ✅ **built** (`POST users/<id>/role/`).
+- Suspend / deactivate / reactivate accounts. ✅ **built** (`POST users/<id>/suspend/` + `/reactivate/` — sets `is_restricted_by_admin` + `is_active`, killing new logins and existing access tokens).
+- Dispute & support-ticket handling (view, assign, resolve). 🔴 **not built** (needs `Ticket`/`Dispute` models — own feature).
+- Per-user activity & audit logs (who did what, when). 🟡 **audit partially built** — `AdminActionLog` (append-only) records user-mgmt mutations (`GET admin-console/audit/`); a platform-wide audit of *every* admin mutation (§2/§4/§6/§8) is still pending.
 
-**Scope:** new `admin_console/` app; new models for **tickets/disputes** and an **audit log** (append-only). Account suspend needs an `is_active`/`is_suspended` flag path and enforcement in the auth layer. Audit log should capture every admin mutation platform-wide.
+**Shipped:** endpoints in `admin_console/all_views/user_views.py`, logic in `admin_console/services/user_admin_service.py`, `AdminActionLog` model (`admin_console/0002`). Suspend enforcement uses the existing `is_active` + `is_restricted_by_admin` flags (both already checked by every login path; `is_active=False` also kills SimpleJWT access tokens). Role switching provisions the target profile via `authentication/services/profile_service.py:ensure_profile_for_type` (now the single source of truth, shared with the create-time signal). All endpoints use the base admin gate (session or JWT + `IsPlatformAdmin`); the step-up `IsRecentlyAuthenticatedAdmin` is available but not applied. Tests: `admin_console/all_tests/test_user_management.py`. See `docs/architecture/24-admin-console-auth.md` → *User management & audit log*.
+
+**Still deferred:** support tickets/disputes, a suspension-notification email (greenfield 4-edit notification wiring), refresh-token blacklisting on suspend, and the platform-wide (all-apps) audit log.
 
 ---
 
@@ -159,11 +161,11 @@ Sprint 8: Admin Capabilities
     - Admin dashboard
     - Navigation & permissions
     - Shared admin components
-3. User Management
-    - User listing & search
-    - Role management
-    - Suspend/Reactivate accounts
-    - Support tickets
+3. User Management 🟡 partially built
+    - User listing & search ✅
+    - Role management ✅
+    - Suspend/Reactivate accounts ✅
+    - Support tickets 🔴 (deferred)
 4. Course Management
     - Feature/Promote courses
     - Force publish/unpublish

@@ -1,5 +1,13 @@
-from admin_console.all_serializers import AdminLoginSerializer
+from admin_console.all_serializers import (
+    AdminActionLogSerializer,
+    AdminSessionSerializer,
+    AdminUserDetailSerializer,
+    AdminUserListSerializer,
+)
 
 __all__ = [
-    'AdminLoginSerializer',
+    'AdminSessionSerializer',
+    'AdminUserListSerializer',
+    'AdminUserDetailSerializer',
+    'AdminActionLogSerializer',
 ]

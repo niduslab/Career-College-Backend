@@ -5,12 +5,17 @@ All mutations are atomic and write an ``AdminActionLog`` row in the same
 transaction, so the audit trail can never drift from the action. Business-rule
 violations raise ``AdminUserActionError`` carrying an HTTP status.
 """
+import logging
+
 from django.db import transaction
 from django.db.models import Q
 
 from admin_console.all_models import AdminActionLog
 from authentication.models import User
 from authentication.services.profile_service import ensure_profile_for_type
+from authentication.services.token_service import blacklist_all_refresh_tokens
+
+logger = logging.getLogger(__name__)
 
 _VALID_USER_TYPES = {choice[0] for choice in User.USER_TYPE_CHOICES}
 _SORT_WHITELIST = {
@@ -146,6 +151,17 @@ def suspend_user(actor, pk, reason=''):
         actor, AdminActionLog.Action.SUSPEND, target, reason=reason,
         metadata={'is_active': False, 'is_restricted_by_admin': True},
     )
+
+    # Revoke outstanding refresh tokens so the user cannot mint a fresh access
+    # token via /token/refresh/. Best-effort: the helper logs (CRITICAL) but
+    # swallows its own errors, so a token-cleanup blip never blocks a suspend —
+    # login is already blocked by is_active=False / is_restricted_by_admin.
+    blacklist_all_refresh_tokens(target)
+    logger.info('admin %s suspended user %s', actor.pk, target.pk)
+    # Notify after commit only — a rolled-back suspend must not email.
+    transaction.on_commit(
+        lambda: _dispatch_account_email('account.suspended', target, reason=reason)
+    )
     return target
 
 
@@ -153,7 +169,9 @@ def suspend_user(actor, pk, reason=''):
 def reactivate_user(actor, pk):
     """Lift a suspension: clear the restriction and re-activate."""
     target = _get_target(pk, lock=True)
-    if not (target.is_restricted_by_admin or not target.is_active):
+    # Only lift an admin suspension. A user who is merely is_active=False for a
+    # non-suspension reason must not be silently re-activated here.
+    if not target.is_restricted_by_admin:
         raise AdminUserActionError('This account is not suspended.', 422)
 
     target.is_restricted_by_admin = False
@@ -164,7 +182,20 @@ def reactivate_user(actor, pk):
         actor, AdminActionLog.Action.REACTIVATE, target,
         metadata={'is_active': True, 'is_restricted_by_admin': False},
     )
+    logger.info('admin %s reactivated user %s', actor.pk, target.pk)
+
+    transaction.on_commit(
+        lambda: _dispatch_account_email('account.reactivated', target)
+    )
     return target
+
+
+def _dispatch_account_email(event_type, target, reason=''):
+    """Send an account-status notification. Lazy import avoids an app-load cycle."""
+    from notifications.services.dispatcher import dispatch
+
+    ctx = {'reason': reason} if reason else {}
+    dispatch(event_type, [target], context=ctx)
 
 
 @transaction.atomic
@@ -212,5 +243,9 @@ def change_user_role(actor, pk, *, new_user_type=None, is_staff=None):
             'old_is_staff': old_is_staff,
             'new_is_staff': target.is_staff,
         },
+    )
+    logger.info(
+        'admin %s changed role of user %s: type %s->%s, is_staff %s->%s',
+        actor.pk, target.pk, old_type, target.user_type, old_is_staff, target.is_staff,
     )
     return target

@@ -5,8 +5,17 @@ from django.core.mail import EmailMultiAlternatives
 from django.conf import settings
 
 from .email_utils import render_notification_email
+from .models import NotificationEventType
 
 logger = logging.getLogger(__name__)
+
+# Events that MUST reach an inactive account. Suspension deactivates the user
+# (is_active=False), yet the whole point is to tell them they were suspended —
+# so the inactive-recipient skip below is bypassed for these. A hard-deleted
+# account is still never emailed.
+_EMAIL_INACTIVE_ALLOWED_EVENTS = frozenset({
+    NotificationEventType.ACCOUNT_SUSPENDED,
+})
 
 
 @shared_task(
@@ -27,9 +36,14 @@ def send_notification_email_task(self, notification_pk: int) -> None:
         return
 
     recipient = notification.recipient
-    if not recipient.is_active or getattr(recipient, 'is_deleted', False):
+    if getattr(recipient, 'is_deleted', False):
         logger.info(
-            'send_notification_email_task: recipient %s inactive/deleted, skipping', recipient.id
+            'send_notification_email_task: recipient %s deleted, skipping', recipient.id
+        )
+        return
+    if not recipient.is_active and notification.event_type not in _EMAIL_INACTIVE_ALLOWED_EVENTS:
+        logger.info(
+            'send_notification_email_task: recipient %s inactive, skipping', recipient.id
         )
         return
 

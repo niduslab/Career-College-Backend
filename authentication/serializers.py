@@ -7,9 +7,11 @@ from django.db import IntegrityError
 from django.utils import timezone
 from datetime import timedelta
 from rest_framework import serializers
-from rest_framework_simplejwt.token_blacklist.models import BlacklistedToken, OutstandingToken
 from rest_framework_simplejwt.tokens import RefreshToken
 
+from authentication.services.token_service import (
+    blacklist_all_refresh_tokens as _blacklist_all_tokens,
+)
 from authentication.utils import validate_custom_password_strength
 from authentication.models import (
     Department,
@@ -21,21 +23,6 @@ from authentication.models import (
 )
 
 User = get_user_model()
-
-
-def _blacklist_all_tokens(user):
-    """Blacklist every outstanding refresh token for the user.
-
-    Called after password change/reset so stolen refresh tokens cannot
-    be used to issue new access tokens after the password is updated.
-    Errors are swallowed — a blacklist failure must not roll back a
-    successful password change.
-    """
-    try:
-        for token in OutstandingToken.objects.filter(user=user):
-            BlacklistedToken.objects.get_or_create(token=token)
-    except Exception:
-        pass
 
 
 # Generic email domains that are not allowed for partner institution registration
@@ -106,9 +93,6 @@ class LogoutSerializer(serializers.Serializer):
         return value
 
     def validate(self, attrs):
-        # A caller may only blacklist their OWN refresh token — otherwise any
-        # authenticated user could revoke someone else's session by submitting
-        # its token. Compare the token's subject to the request user.
         request = self.context.get('request')
         user = getattr(request, 'user', None)
         if user is not None and getattr(user, 'is_authenticated', False):
@@ -216,15 +200,10 @@ class UserRegistrationSerializer(serializers.ModelSerializer):
             raise serializers.ValidationError(
                 {'email': 'A user with this email already exists.'}
             )
-
-        # Profile is auto-created by post_save signal.
-        # Update partner institution profile with registration-time data.
         if user_type == 'partner_institution':
             profile = user.partner_institution_profile
             profile.institution_name = institution_name
             profile.institution_type = institution_type
-            # slug is generated in save() from institution_name (NULL until now);
-            # include it in update_fields so the generated value persists.
             profile.save(update_fields=['institution_name', 'institution_type', 'slug'])
 
         user.generate_otp(purpose='registration')
@@ -321,7 +300,6 @@ class VerifyOTPSerializer(serializers.Serializer):
                 response['is_email_verified'] = True
 
             if purpose == 'password_reset':
-                # Clear OTP code while keeping otp_verified=True for reset-token workflow.
                 user.otp_code = None
                 user.otp_created_at = None
                 user.otp_purpose = None
@@ -419,9 +397,7 @@ class ForgotPasswordSerializer(serializers.Serializer):
             email = attrs['email']
             user = User.objects.all_with_deleted().filter(email__iexact=email).first()
 
-            # Silently discard ineligible accounts — never reveal existence or state
-            # to the caller. attrs['user'] is absent when no OTP should be sent;
-            # save() treats that as a no-op and the view always returns the same 200.
+            # Silently discard ineligible accounts
             eligible = (
                 user is not None
                 and not user.is_deleted
@@ -847,9 +823,7 @@ class ExpertListSerializer(serializers.ModelSerializer):
         ]
 
     def get_course_count(self, obj):
-        # Prefer the annotation from institution_experts_qs (avoids N+1 on the
-        # list endpoint); fall back to a direct count for un-annotated instances
-        # (e.g. the single object returned by the create endpoint).
+        # Prefer the annotation from institution_experts_qs
         annotated = getattr(obj, '_course_count', None)
         if annotated is not None:
             return annotated

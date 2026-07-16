@@ -32,13 +32,13 @@ Each feature below is grouped, given a short plain-language description, and mar
 
 - Search / filter accounts (by email, role/`user_type`, verification state, signup date, activity). ✅ **built** (`GET admin-console/users/`).
 - Role editing (change `user_type`, grant/revoke staff/admin). ✅ **built** (`POST users/<id>/role/`).
-- Suspend / deactivate / reactivate accounts. ✅ **built** (`POST users/<id>/suspend/` + `/reactivate/` — sets `is_restricted_by_admin` + `is_active`, killing new logins and existing access tokens).
+- Suspend / deactivate / reactivate accounts. ✅ **built** (`POST users/<id>/suspend/` + `/reactivate/` — sets `is_restricted_by_admin` + `is_active`, killing new logins and existing access tokens; suspend also **blacklists outstanding refresh tokens** and both actions **email the user** an account-status notice).
 - Dispute & support-ticket handling (view, assign, resolve). 🔴 **not built** (needs `Ticket`/`Dispute` models — own feature).
 - Per-user activity & audit logs (who did what, when). 🟡 **audit partially built** — `AdminActionLog` (append-only) records user-mgmt mutations (`GET admin-console/audit/`); a platform-wide audit of *every* admin mutation (§2/§4/§6/§8) is still pending.
 
 **Shipped:** endpoints in `admin_console/all_views/user_views.py`, logic in `admin_console/services/user_admin_service.py`, `AdminActionLog` model (`admin_console/0002`). Suspend enforcement uses the existing `is_active` + `is_restricted_by_admin` flags (both already checked by every login path; `is_active=False` also kills SimpleJWT access tokens). Role switching provisions the target profile via `authentication/services/profile_service.py:ensure_profile_for_type` (now the single source of truth, shared with the create-time signal). All endpoints use the base admin gate (session or JWT + `IsPlatformAdmin`); the step-up `IsRecentlyAuthenticatedAdmin` is available but not applied. Tests: `admin_console/all_tests/test_user_management.py`. See `docs/architecture/24-admin-console-auth.md` → *User management & audit log*.
 
-**Still deferred:** support tickets/disputes, a suspension-notification email (greenfield 4-edit notification wiring), refresh-token blacklisting on suspend, and the platform-wide (all-apps) audit log.
+**Still deferred:** support tickets/disputes and the platform-wide (all-apps) audit log. (Suspension-notification email + reactivation email and refresh-token blacklisting on suspend are now **built**.)
 
 ---
 

@@ -34,6 +34,8 @@ class NotificationEventType(models.TextChoices):
     WEBINAR_REGISTERED       = 'webinar.registered',       'Webinar Registration Confirmed'
     PAYMENT_SUCCESSFUL       = 'payment.successful',       'Payment Successful'
     PAYMENT_FAILED           = 'payment.failed',           'Payment Failed'
+    ACCOUNT_SUSPENDED        = 'account.suspended',        'Account Suspended'
+    ACCOUNT_REACTIVATED      = 'account.reactivated',      'Account Reactivated'
 
 
 class NotificationCategory(models.TextChoices):

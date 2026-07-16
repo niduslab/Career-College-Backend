@@ -58,11 +58,7 @@ class UserRegistrationView(APIView):
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR,
             )
 
-        # OTP is already generated in serializer.create(); only send it here.
         otp_code = user.otp_code
-
-        # OTP email is sent asynchronously; only a broker-enqueue failure is
-        # surfaced synchronously (the worker handles SMTP + retries).
         try:
             send_otp_email_task.delay(user.pk, otp_code, 'registration')
         except Exception as e:
@@ -200,7 +196,14 @@ class TokenRefreshView(APIView):
 
     def post(self, request):
         serializer = TokenRefreshSerializer(data=request.data)
-        if not serializer.is_valid():
+        try:
+            valid = serializer.is_valid()
+        except TokenError as e:
+            return Response(
+                {'success': False, 'message': str(e)},
+                status=status.HTTP_401_UNAUTHORIZED,
+            )
+        if not valid:
             return Response(
                 {
                     'success': False,
@@ -208,17 +211,6 @@ class TokenRefreshView(APIView):
                     'errors': serializer.errors,
                 },
                 status=status.HTTP_400_BAD_REQUEST,
-            )
-
-        try:
-            serializer.validated_data  # triggers token validation
-        except TokenError as e:
-            return Response(
-                {
-                    'success': False,
-                    'message': str(e),
-                },
-                status=status.HTTP_401_UNAUTHORIZED,
             )
 
         return Response(

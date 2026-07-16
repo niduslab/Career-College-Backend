@@ -6,13 +6,16 @@ from django.core.cache import cache
 from django.urls import reverse
 from rest_framework import status
 from rest_framework.test import APITestCase
+from rest_framework_simplejwt.token_blacklist.models import BlacklistedToken, OutstandingToken
 from rest_framework_simplejwt.tokens import RefreshToken
 
 from admin_console.all_models import AdminActionLog
 from authentication.models import User
+from notifications.models import Notification
 
 _SHARED_LOGIN = '/api/v1/auth/login/'
 _NOTIF_UNREAD = '/api/v1/notifications/unread-count/'
+_TOKEN_REFRESH = '/api/v1/auth/token/refresh/'
 
 
 class AdminUserManagementTests(APITestCase):
@@ -131,6 +134,32 @@ class AdminUserManagementTests(APITestCase):
             status.HTTP_401_UNAUTHORIZED,
         )
 
+    def test_suspend_blacklists_refresh_tokens(self):
+        # 1b: an outstanding refresh token must be revoked so the suspended
+        # user cannot mint a new access token via /token/refresh/.
+        refresh = RefreshToken.for_user(self.learner)
+        self.assertTrue(OutstandingToken.objects.filter(user=self.learner).exists())
+
+        self.client.post(reverse('admin_console:user-suspend', args=[self.learner.pk]), {}, format='json')
+
+        self.assertTrue(BlacklistedToken.objects.filter(token__user=self.learner).exists())
+        fresh = self.client_class()
+        resp = fresh.post(_TOKEN_REFRESH, {'refresh': str(refresh)}, format='json')
+        self.assertEqual(resp.status_code, status.HTTP_401_UNAUTHORIZED)
+
+    def test_suspend_sends_notification(self):
+        # 1a: suspension emits an ACCOUNT_SUSPENDED notification (on_commit).
+        with self.captureOnCommitCallbacks(execute=True):
+            self.client.post(
+                reverse('admin_console:user-suspend', args=[self.learner.pk]),
+                {'reason': 'spam'}, format='json',
+            )
+        self.assertTrue(
+            Notification.objects.filter(
+                recipient=self.learner, event_type='account.suspended'
+            ).exists()
+        )
+
     def test_cannot_suspend_self(self):
         url = reverse('admin_console:user-suspend', args=[self.admin.pk])
         resp = self.client.post(url, {}, format='json')
@@ -156,9 +185,76 @@ class AdminUserManagementTests(APITestCase):
         self.assertFalse(self.learner.is_restricted_by_admin)
         self.assertTrue(self.learner.is_active)
 
+    def test_reactivate_sends_notification(self):
+        self.client.post(reverse('admin_console:user-suspend', args=[self.learner.pk]), {}, format='json')
+        with self.captureOnCommitCallbacks(execute=True):
+            self.client.post(reverse('admin_console:user-reactivate', args=[self.learner.pk]))
+        self.assertTrue(
+            Notification.objects.filter(
+                recipient=self.learner, event_type='account.reactivated'
+            ).exists()
+        )
+
     def test_reactivate_when_not_suspended_422(self):
         resp = self.client.post(reverse('admin_console:user-reactivate', args=[self.learner.pk]))
         self.assertEqual(resp.status_code, status.HTTP_422_UNPROCESSABLE_ENTITY)
+
+    def test_reactivate_ignores_non_admin_deactivation(self):
+        # is_active=False for a reason other than an admin suspension must not
+        # be liftable here (guard keys on is_restricted_by_admin).
+        self.learner.is_active = False
+        self.learner.is_restricted_by_admin = False
+        self.learner.save(update_fields=['is_active', 'is_restricted_by_admin'])
+        resp = self.client.post(reverse('admin_console:user-reactivate', args=[self.learner.pk]))
+        self.assertEqual(resp.status_code, status.HTTP_422_UNPROCESSABLE_ENTITY)
+        self.learner.refresh_from_db()
+        self.assertFalse(self.learner.is_active)  # not silently re-activated
+
+    def test_suspend_with_no_outstanding_tokens_ok(self):
+        # A user who never logged in has zero OutstandingTokens; blacklisting
+        # must be a clean no-op, not a crash.
+        self.assertFalse(OutstandingToken.objects.filter(user=self.instructor).exists())
+        resp = self.client.post(
+            reverse('admin_console:user-suspend', args=[self.instructor.pk]), {}, format='json',
+        )
+        self.assertEqual(resp.status_code, status.HTTP_200_OK)
+        self.instructor.refresh_from_db()
+        self.assertFalse(self.instructor.is_active)
+
+    def test_suspension_email_carries_reason(self):
+        with self.captureOnCommitCallbacks(execute=True):
+            self.client.post(
+                reverse('admin_console:user-suspend', args=[self.learner.pk]),
+                {'reason': 'policy violation'}, format='json',
+            )
+        note = Notification.objects.get(
+            recipient=self.learner, event_type='account.suspended',
+        )
+        self.assertIn('policy violation', note.body)
+
+    def test_suspension_email_reaches_deactivated_user(self):
+        # Suspend sets is_active=False; the email must still send (the whole
+        # point is to notify the suspended user) — regression guard for the
+        # inactive-recipient skip in send_notification_email_task.
+        from django.core import mail
+        with self.captureOnCommitCallbacks(execute=True):
+            self.client.post(
+                reverse('admin_console:user-suspend', args=[self.learner.pk]), {}, format='json',
+            )
+        self.assertEqual(len(mail.outbox), 1)
+        self.assertIn('learner@example.com', mail.outbox[0].to)
+
+    def test_reactivated_user_can_obtain_new_tokens(self):
+        # After suspend (blacklists old tokens) + reactivate, a token minted
+        # afterward must work — reactivation leaves no lingering block.
+        self.client.post(reverse('admin_console:user-suspend', args=[self.learner.pk]), {}, format='json')
+        self.client.post(reverse('admin_console:user-reactivate', args=[self.learner.pk]))
+        self.learner.refresh_from_db()
+        new_refresh = RefreshToken.for_user(self.learner)
+        refreshed = self.client_class().post(
+            _TOKEN_REFRESH, {'refresh': str(new_refresh)}, format='json',
+        )
+        self.assertEqual(refreshed.status_code, status.HTTP_200_OK)
 
     # --- role change ------------------------------------------------------
     def test_role_change_switches_type_and_provisions_profile(self):

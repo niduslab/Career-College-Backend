@@ -303,6 +303,28 @@ def _payment_failed(recipient, ctx):
     )
 
 
+_MAX_SUSPENSION_REASON_LEN = 500
+
+
+def _account_suspended(recipient, ctx):
+    reason = (ctx.get('reason') or '').strip()
+    body = 'Your Career College account has been suspended by an administrator.'
+    if reason:
+        # Reason is admin free-text and user-facing; cap its length so a huge
+        # note can't bloat the email. Django templates autoescape it on render.
+        body += f' Reason: {reason[:_MAX_SUSPENSION_REASON_LEN]}'
+    body += ' You can no longer sign in. If you believe this is a mistake, contact support.'
+    return _build(title='Account suspended', body=body, data={})
+
+
+def _account_reactivated(recipient, ctx):
+    return _build(
+        title='Account reactivated',
+        body='Your Career College account has been reactivated. You can sign in again.',
+        data={},
+    )
+
+
 _BUILDERS = {
     _ET.ENROLLMENT_CREATED:      _enrollment_created,
     _ET.LECTURE_COMPLETED:       _lecture_completed,
@@ -335,6 +357,8 @@ _BUILDERS = {
     _ET.WEBINAR_REGISTERED:      _webinar_registered,
     _ET.PAYMENT_SUCCESSFUL:      _payment_successful,
     _ET.PAYMENT_FAILED:          _payment_failed,
+    _ET.ACCOUNT_SUSPENDED:       _account_suspended,
+    _ET.ACCOUNT_REACTIVATED:     _account_reactivated,
 }
 
 

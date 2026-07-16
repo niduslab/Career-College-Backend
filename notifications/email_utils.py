@@ -28,6 +28,8 @@ _EVENT_TEMPLATE_MAP = {
     _ET.WEBINAR_REGISTERED:      'notifications/emails/webinar_registered.html',
     _ET.PAYMENT_SUCCESSFUL:      'notifications/emails/payment_successful.html',
     _ET.PAYMENT_FAILED:          'notifications/emails/payment_failed.html',
+    _ET.ACCOUNT_SUSPENDED:       'notifications/emails/account_suspended.html',
+    _ET.ACCOUNT_REACTIVATED:     'notifications/emails/account_reactivated.html',
 }
 
 

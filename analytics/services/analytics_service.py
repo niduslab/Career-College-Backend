@@ -291,6 +291,36 @@ def build_time_series(queryset, date_field, granularity, periods):
     ]
 
 
+def build_value_series(queryset, date_field, agg_expr, granularity, periods):
+    """Contiguous zero-filled series of an aggregate VALUE (e.g. Sum) per bucket.
+
+    Sibling of `build_time_series` for sums instead of row counts — used by the
+    admin revenue trend. `agg_expr` is a Django aggregate (e.g. `Sum('amount')`).
+    Empty buckets fill to `0`; every value is cast to float so the payload is
+    JSON-safe (Decimal sums otherwise render as strings).
+    """
+    tz = timezone.get_current_timezone()
+    now = timezone.now()
+
+    granularity = 'weekly' if granularity == 'weekly' else 'monthly'
+    trunc = TruncWeek(date_field, tzinfo=tz) if granularity == 'weekly' else TruncMonth(date_field, tzinfo=tz)
+
+    starts = _bucket_starts(now, granularity, periods)
+    rows = (
+        queryset
+        .filter(**{f'{date_field}__gte': starts[0]})
+        .annotate(period=trunc)
+        .values('period')
+        .annotate(value=agg_expr)
+    )
+    values = {_period_key(r['period'], granularity): float(r['value'] or 0) for r in rows if r['period']}
+
+    return [
+        {'period': _period_key(start, granularity), 'value': values.get(_period_key(start, granularity), 0.0)}
+        for start in starts
+    ]
+
+
 def _normalize_trend_params(granularity, periods):
     granularity = 'weekly' if granularity == 'weekly' else 'monthly'
     try:

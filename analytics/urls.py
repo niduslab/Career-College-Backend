@@ -1,6 +1,13 @@
 from django.urls import path
 
 from analytics.views import (
+    AdminAnalyticsSummaryView,
+    AdminCertificateTrendView,
+    AdminEnrollmentTrendView,
+    AdminFunnelView,
+    AdminRevenueTrendView,
+    AdminTopCoursesView,
+    AdminUserTrendView,
     InstitutionAnalyticsSummaryView,
     InstitutionCertificateTrendView,
     InstitutionEnrollmentTrendView,
@@ -22,4 +29,13 @@ urlpatterns = [
     # Per-expert performance (literal path before the <int:expert_id> route).
     path('partner/experts/performance/', InstitutionExpertPerformanceView.as_view(), name='partner-expert-performance'),
     path('partner/experts/<int:expert_id>/performance/', InstitutionExpertPerformanceDetailView.as_view(), name='partner-expert-performance-detail'),
+
+    # Platform-wide analytics dashboard (admin only)
+    path('admin/summary/', AdminAnalyticsSummaryView.as_view(), name='admin-summary'),
+    path('admin/users/trend/', AdminUserTrendView.as_view(), name='admin-users-trend'),
+    path('admin/enrollments/trend/', AdminEnrollmentTrendView.as_view(), name='admin-enrollments-trend'),
+    path('admin/certificates/trend/', AdminCertificateTrendView.as_view(), name='admin-certificates-trend'),
+    path('admin/revenue/trend/', AdminRevenueTrendView.as_view(), name='admin-revenue-trend'),
+    path('admin/top-courses/', AdminTopCoursesView.as_view(), name='admin-top-courses'),
+    path('admin/funnel/', AdminFunnelView.as_view(), name='admin-funnel'),
 ]

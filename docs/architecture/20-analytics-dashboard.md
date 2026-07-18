@@ -174,3 +174,40 @@ Every endpoint derives the institution from the token and takes no resource id, 
 mode is permission → **403** from `IsVerifiedPartnerInstitution`. This does not contradict the
 project's numeric-ID → 404 rule: that rule applies to endpoints addressing a specific resource by id,
 and these endpoints address none.
+
+## Admin (system-wide) surface
+
+The `partner/` segment left room for a sibling `admin/` segment; it is now built. Same app, same
+read-only/no-models philosophy — the **only** difference is scope: **no institution filter**, so every
+number spans the whole platform. Gated `[IsAuthenticated, IsEmailVerified, IsPlatformAdmin]` on plain
+`APIView` classes (not `AdminConsoleAPIView` — the admin SPA authenticates with the JWT cookie minted by
+the shared login, so no session/CSRF plumbing or cross-app dependency is needed).
+
+**Files:** `analytics/services/admin_analytics_service.py` (aggregation), `analytics/all_views/admin_analytics_views.py`
+(views). The admin service reuses the partner building blocks — `build_time_series`, `_normalize_trend_params`,
+`_pct`, `_COURSE_STATUSES` — plus a new sibling **`build_value_series(qs, date_field, agg_expr, granularity, periods)`**
+that sums an aggregate per bucket (floated for JSON) instead of counting rows; it powers the revenue trend.
+Because the admin functions share names with the partner ones (`enrollment_trend`, `top_courses`, …), the
+admin views import them by **full module path** rather than the flat `analytics.services` re-export, which
+stays partner-only to avoid a clash.
+
+**Endpoints:** `admin/summary/`, `admin/users/trend/`, `admin/enrollments/trend/`, `admin/certificates/trend/`,
+`admin/revenue/trend/`, `admin/top-courses/`, `admin/funnel/`. The summary bundles users (total / by_type /
+active / verified / signup growth), courses (status breakdown + platform weighted rating), enrollments
+(active / completed / completion-rate / free-vs-paid / growth), certificates, webinars, and revenue. The
+funnel reports distinct **learners** at each stage signup → enrolled → completed → certified, with a
+`from_prev_pct` step conversion. Access-denied is **403** only (no resource id; `IsPlatformAdmin`).
+
+**Revenue diverges from the partner dashboard — this is deliberate.** The partner dashboard keeps
+`revenue.enabled=False` because per-institution revenue needs attribution/payout (Payments Phase 2). The
+admin dashboard computes revenue **for real** — `Order.objects.filter(status='paid')` summed platform-wide
+(`gross`, `paid_orders`, `by_item_type` course-vs-webinar, `this_window`, `growth_pct`, `currency='BDT'`).
+At platform scope an admin sees every order, so there is no attribution problem. `Sum('amount')` coalesces
+to `0` on an empty platform and Decimals are floated before serialization.
+
+**Query strategy / migration safety:** summary ≈ 12–15 fixed aggregate queries (conditional
+`Count(filter=Q())` / `Avg` / `Sum`), independent of data volume; the funnel is 4 distinct-count queries;
+each trend is one grouped query zero-filled in Python. No new models or migrations. Existing indexes cover
+the joins (`idx_user_type_active` backs the by-type counts; `Order.status` is indexed). Optional future work
+(not built): a dedicated summary cache and any extra `Order` index — current volume does not warrant either.
+Tests: `analytics/all_tests/test_admin_analytics.py`.

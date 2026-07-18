@@ -1,4 +1,11 @@
 from analytics.all_views import (
+    AdminAnalyticsSummaryView,
+    AdminCertificateTrendView,
+    AdminEnrollmentTrendView,
+    AdminFunnelView,
+    AdminRevenueTrendView,
+    AdminTopCoursesView,
+    AdminUserTrendView,
     InstitutionAnalyticsSummaryView,
     InstitutionCertificateTrendView,
     InstitutionEnrollmentTrendView,
@@ -16,4 +23,11 @@ __all__ = [
     'InstitutionExpertPerformanceView',
     'InstitutionTopCoursesView',
     'InstitutionWebinarTrendView',
+    'AdminAnalyticsSummaryView',
+    'AdminCertificateTrendView',
+    'AdminEnrollmentTrendView',
+    'AdminFunnelView',
+    'AdminRevenueTrendView',
+    'AdminTopCoursesView',
+    'AdminUserTrendView',
 ]

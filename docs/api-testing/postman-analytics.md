@@ -268,3 +268,202 @@ Authorization: {{institution_token}}
 Run **1.1** with `other_institution_token`. The numbers must reflect **only** that institution's data.
 No course, enrollment, certificate, webinar, or expert from Acme may appear in the other institution's
 summary. This is the core security invariant of the feature.
+
+---
+
+# Admin (System-Wide) Analytics
+
+Platform-wide counterpart under `analytics/admin/...`, gated `IsPlatformAdmin` — **no institution scope**.
+Every query spans the whole platform (all institutions, all users).
+
+Architecture: `docs/architecture/20-analytics-dashboard.md` (§ Admin surface).
+
+---
+
+## Environment Variables
+
+| Variable | Example value | Notes |
+|----------|--------------|-------|
+| `base_url` | `http://localhost:8000/api/v1` | No trailing slash |
+| `admin_token` | `Bearer eyJ...` | JWT (or the `access_token` cookie from the shared admin login) for a user with `is_staff=True` or `user_type='admin'` |
+| `learner_token` | `Bearer eyJ...` | Any non-admin token — negative authz test |
+
+> **Precondition:** `admin_token` must be a platform admin. The shared login (`POST /api/v1/auth/login/`)
+> returns JWT for an admin; you can also use the `access_token` cookie it sets. Seed data across a few
+> institutions — courses, enrollments, PAID orders, certificates, webinars — so the platform totals are
+> non-trivial.
+
+---
+
+## Access-Denied Policy
+
+These endpoints take **no resource id** — access is derived from the token. The only failure mode is permission.
+
+| Caller | Response |
+|---|---|
+| No token | **401** |
+| Learner / instructor / institution (any non-admin) | **403** |
+| Platform admin | **200** (platform-wide data) |
+
+---
+
+## Group 5: Platform Summary
+
+### 5.1 Get the platform summary
+
+```
+GET {{base_url}}/analytics/admin/summary/
+Authorization: {{admin_token}}
+```
+
+**200** — shape:
+
+```json
+{
+  "success": true,
+  "data": {
+    "users": {
+      "total": 120, "by_type": {"learner": 100, "instructor": 12, "partner_institution": 6, "admin": 2},
+      "active": 118, "email_verified": 110,
+      "new_this_window": 8, "growth_pct": 14.3
+    },
+    "courses": {
+      "status_breakdown": {"draft": 5, "institution_review": 1, "under_review": 2,
+                            "published": 20, "rejected": 1, "archived": 3},
+      "published": 20, "avg_rating": 4.28
+    },
+    "enrollments": {
+      "active": 300, "completed": 90, "completion_rate": 30.0,
+      "by_type": {"free": 250, "paid": 50},
+      "growth_pct": 12.5
+    },
+    "certificates": {"total": 90, "this_month": 15},
+    "webinars": {"total": 8, "published": 5, "upcoming": 2, "live": 0, "completed": 3, "registrations": 40},
+    "revenue": {
+      "enabled": true, "currency": "BDT",
+      "gross": 1500.0, "paid_orders": 2,
+      "by_item_type": {"course": 1000.0, "webinar": 500.0},
+      "this_window": 1500.0, "growth_pct": null
+    }
+  }
+}
+```
+
+**Checks:**
+- `users.total` = every account; `by_type` buckets sum to `total`.
+- `courses.avg_rating` is **review-weighted** platform-wide (same rule as the partner summary).
+- `enrollments.by_type` splits free vs paid; `completion_rate` = `completed / active` × 100.
+- `revenue.enabled` is **`true`** (unlike partner, which is always `false`). `gross` = sum of `amount`
+  over **PAID orders only** — `initiated`/`failed`/`cancelled` excluded.
+- `revenue.growth_pct` is `null` when the previous window had 0 gross (not computable, not faked).
+
+### 5.2 Negative — non-admin forbidden
+
+```
+GET {{base_url}}/analytics/admin/summary/
+Authorization: {{learner_token}}
+```
+
+**403.** No token → **401**.
+
+---
+
+## Group 6: Trends
+
+Four trend endpoints, same param contract as the partner trends
+(`?granularity=monthly|weekly&periods=N`, `periods` clamped to `[1, 24]`):
+
+| Endpoint | Series shape | Source |
+|---|---|---|
+| `admin/users/trend/` | `{period, count}` | `User.registration_date` |
+| `admin/enrollments/trend/` | `{period, count}` | `Enrollment.created_at` |
+| `admin/certificates/trend/` | `{period, count}` | `Certificate.issued_at` |
+| `admin/revenue/trend/` | `{period, value}` | summed PAID-order gross per bucket |
+
+### 6.1 Count trend (users / enrollments / certificates)
+
+```
+GET {{base_url}}/analytics/admin/users/trend/?granularity=monthly&periods=6
+Authorization: {{admin_token}}
+```
+
+**200** — 6 contiguous monthly buckets, oldest first, rows `{period, count}` (zero-filled).
+
+### 6.2 Revenue trend (summed, not counted)
+
+```
+GET {{base_url}}/analytics/admin/revenue/trend/?granularity=monthly&periods=6
+Authorization: {{admin_token}}
+```
+
+**200** — rows are `{period, value}` where `value` is the **summed gross** of PAID orders in the bucket
+(a float), **not** a row count.
+
+```json
+{"success": true, "data": {
+  "granularity": "monthly", "periods": 6,
+  "series": [
+    {"period": "2026-02", "value": 0.0},
+    {"period": "2026-03", "value": 500.0},
+    {"period": "2026-04", "value": 0.0},
+    {"period": "2026-05", "value": 1000.0},
+    {"period": "2026-06", "value": 0.0},
+    {"period": "2026-07", "value": 0.0}
+  ]
+}}
+```
+
+### 6.3 Param clamping
+
+```
+GET {{base_url}}/analytics/admin/revenue/trend/?periods=999
+Authorization: {{admin_token}}
+```
+
+**200** — `periods` clamped to **24**; invalid/absent `granularity` defaults to `monthly`.
+
+---
+
+## Group 7: Top Courses & Funnel
+
+### 7.1 Top courses (platform-wide)
+
+```
+GET {{base_url}}/analytics/admin/top-courses/?sort=enrollments&limit=10
+Authorization: {{admin_token}}
+```
+
+**200** — same row shape as the partner top-courses, but **courses from every institution appear**
+(no scope filter).
+
+**Checks:**
+- `sort ∈ {enrollments, rating, completion}`; invalid → falls back to `enrollments`.
+- `limit` clamped to `[1, 50]`.
+
+### 7.2 Conversion funnel
+
+```
+GET {{base_url}}/analytics/admin/funnel/
+Authorization: {{admin_token}}
+```
+
+**200** — `stages`: distinct **learners** at `signup → enrolled → completed → certified`. Each stage
+after `signup` carries `from_prev_pct` (the first stage omits the key — it has no previous stage).
+
+```json
+{"success": true, "data": {
+  "stages": [
+    {"key": "signup",    "label": "Signed up", "count": 100},
+    {"key": "enrolled",  "label": "Enrolled",  "count": 60, "from_prev_pct": 60.0},
+    {"key": "completed", "label": "Completed",  "count": 30, "from_prev_pct": 50.0},
+    {"key": "certified", "label": "Certified",  "count": 28, "from_prev_pct": 93.3}
+  ]
+}}
+```
+
+**Checks:**
+- Each stage is `{key, label, count}`; every stage except `signup` also has `from_prev_pct`.
+- Counts are expected to be **monotonically non-increasing** down the funnel. **Known caveat:**
+  `signup` counts current (non-deleted) learner accounts, while `enrolled`/`completed`/`certified`
+  count distinct users on enrollment/certificate rows — a soft-deleted or role-changed learner can push
+  a later stage above `signup` (`from_prev_pct > 100`). Tracked as a data-consistency bug.

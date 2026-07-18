@@ -14,7 +14,7 @@
 | 1 | User management | 🟡 partial — search/role/suspend **+ suspend-email + token-blacklist done**; tickets and platform-wide audit left |
 | — | **Admin console foundation** (dashboard, nav, shared components) | 🔴 **current sprint** (`feature/8.2/admin_console_foundation`) |
 | 2 | Course management (admin) | 🔴 |
-| 3 | System-wide analytics | 🔴 |
+| 3 | System-wide analytics | ✅ built (revenue real, from paid orders) |
 | 4 | Automated approval workflows | 🔴 |
 | 5 | Platform configuration | 🔴 |
 | 6 | Content moderation queue | 🔴 |
@@ -139,22 +139,20 @@ Greenfield notification wiring — needs the **4 edits** (`CLAUDE.md` → notifi
 
 ---
 
-## 3. System-Wide Analytics (admin)
+## 3. System-Wide Analytics (admin) ✅ **built**
 
-**What:** platform-level counterpart to the institution dashboard. The `analytics/` app deliberately left room for an `admin/` URL segment beside `partner/`.
+**What:** platform-level counterpart to the institution dashboard, in the `admin/` URL segment beside `partner/`.
 
-**Do:** add an `admin/` segment: `GET analytics/admin/summary/`, `.../users/trend/`, `.../enrollments/trend/`, `.../courses/`, `.../funnel/` (signup→enroll→complete→certificate). **No new models** — pure aggregation.
+**Shipped endpoints:** `GET analytics/admin/{summary,users/trend,enrollments/trend,certificates/trend,revenue/trend,top-courses,funnel}/`. **No new models** — pure aggregation.
 
-**New files:**
-- `analytics/all_views/admin_analytics_views.py` — views gated `IsPlatformAdmin` (not `IsVerifiedPartnerInstitution`).
-- `analytics/services/admin_analytics_service.py` — reuses `build_time_series` (`analytics_service.py:266`) and the conditional-aggregation pattern; platform scope = **no institution filter**.
+**Files created:**
+- `analytics/all_views/admin_analytics_views.py` — views gated `IsPlatformAdmin` (plain `APIView`, not `AdminConsoleAPIView`; admin SPA's JWT cookie reaches it).
+- `analytics/services/admin_analytics_service.py` — reuses `build_time_series`, `_normalize_trend_params`, `_pct`, `_COURSE_STATUSES`, and the new `build_value_series` (sum, not count) for revenue; platform scope = **no institution filter**. Shares fn names with the partner service → imported by full module path.
 - Tests `analytics/all_tests/test_admin_analytics.py`.
 
-**Affected files:**
-- `analytics/urls.py` — add `admin/...` routes beside `partner/...`.
-- `analytics/views.py` — re-export.
+**Files touched (additive):** `analytics/services/analytics_service.py` (+`build_value_series`), `analytics/all_views/__init__.py`, `analytics/views.py`, `analytics/urls.py`.
 
-**Blocked:** `revenue` reporting stays `enabled: False` until Payments Phase 2 (§8) records money at platform scope. Surface the gap honestly (same as the partner dashboard does) — do not fake it.
+**Revenue is REAL (not blocked).** The original "blocked until Payments Phase 2" note applied when no payments model existed and to per-institution attribution. At **admin** scope revenue is summed from `Order.objects.filter(status='paid')` with no attribution problem, so `revenue.enabled=True`. Only the **partner** dashboard keeps `enabled: False`.
 
 ---
 

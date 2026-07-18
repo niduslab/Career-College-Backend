@@ -251,11 +251,26 @@ The `partner/` URL segment scopes these to the partner-institution audience, lea
 
 Trends: `build_time_series(qs, date_field, granularity, periods)` zero-fills every bucket in Python (SQL returns only non-empty buckets) so the series is contiguous; `TruncMonth`/`TruncWeek` are tz-aware. `periods` clamped to `[1, 24]`, `top-courses` `limit` to `[1, 50]`.
 
-**Access-denied:** every endpoint derives the institution from the token and takes no resource id, so the only failure is permission → **403** (`IsVerifiedPartnerInstitution`). Cross-institution data never leaks because every query filters by the caller's own institution.
+**Access-denied:** every partner endpoint derives the institution from the token and takes no resource id, so the only failure is permission → **403** (`IsVerifiedPartnerInstitution`). Cross-institution data never leaks because every query filters by the caller's own institution.
 
-**Two documented gaps, surfaced honestly in the payload — do not fake either:**
-- `revenue` → `{'enabled': False, 'estimated_gross': None}`. There is **no** payments/orders model; `price` + `enrollment_type='paid'` exist but no money is recorded. Real revenue needs a payments app first.
-- `webinars.attendance_rate` is computed but `attendance_tracking_enabled: False` until the live-day join flow populates `WebinarRegistration.attended` / `joined_at` (currently reserved).
+**Admin (system-wide) surface** — `admin/` segment beside `partner/`, gated `[IsAuthenticated, IsEmailVerified, IsPlatformAdmin]` (plain `APIView`, **not** `AdminConsoleAPIView` — the admin SPA's JWT cookie from the shared login reaches it; no cross-app dependency). Logic in `analytics/services/admin_analytics_service.py`, views in `analytics/all_views/admin_analytics_views.py`. **Platform scope = no institution filter** — every query spans the whole platform. Admin service functions (`platform_summary`, `enrollment_trend`, `certificate_trend`, `user_signup_trend`, `revenue_trend`, `top_courses`, `conversion_funnel`) share names with the partner service, so admin views import them by **full module path**, not the flat `analytics.services` re-export (which stays partner-only to avoid a name clash). Endpoints:
+
+| Endpoint | View | Purpose |
+|---|---|---|
+| `GET admin/summary/` | `AdminAnalyticsSummaryView` | Platform KPIs: users (total/by_type/active/verified/growth), courses (status breakdown + weighted rating), enrollments (active/completed/completion-rate/free-vs-paid/growth), certificates, webinars, **revenue** |
+| `GET admin/users/trend/` | `AdminUserTrendView` | New-signup series (`User.registration_date`) |
+| `GET admin/enrollments/trend/` | `AdminEnrollmentTrendView` | Enrollment series (`Enrollment.created_at`) |
+| `GET admin/certificates/trend/` | `AdminCertificateTrendView` | Certificate series (`Certificate.issued_at`) |
+| `GET admin/revenue/trend/` | `AdminRevenueTrendView` | Paid-order gross **sum** per bucket (`build_value_series`, not count) |
+| `GET admin/top-courses/` | `AdminTopCoursesView` | Ranked platform courses (`?sort=`/`?limit=`) |
+| `GET admin/funnel/` | `AdminFunnelView` | Distinct-learner funnel: signup → enrolled → completed → certified |
+
+`build_value_series(qs, date_field, agg_expr, granularity, periods)` (`analytics_service.py`, sibling of `build_time_series`) powers the revenue trend — sums an aggregate per bucket instead of counting rows, floats the value for JSON. Admin access-denied is **403** only (no resource id; `IsPlatformAdmin`).
+
+**Two documented gaps — do not fake either. Revenue is now enabled for admin but NOT for partner:**
+- **Partner** `revenue` → `{'enabled': False, 'estimated_gross': None}`. Institution revenue needs per-institution attribution / payout (Payments Phase 2), not yet built.
+- **Admin** `revenue` → `{'enabled': True, 'currency': 'BDT', 'gross', 'paid_orders', 'by_item_type', 'this_window', 'growth_pct'}` — real, summed from `payments.Order` where `status='paid'`. At platform scope there is no attribution problem (admin sees every order), so it is computed for real.
+- `webinars.attendance_rate` (partner only) is computed but `attendance_tracking_enabled: False` until the live-day join flow populates `WebinarRegistration.attended` / `joined_at` (reserved).
 
 See `docs/future_implementations/ANALYTICS_DASHBOARD.md` (plan), `docs/architecture/20-analytics-dashboard.md`, and `docs/api-testing/postman-analytics.md`.
 

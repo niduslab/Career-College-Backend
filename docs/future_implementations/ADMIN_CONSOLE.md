@@ -54,15 +54,17 @@ Each feature below is grouped, given a short plain-language description, and mar
 
 ---
 
-## 3. System-wide analytics (admin)
+## 3. System-wide analytics (admin) ✅ **built**
 
 **What:** a platform-level analytics dashboard for admins — the counterpart to the existing **institution-scoped** analytics.
 
-- Totals: users, enrollments, revenue, active courses.
-- Conversion funnels (signup → enroll → complete → certificate).
-- Financial reporting.
+- Totals: users, enrollments, revenue, active courses. ✅
+- Conversion funnels (signup → enroll → complete → certificate). ✅
+- Financial reporting. ✅ **revenue is real** (summed from paid `payments.Order`).
 
-**Scope:** new `admin/` surface inside the existing `analytics/` app (the `partner/` URL segment was deliberately left with room for a sibling `admin/` segment — see `CLAUDE.md` → *Analytics Dashboard*). Revenue reporting is **blocked** until payments records money at platform scope (Payments Phase 2). Reuse `build_time_series` and the conditional-aggregation query strategy already in `analytics_service.py`.
+**Shipped:** `admin/` surface inside the existing `analytics/` app — `analytics/services/admin_analytics_service.py`, `analytics/all_views/admin_analytics_views.py`, routes `analytics/admin/{summary,users/trend,enrollments/trend,certificates/trend,revenue/trend,top-courses,funnel}/`, gated `IsPlatformAdmin`. No new models/migrations. Reuses `build_time_series` + the conditional-aggregation strategy, and a new sibling `build_value_series` (sum, not count) for the revenue trend. Tests: `analytics/all_tests/test_admin_analytics.py`.
+
+**Revenue divergence from the partner dashboard:** the old note said revenue was blocked until Payments Phase 2 — that holds for the **partner** dashboard (needs per-institution attribution/payout). At **admin** scope there is no attribution problem (admins see every order), so revenue is computed for real from `Order.objects.filter(status='paid')`. See `CLAUDE.md` → *Analytics Dashboard* → Admin surface and `docs/architecture/20-analytics-dashboard.md`.
 
 ---
 
@@ -170,10 +172,10 @@ Sprint 8: Admin Capabilities
     - Feature/Promote courses
     - Force publish/unpublish
     - Pricing & refund policy management
-5. Platform Analytics
-    - Dashboard overview
-    - User, course & revenue analytics
-    - Financial reports
+5. Platform Analytics ✅ **built**
+    - Dashboard overview ✅
+    - User, course & revenue analytics ✅ (revenue real, from paid orders)
+    - Financial reports ✅
 6. Approval Workflows
     - Automated approval rules
     - Bulk approve/reject

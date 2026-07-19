@@ -21,7 +21,7 @@ from courses.services.code_runner import (
     CodeRunner,
     DockerTransientError,
     DockerUnavailableError,
-    SingleTestResult,
+    ScriptTestResult,
 )
 from courses.services.enrollment_service import recalculate_progress
 from courses.transcoding import transcode_video_asset
@@ -253,28 +253,35 @@ def grade_assignment_submission_task(self, submission_id: int):
 # Coding exercise execution
 # ===========================================================================
 #
-# Two tasks, mirroring the standalone-platform model described in
-# docs/submission-flow.md:
+# Script-based evaluation: the instructor's evaluation_script (on the
+# CodingExercise itself) is executed against the learner's code in ONE
+# container; each test in the script yields one ScriptTestResult. Two tasks:
 #
-#   - evaluate_coding_run_task: transient. Visible test cases only. Returns a
-#     plain dict; the Run dispatcher polls AsyncResult and renders it. No DB
-#     row, no retries (Run is cheap to re-run from the UI).
+#   - evaluate_coding_run_task: transient. Returns a plain dict; the Run
+#     dispatcher polls AsyncResult and renders it. No DB row, no retries
+#     (Run is cheap to re-run from the UI).
 #
 #   - evaluate_coding_submission_task: persisted. Loads CodingSubmission,
-#     runs every test case in ONE container via CodeRunner, persists
-#     CodingSubmissionTestResult rows, updates aggregates, schedules
-#     recalculate_progress on PASS.
+#     runs the suite via CodeRunner, persists CodingSubmissionTestResult
+#     rows, updates aggregates (back-filling total_tests — the script
+#     decides the count), schedules recalculate_progress on PASS.
 #
 # acks_late + autoretry_for=DockerTransientError gives us idempotency under
 # worker death AND auto-retry of transient daemon hiccups. Learner-code
 # failures and image-missing errors are NOT retried — they're terminal
 # already and shouldn't burn worker capacity.
 
+def _get_evaluation_script(exercise: CodingExercise) -> str:
+    """Return the instructor's evaluation script ('' if unset). The service
+    layer guards before dispatch; this is belt-and-braces for tasks that
+    raced an instructor edit."""
+    return exercise.evaluation_script or ''
+
+
 def _build_run_result_payload(
     exercise_id: int,
     language: str,
-    results: list[SingleTestResult],
-    test_cases: list,
+    results: list[ScriptTestResult],
     error_message: str = '',
 ) -> dict:
     """Shape the Run-task return value into the dict the polling endpoint
@@ -301,18 +308,27 @@ def _build_run_result_payload(
         'error_message': error_message,
         'test_results': [
             {
-                'position': tc.position,
-                'input_data': tc.input_data,
-                'expected_output': tc.expected_output,
-                'actual_output': r.actual_output,
+                'position': i + 1,
+                'test_name': r.test_name,
+                'status': r.status,
                 'stdout': r.stdout,
                 'stderr': r.stderr,
-                'status': r.status,
                 'runtime_ms': r.runtime_ms,
-                'exit_code': r.exit_code,
+                'exit_code': 0 if r.status == 'passed' else 1,
             }
-            for tc, r in zip(test_cases, results)
+            for i, r in enumerate(results)
         ],
+    }
+
+
+def _run_error_payload(exercise_id: int, language: str, error_message: str) -> dict:
+    return {
+        'exercise_id': exercise_id,
+        'language': language,
+        'status': 'error',
+        'error_message': error_message,
+        'total_tests': 0, 'passed_tests': 0, 'score': 0, 'runtime_ms': 0,
+        'test_results': [],
     }
 
 
@@ -322,8 +338,14 @@ def evaluate_coding_run_task(
     language: str,
     code: str,
     time_limit_ms: int,
+    evaluation_script: str | None = None,
 ):
-    """Run-mode evaluation: visible test cases only, no persistence.
+    """Run-mode evaluation: full suite, no persistence.
+
+    `evaluation_script` overrides the stored script when provided — used by
+    the instructor authoring "Run code" / "Run tests" actions so unsaved
+    edits (or the synthetic smoke script) can be exercised. Learner runs
+    pass None and use the stored script.
 
     Returns a dict (the Celery result is stored in Redis and expires after
     CELERY_RESULT_EXPIRES). Never raises into Celery FAILURE for a learner
@@ -332,57 +354,37 @@ def evaluate_coding_run_task(
     try:
         exercise = CodingExercise.objects.get(pk=exercise_id)
     except CodingExercise.DoesNotExist:
-        return {
-            'exercise_id': exercise_id,
-            'language': language,
-            'status': 'error',
-            'error_message': 'Exercise not found.',
-            'total_tests': 0, 'passed_tests': 0, 'score': 0, 'runtime_ms': 0,
-            'test_results': [],
-        }
+        return _run_error_payload(exercise_id, language, 'Exercise not found.')
 
-    test_cases = list(
-        exercise.test_cases.filter(is_hidden=False).order_by('position', 'id')
-    )
-    if not test_cases:
-        return {
-            'exercise_id': exercise_id,
-            'language': language,
-            'status': 'error',
-            'error_message': 'No visible test cases to run.',
-            'total_tests': 0, 'passed_tests': 0, 'score': 0, 'runtime_ms': 0,
-            'test_results': [],
-        }
+    if evaluation_script is None:
+        evaluation_script = _get_evaluation_script(exercise)
+    if not evaluation_script.strip():
+        return _run_error_payload(
+            exercise_id, language,
+            'This exercise is missing its evaluation script and cannot be run yet.',
+        )
 
     try:
         results = CodeRunner().run_submission(
             code=code,
-            test_cases=test_cases,
+            evaluation_script=evaluation_script,
             time_limit_ms=time_limit_ms,
             language=language,
         )
     except DockerUnavailableError as exc:
         logger.error('Run failed (docker unavailable) for exercise=%s: %s', exercise_id, exc)
-        return {
-            'exercise_id': exercise_id,
-            'language': language,
-            'status': 'error',
-            'error_message': 'Code execution service unavailable. Please try again.',
-            'total_tests': len(test_cases), 'passed_tests': 0, 'score': 0, 'runtime_ms': 0,
-            'test_results': [],
-        }
+        return _run_error_payload(
+            exercise_id, language,
+            'Code execution service unavailable. Please try again.',
+        )
     except DockerTransientError as exc:
         logger.warning('Run hit transient docker error for exercise=%s: %s', exercise_id, exc)
-        return {
-            'exercise_id': exercise_id,
-            'language': language,
-            'status': 'error',
-            'error_message': 'Transient runner error. Please try again.',
-            'total_tests': len(test_cases), 'passed_tests': 0, 'score': 0, 'runtime_ms': 0,
-            'test_results': [],
-        }
+        return _run_error_payload(
+            exercise_id, language,
+            'Transient runner error. Please try again.',
+        )
 
-    return _build_run_result_payload(exercise_id, language, results, test_cases)
+    return _build_run_result_payload(exercise_id, language, results)
 
 
 @shared_task(
@@ -394,7 +396,7 @@ def evaluate_coding_run_task(
     max_retries=3,
 )
 def evaluate_coding_submission_task(self, submission_id: int):
-    """Submit-mode evaluation: all test cases, persisted, progress on pass.
+    """Submit-mode evaluation: full suite, persisted, progress on pass.
 
     Idempotent under acks_late redelivery: short-circuits when the row is
     already terminal. Mirrors grade_assignment_submission_task structurally.
@@ -416,13 +418,19 @@ def evaluate_coding_submission_task(self, submission_id: int):
     submission.save(update_fields=['status', 'updated_at'])
 
     exercise = submission.exercise
-    test_cases = list(exercise.test_cases.order_by('position', 'id'))
+    evaluation_script = _get_evaluation_script(exercise)
+    if not evaluation_script.strip():
+        _finalize_with_error(
+            submission,
+            'This exercise is missing its evaluation script and cannot be graded.',
+        )
+        return {'submission_id': submission_id, 'status': 'error'}
 
     try:
         try:
             results = CodeRunner().run_submission(
                 code=submission.code,
-                test_cases=test_cases,
+                evaluation_script=evaluation_script,
                 time_limit_ms=exercise.time_limit_ms,
                 language=submission.language,
             )
@@ -432,25 +440,19 @@ def evaluate_coding_submission_task(self, submission_id: int):
             return {'submission_id': submission_id, 'status': 'error'}
 
         with transaction.atomic():
-            # Bulk-insert per-test result rows. Snapshot input/expected so the
-            # row survives later test-case edits; copy is_hidden for the
-            # redaction serializer.
+            # One row per test the evaluation script ran, in emission order.
             result_rows = [
                 CodingSubmissionTestResult(
                     submission=submission,
-                    test_case=tc,
+                    test_name=r.test_name,
                     status=r.status,
-                    input_data=tc.input_data or '',
-                    expected_output=tc.expected_output or '',
-                    actual_output=r.actual_output,
                     stdout=r.stdout,
                     stderr=r.stderr,
                     runtime_ms=r.runtime_ms,
-                    exit_code=r.exit_code,
-                    is_hidden=tc.is_hidden,
-                    position=tc.position,
+                    exit_code=0 if r.status == 'passed' else 1,
+                    position=i + 1,
                 )
-                for tc, r in zip(test_cases, results)
+                for i, r in enumerate(results)
             ]
             CodingSubmissionTestResult.objects.bulk_create(result_rows)
 

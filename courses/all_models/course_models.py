@@ -439,6 +439,21 @@ class NidusCourse(models.Model):
         if incomplete_quizzes:
             errors['quizzes'] = f'Incomplete quizzes: {"; ".join(incomplete_quizzes)}.'
 
+        # Every coding exercise must carry an evaluation script
+        from courses.all_models.assessment_models import CodingExercise
+
+        incomplete_exercises = [
+            f'"{exercise.title}" is missing its evaluation script'
+            for exercise in CodingExercise.objects
+            .filter(section__course=self)
+            .only('id', 'title', 'evaluation_script')
+            if not (exercise.evaluation_script or '').strip()
+        ]
+        if incomplete_exercises:
+            errors['coding_exercises'] = (
+                f'Incomplete coding exercises: {"; ".join(incomplete_exercises)}.'
+            )
+
         # Scheduled (cohort) courses must have an attached schedule with sane dates.
         if self.delivery_mode == self.DeliveryMode.SCHEDULED:
             schedules = list(self.schedules.all())

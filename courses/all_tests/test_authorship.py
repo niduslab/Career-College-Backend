@@ -146,8 +146,7 @@ class ContentCreationAuthorshipTests(AuthorshipTestBase):
         response = self.client.post(
             self.contents_url,
             {'item_type': 'coding', 'title': 'Two Sum',
-             'problem_statement': 'Return indices.',
-             'default_language': 'python', 'supported_languages': ['python']},
+             'description': 'Return indices.', 'language': 'python'},
             format='json',
         )
         self.assertEqual(response.status_code, status.HTTP_201_CREATED)

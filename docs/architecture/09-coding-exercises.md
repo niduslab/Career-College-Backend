@@ -1,6 +1,8 @@
 # 09) Coding Exercises
 
-Coding exercises are interactive programming problems instructors author as curriculum items. This document is the **authoritative** reference and covers both **Part 1 (instructor authoring CRUD)** and **Part 2 (learner execution: Run / Submit + Docker sandbox)** — the end-to-end pipeline, sandbox limits, harness contract, failure modes, and the rationale for the **one container per submission** optimisation.
+Coding exercises are interactive programming problems instructors author as curriculum items. This document is the **authoritative** reference and covers both **Part 1 (instructor authoring CRUD)** and **Part 2 (learner execution: Run / Submit + Docker sandbox)**.
+
+**Grading model: script evaluation (Udemy-style).** Each exercise targets **exactly one language** and carries its authoring bundle directly on the model: `starter_code`, `solution_code`, and an **evaluation script** (`CodingExercise.evaluation_script`) — a test file that imports/calls the learner's code and asserts on it. Grading runs that script against the learner's code in one sandboxed container; each test in the script produces one named result (`passed` / `failed` / `error` + failure message). There are **no I/O test-case pairs and no expected-output string comparison** — `CodingTestCase` was removed in migration `0023_script_only_evaluation`, and the per-language `CodingExerciseLanguageConfig` model (plus `problem_statement`, `difficulty`, `default_language`, `supported_languages`) was flattened away in `0024_single_language_coding_exercise`.
 
 ## Run vs. Submit — at a glance
 
@@ -9,7 +11,7 @@ Coding exercises are interactive programming problems instructors author as curr
                 ─────────────────────────────────────────────
 Endpoint        POST /learn/coding-exercises      POST /learn/coding-exercises
                       /{id}/run/                        /{id}/submit/
-Test cases      Visible only (is_hidden=False)   All (visible + hidden)
+Suite           Full evaluation script            Full evaluation script
 DB row          No — result in Celery backend     Yes — CodingSubmission row
                 (1-hour TTL)
 Returns         202 + { task_id }                202 + queued CodingSubmission
@@ -32,18 +34,18 @@ Status precedence: error > failed > passed
 ## Key files
 
 ### Part 1 — Authoring (instructor)
-- `courses/all_models/assessment_models.py`: `CodingExercise`, `CodingExerciseLanguageConfig`, `CodingTestCase`
+- `courses/all_models/assessment_models.py`: `CodingExercise`
 - `courses/all_views/coding_views.py`: instructor authoring endpoints
-- `courses/all_serializers/assessment_serializers.py`: `CodingExerciseSerializer`, `CodingExerciseCreateUpdateSerializer`, `CodingExerciseLanguageConfigSerializer`, `CodingTestCaseSerializer`
+- `courses/all_serializers/assessment_serializers.py`: `CodingExerciseSerializer`, `CodingExerciseCreateUpdateSerializer`
 - `courses/urls.py`: route definitions
 - `core/permissions.py`: `IsInstructorUser` (gates all authoring endpoints; identity verification not required — see [08-core-infrastructure.md](08-core-infrastructure.md))
 
 ### Part 2 — Learner execution
 - `courses/all_models/assessment_models.py`: `CodingSubmission`, `CodingSubmissionTestResult`
 - `courses/all_views/learner_views.py`: `LearnerCodingExerciseDetailView`, `LearnerCodingRunView`, `LearnerCodingSubmitView`, `LearnerCodingTaskStatusView`, `LearnerCodingSubmissionDetailView`, `LearnerCodingSubmissionRetryView`
-- `courses/all_serializers/learner_serializers.py`: `LearnerCodingExerciseDetailSerializer`, `LearnerCodingSubmissionSerializer`, `_LearnerCodingSubmissionTestResultSerializer` (redaction), `CodingRunSubmitSerializer`
-- `courses/services/learner_service.py`: `get_coding_exercise_for_consumption`, `run_coding_exercise`, `submit_coding_exercise`, `get_learner_coding_submission`, `retry_coding_submission`, `CodingSubmissionError`
-- `courses/services/code_runner.py`: `CodeRunner`, `SingleTestResult`, `DockerTransientError`, `DockerUnavailableError`, per-language harnesses, `_normalize`, sentinel parser
+- `courses/all_serializers/learner_serializers.py`: `LearnerCodingExerciseDetailSerializer`, `LearnerCodingSubmissionSerializer`, `_LearnerCodingSubmissionTestResultSerializer`, `CodingRunSubmitSerializer`
+- `courses/services/learner_service.py`: `get_coding_exercise_for_consumption`, `run_coding_exercise`, `submit_coding_exercise`, `get_learner_coding_submission`, `retry_coding_submission`, `_validate_evaluation_script`, `CodingSubmissionError`
+- `courses/services/code_runner.py`: `CodeRunner`, `ScriptTestResult`, `DockerTransientError`, `DockerUnavailableError`, per-language micro-harnesses, `_parse_script_output`
 - `courses/tasks.py`: `evaluate_coding_run_task`, `evaluate_coding_submission_task`, `reap_stuck_coding_submissions_task`
 - `core/permissions.py`: `IsLearnerUser` (gates Run/Submit/retry POST endpoints)
 
@@ -51,44 +53,20 @@ Status precedence: error > failed > passed
 
 ### `CodingExercise`
 
-The top-level problem object attached to a section.
+The one and only coding model on the authoring side — problem, language, starter code, solution, and evaluation script all live here.
 
 - `section` (FK -> `CourseSection`)
 - `title` — display name shown in curriculum
-- `description` — short summary of the exercise
-- `problem_statement` — full problem description (markdown/rich text)
-- `difficulty` — `easy | medium | hard`
-- `default_language` — the language pre-selected when a learner opens the exercise
-- `supported_languages` — JSON list of language codes the exercise supports
-- `time_limit_ms` — optional time limit in milliseconds for execution
-- DB indices on `(section, difficulty)` for curriculum filtering
+- `description` — the problem text shown to learners. **Must state the function contract** the learner has to implement (names + signatures), since the evaluation script imports and calls those functions directly.
+- `language` — `python | javascript | cpp | java` (single language per exercise)
+- `starter_code` — the boilerplate shown to learners. In script evaluation the starter code **is the contract**: it declares the function signature(s) the evaluation script will call.
+- `solution_code` — the reference implementation (instructor reference)
+- `evaluation_script` — the instructor's test file. **This is the grading source of truth**: it imports the learner's code and asserts on it. Run/Submit are refused (422) while it is blank, and a course cannot leave `draft` while any exercise misses one (`_validate_course_completeness`).
+- `time_limit_ms` — wall-clock budget for the **whole evaluation suite** (the script decides the test count, so per-test limits can't be known upfront)
 
 Has a `GenericRelation` to `SectionContent` — deleting the exercise cascades and removes its `SectionContent` slot automatically.
 
-### `CodingExerciseLanguageConfig`
-
-Per-language code templates attached to an exercise.
-
-- `exercise` (FK -> `CodingExercise`)
-- `language` — `python | javascript | cpp | java`
-- `starter_code` — the boilerplate shown to learners when they open the exercise
-- `solution_code` — the reference implementation used for grading/instructor reference
-
-**Security rule**: `solution_code` must never appear in any learner-facing serializer or response. It is included in `CodingExerciseLanguageConfigSerializer` only because all coding endpoints require `IsInstructorUser` (`user_type == 'instructor'`, not learner) plus the `instructors=request.user` ownership filter.
-
-- Unique constraint: `(exercise, language)` — one config per language per exercise.
-
-### `CodingTestCase`
-
-Ordered input/output test cases for an exercise.
-
-- `exercise` (FK -> `CodingExercise`)
-- `input_data` — the stdin or input structure fed to the solution
-- `expected_output` — the output the solution must produce to pass
-- `is_hidden` — if `True`, this test case is used only for grading and is never returned to learners
-- `explanation` — optional note shown to learners when they fail a visible test case
-- `position` — ordering of test cases within the exercise (1-based, contiguous)
-- Unique constraint: `(exercise, position)` — enforces ordered, gap-free positions
+**Security rule**: `solution_code` and `evaluation_script` must never appear in any learner-facing serializer or response — the evaluation script literally contains the expected answers. Both are included in the instructor-only `CodingExerciseSerializer` because all coding authoring endpoints require `IsInstructorUser` plus the `instructors=request.user` ownership filter. `LearnerCodingExerciseDetailSerializer` declares neither (absence > conditional strip).
 
 ## API endpoints
 
@@ -98,122 +76,73 @@ Ownership is enforced via `section__course__instructors=request.user` in every q
 ### Exercise detail
 
 ```
-GET    /coding-exercises/{exercise_id}/       → retrieve exercise with nested configs and test cases
-PATCH  /coding-exercises/{exercise_id}/       → update exercise metadata (partial)
+GET    /coding-exercises/{exercise_id}/       → retrieve exercise (incl. solution + evaluation script; instructor-only)
+PATCH  /coding-exercises/{exercise_id}/       → update exercise (partial)
 DELETE /coding-exercises/{exercise_id}/       → delete exercise (cascades SectionContent)
 ```
 
-Exercise creation is handled through the unified curriculum endpoint:
+Exercise creation is handled through the unified curriculum endpoint — one request carries the whole exercise:
 ```
 POST /sections/{section_id}/contents/  { "item_type": "coding", ... }
 ```
 
-### Language configs
-
-```
-GET    /coding-exercises/{exercise_id}/language-configs/                    → list all configs
-POST   /coding-exercises/{exercise_id}/language-configs/                    → add a language config
-GET    /coding-exercises/{exercise_id}/language-configs/{config_id}/        → retrieve one config
-PATCH  /coding-exercises/{exercise_id}/language-configs/{config_id}/        → update config (partial)
-DELETE /coding-exercises/{exercise_id}/language-configs/{config_id}/        → delete config
-```
-
-Posting a config for a language that already exists on the exercise returns `400` (IntegrityError caught in view).
-
-### Test cases
-
-```
-GET    /coding-exercises/{exercise_id}/testcases/              → list all test cases (ordered by position, then id)
-POST   /coding-exercises/{exercise_id}/testcases/              → create a test case
-GET    /coding-exercises/{exercise_id}/testcases/{tc_id}/      → retrieve one test case
-PATCH  /coding-exercises/{exercise_id}/testcases/{tc_id}/      → update test case (partial)
-DELETE /coding-exercises/{exercise_id}/testcases/{tc_id}/      → delete test case (auto-shifts positions)
-```
-
-## Test case position management
-
-Test case positions are 1-based and must remain contiguous (1, 2, 3 … n) with no gaps.
-
-**On create**: the caller supplies `position`. If a test case already exists at that position, a `400` is returned (IntegrityError).
-
-**On delete**: `CodingTestCaseDetailAPIView.delete` wraps the operation in `transaction.atomic()`:
-1. Records `deleted_position` and `exercise_id` before deletion.
-2. Deletes the test case row.
-3. Issues a single bulk `UPDATE ... SET position = position - 1 WHERE position > deleted_position` using `F('position') - 1`.
-
-This keeps the sequence contiguous and avoids N individual saves.
-
 ## Authoring process (step-by-step)
 
-1. **Create the exercise** via the unified contents endpoint:
+1. **Create the exercise** via the unified contents endpoint — everything in one payload:
    ```
    POST /sections/{section_id}/contents/
-   { "item_type": "coding", "title": "Two Sum", "difficulty": "easy", ... }
+   {
+     "item_type": "coding",
+     "title": "Two Sum",
+     "description": "Implement two_sum(nums, target) returning the indices...",
+     "language": "python",
+     "starter_code": "def two_sum(nums, target):\n    pass\n",
+     "solution_code": "def two_sum(nums, target): ...",
+     "evaluation_script": "import unittest\nfrom exercise import two_sum\nclass T(unittest.TestCase):\n    def test_basic(self):\n        self.assertEqual(two_sum([2,7,11,15], 9), [0,1])\n",
+     "time_limit_ms": 2000
+   }
    ```
    Returns a `SectionContent` object; the `object_id` field is the `exercise_id`.
 
-2. **Add language configurations** — one per supported language:
-   ```
-   POST /coding-exercises/{exercise_id}/language-configs/
-   { "language": "python", "starter_code": "def two_sum(...):", "solution_code": "..." }
-   ```
-
-3. **Add test cases** in order:
-   ```
-   POST /coding-exercises/{exercise_id}/testcases/
-   { "input_data": "[2,7,11,15]\n9", "expected_output": "[0,1]", "position": 1, "is_hidden": false }
-   ```
-   Hidden test cases (`is_hidden: true`) are for final grading and are never returned to learners.
-
-4. **Update exercise details** as needed:
+2. **Update details** as needed:
    ```
    PATCH /coding-exercises/{exercise_id}/
-   { "problem_statement": "Given an array of integers..." }
+   { "evaluation_script": "..." }
    ```
 
-5. **Reorder** the exercise in the section curriculum the same way as any other item:
+3. **Reorder** the exercise in the section curriculum the same way as any other item:
    ```
    PATCH /contents/{content_id}/reorder/
    { "position": 3 }
    ```
 
-## Serializer notes
+Course submission (`_validate_course_completeness`) blocks leaving `draft` while any coding exercise has a blank `evaluation_script`.
 
-| Serializer | Used for | Notes |
+## Evaluation-script contract (per language)
+
+The learner's code and the instructor's evaluation script are written into the container as two files; an injected zero-dependency micro-harness runs the script's tests and reports one result per test. Assertion failure → `failed`; any other exception → `error`.
+
+| Language | Learner file | Evaluation script contract |
 |---|---|---|
-| `CodingExerciseSerializer` | Read (GET) | Nests `language_configs` and `test_cases`; instructor-only |
-| `CodingExerciseCreateUpdateSerializer` | Write (PATCH via detail view) | Validates `supported_languages` list |
-| `CodingExerciseLanguageConfigSerializer` | Read and write on configs | Includes `solution_code`; must never be used in learner APIs |
-| `CodingTestCaseSerializer` | Read and write on test cases | `is_hidden` field is present; learner-facing views must filter or exclude hidden cases |
+| python | `/tmp/work/exercise.py` — importable as module `exercise` | Stdlib `unittest` module: `from exercise import ...`, standard `TestCase` classes. Test id (`evaluate.ClassName.test_name`) becomes the result's `test_name`. |
+| javascript | `/tmp/work/exercise.js` — CommonJS, learner exports via `module.exports` | `const ex = require('./exercise')` + `node:assert`; register tests with the injected global `test(name, fn)` (async `fn` supported). |
+| java | `/tmp/work/Exercise.java` — `public class Exercise` with static methods | `public class Evaluate`: every **public no-arg method named `test*`** is one test; fail by throwing `AssertionError`. Tests run in **name order** (reflection doesn't preserve declaration order). |
+| cpp | learner code written verbatim to `/tmp/work/exercise.h` | `evaluate.cpp`: `#include "exercise.h"` + `#include "testkit.h"`; declare tests with `TEST(name) { ... }` using `ASSERT_TRUE / ASSERT_FALSE / ASSERT_EQ / ASSERT_NE / TESTKIT_FAIL(msg)` from the injected `testkit.h`. |
 
-## System Explanation (Why This Design)
-
-**Why are language configs a separate model instead of a JSON field on `CodingExercise`?**
-A separate table with a unique `(exercise, language)` constraint gives per-language CRUD, clean DB indexing, and a clear place to attach execution metadata in the future (e.g., Docker image tag, memory limit per language).
-
-**Why is `solution_code` on the same model as `starter_code`?**
-Keeping them together makes it impossible to accidentally return `starter_code` without also managing `solution_code` visibility — both fields live on `CodingExerciseLanguageConfig`, which is only reachable through instructor-gated endpoints.
-
-**Why does test case deletion shift positions atomically?**
-Contiguous positions simplify client-side rendering — the UI can treat `position` as an array index. A single `UPDATE` with `F('position') - 1` is more efficient than N individual saves and avoids partial-shift states if the request fails mid-way.
-
-**Why is exercise creation routed through the unified contents endpoint instead of a dedicated `POST /coding-exercises/` endpoint?**
-The unified `POST /sections/{section_id}/contents/` endpoint creates both the domain object and its `SectionContent` slot in one transaction. A separate creation endpoint would require the caller to make two requests (create exercise, then create SectionContent), which creates an opportunity for orphaned exercises with no curriculum placement.
+A script that registers zero tests, or a learner file that crashes at import/compile time, yields a single `evaluate (load)` error result carrying the traceback/compiler output — the learner always gets a diagnosable message, never silent emptiness.
 
 ---
 
 # Part 2 — Learner Execution (Run / Submit)
 
-The execution surface adds two new persisted models and six new learner-facing endpoints, integrated into the Career-College codebase as described below.
-
 ## Two execution modes
 
-| Mode | Endpoint | Persisted? | Test cases run | Returns | Poll via |
-|---|---|---|---|---|---|
-| **Run** | `POST /learn/coding-exercises/{id}/run/` | No — Celery result only (TTL = `CELERY_RESULT_EXPIRES`) | Visible only (`is_hidden=False`) | `{task_id}` (HTTP 202) | `GET /learn/coding-exercises/tasks/{task_id}/` |
-| **Submit** | `POST /learn/coding-exercises/{id}/submit/` | Yes — `CodingSubmission` row | All (visible + hidden) | Queued submission (HTTP 202) | `GET /learn/coding-exercises/submissions/{id}/` |
+| Mode | Endpoint | Persisted? | Returns | Poll via |
+|---|---|---|---|---|
+| **Run** | `POST /learn/coding-exercises/{id}/run/` | No — Celery result only (TTL = `CELERY_RESULT_EXPIRES`) | `{task_id}` (HTTP 202) | `GET /learn/coding-exercises/tasks/{task_id}/` |
+| **Submit** | `POST /learn/coding-exercises/{id}/submit/` | Yes — `CodingSubmission` row | Queued submission (HTTP 202) | `GET /learn/coding-exercises/submissions/{id}/` |
 
-Run is the IDE "try it" button — cheap, ephemeral, hides nothing the learner could not already see. Submit is the graded attempt; every test case (including hidden) is evaluated and the row is the permanent record used for `is_solved` and `progress_percent` calculations.
+Both modes run the full evaluation suite (there is no hidden/visible test split). Run is the IDE "try it" button — cheap and ephemeral. Submit is the graded attempt; the row is the permanent record used for `is_solved` and `progress_percent` calculations.
 
 ## Models
 
@@ -226,7 +155,7 @@ Run is the IDE "try it" button — cheap, ephemeral, hides nothing the learner c
 | `language` | CharField(20) | One of `python` / `javascript` / `cpp` / `java` |
 | `code` | TextField | Verbatim learner code |
 | `status` | CharField | `queued` / `grading` / `passed` / `failed` / `error` |
-| `total_tests` | PositiveInt | Snapshotted at submit time (instructor edits later don't change it) |
+| `total_tests` | PositiveInt | **0 while queued/grading** — the evaluation script decides the count, so the grading task back-fills it after the run |
 | `passed_tests` | PositiveInt | Computed by the task |
 | `score` | Decimal(5,2) | `round(passed_tests/total_tests*100, 2)` |
 | `runtime_ms` | PositiveInt | Sum of per-test runtimes |
@@ -237,56 +166,65 @@ Run is the IDE "try it" button — cheap, ephemeral, hides nothing the learner c
 
 ### `CodingSubmissionTestResult`
 
-One row per executed test case. `test_case` is `on_delete=SET_NULL` so result rows survive instructor-side test-case deletion. `input_data` / `expected_output` / `actual_output` are **snapshotted** at write time — historical rows stay correct even if the underlying `CodingTestCase` is later edited. `is_hidden` is **copied** onto the row at write time so the redaction layer never re-reads the test case.
+One row per test the evaluation script ran, in emission order:
+
+- `test_name` — the name reported by the harness (e.g. `evaluate.AddTests.test_small`)
+- `status` — `passed` / `failed` / `error`
+- `stdout` — print output captured while the test ran (per-test capture, 4000-char cap)
+- `stderr` — the assertion-failure message / traceback (this is the learner's feedback)
+- `runtime_ms`, `exit_code`, `position`
 
 ## Endpoints
 
 | Method | Endpoint | Permission | Purpose |
 |---|---|---|---|
-| GET | `/learn/coding-exercises/{exercise_id}/` | `IsLearnerUser \| IsInstructorUser` | Detail: starter code + visible test cases + latest submission summary. `solution_code` is **not declared** on the serializer (absence > conditional strip). Hidden test cases filtered out by the service before reaching the serializer. |
-| POST | `/learn/coding-exercises/{exercise_id}/run/` | `IsLearnerUser` | Dispatch transient evaluation. Returns `202 + {task_id}`. No DB row. |
+| GET | `/learn/coding-exercises/{exercise_id}/` | `IsLearnerUser \| IsInstructorUser` | Detail: problem + language + starter code + latest submission summary. `solution_code` / `evaluation_script` are **not declared** on the serializer (absence > conditional strip). |
+| POST | `/learn/coding-exercises/{exercise_id}/run/` | `IsLearnerUser` | Dispatch transient evaluation. Returns `202 + {task_id}`. No DB row. `422` if the exercise has no evaluation script. |
 | GET | `/learn/coding-exercises/tasks/{task_id}/` | `IsEmailVerified` | Poll Celery `AsyncResult`. States: `PENDING` / `STARTED` / `SUCCESS` (with `result` dict) / `FAILURE`. |
-| POST | `/learn/coding-exercises/{exercise_id}/submit/` | `IsLearnerUser` | Create `CodingSubmission(status='queued')` and dispatch the task on commit. Returns `202` with the queued row. |
-| GET | `/learn/coding-exercises/submissions/{submission_id}/` | `IsLearnerUser` (owner only) | Poll target. Hidden test rows are omitted entirely from `test_results`; aggregates still include them. |
+| POST | `/learn/coding-exercises/{exercise_id}/submit/` | `IsLearnerUser` | Create `CodingSubmission(status='queued', total_tests=0)` and dispatch the task on commit. Returns `202` with the queued row. `422` if the exercise has no evaluation script. |
+| GET | `/learn/coding-exercises/submissions/{submission_id}/` | `IsLearnerUser` (owner only) | Poll target. Every result row is returned with its `test_name`, status, output, and failure message. |
 | POST | `/learn/coding-exercises/submissions/{submission_id}/retry/` | `IsLearnerUser` (owner only) | Re-enqueue evaluation for a submission stuck in `error`. Only `error` is retryable (use `/submit/` for fresh attempts after `failed`/`passed`). |
 
 403-vs-404 policy: all endpoints take numeric IDs → 404 for unauthorised callers (don't leak existence). Slug-based routes don't exist on this surface.
 
+Frontend note: the immediate 202 Submit body carries `total_tests: 0` — treat 0-while-in-flight as "unknown", not "zero tests".
+
 ## Sandbox & runner contract
 
-The Docker sandbox + per-language harness lives in `courses/services/code_runner.py`. Details:
+The Docker sandbox + per-language micro-harnesses live in `courses/services/code_runner.py`.
 
-- **One container per submission**, not per test case. Each language's harness loops over `INPUT_0..INPUT_{N-1}` env vars internally with per-test try/except, emitting sentinel-delimited per-test results on stdout. This eliminates `(N-1)` container startups + `(N-1)` compiles for C++/Java — the rationale for the one-container model.
-- **Sandbox constants**: `runtime='runsc'` (gVisor; falls back to `runc` via `RUNNER_RUNTIME` for local dev), `network_disabled=True`, `mem_limit=128m`, `memswap_limit=128m`, `nano_cpus=500_000_000` (0.5 cores), `pids_limit=64` (fork-bomb cap), `ulimits=[fsize=10MB, nproc=64, nofile=128, cpu=10s]`, `read_only=True`, `tmpfs={'/tmp': 'size=32m,exec'}`, `cap_drop=['ALL']`, `security_opt=['no-new-privileges:true']`, `detach=True, remove=False` (manual cleanup in `finally`). Wall-clock budget enforced via `container.wait(timeout=...)` + `container.kill()` on overshoot.
-- **gVisor (`runsc`) runtime**: provides user-space syscall interception so a kernel exploit inside the learner container cannot directly pivot to the host kernel. Required on multi-tenant or shared hosts; install instructions in [`README.md` → Development Setup → Step 10](../../README.md#10-install-gvisor-runsc-on-production--shared-hosts). Note: does **not** mitigate the Docker-out-of-Docker daemon-socket risk — that requires moving the runner to a dedicated host or switching to Kata Containers / Firecracker.
-- **Learner-code contract**: a top-level `solve(input_string)` function (Python / JavaScript) or `void solve(const std::string&)` (C++) / `static void solve(String)` (Java) — one string parameter; return the answer or write it to stdout. Multi-argument parsing is the learner's job.
-- **C++ harness explicitly avoids `<bits/stdc++.h>`** — pulling it under `-O2` exceeds the 128 MB memory cap and OOM-kills `cc1plus`. The prologue includes only the headers the harness needs (`<iostream>`, `<sstream>`, `<string>`, `<chrono>`, `<cstdlib>`, `<stdexcept>`); learners are free to add more.
-- **Image overrides**: `RUNNER_IMAGE_PYTHON` / `RUNNER_IMAGE_JAVASCRIPT` / `RUNNER_IMAGE_CPP` / `RUNNER_IMAGE_JAVA`. Defaults from Docker Hub (rate-limited for unauthenticated pulls — pre-pull or override in production).
+- **One container per submission.** Env vars: `CODE` (learner code, base64), `EVAL` (evaluation script, base64), `RUNNER` (+ `TESTKIT` for C++) carrying the injected harness. The container command decodes them to files under `/tmp/work`, compiles if needed (C++/Java inside the 32 MB tmpfs), and runs the harness.
+- **Zero-dependency harnesses**: Python `unittest` (stdlib), Node `assert` + a tiny `test()` registry, Java reflection over `test*` methods, a ~100-line C++ `TEST()` macro header. The runner images need nothing beyond the base language toolchain — no jest/JUnit/gtest baked in.
+- **Sentinel protocol**: the harness emits one block per test on stdout —
+  `<<<SCRIPT_RESULT idx=N status=S runtime_ms=R name_len=A stdout_len=B stderr_len=C>>>` followed by the length-prefixed name / stdout / stderr bytes and `<<<SCRIPT_END idx=N>>>`. Length-prefixing means dots/spaces in test names, multi-line tracebacks, and even sentinel-lookalike learner output survive intact. `_parse_script_output` walks the stream and appends — the total count is discovered from the stream (the script decides how many tests exist).
+- **Zero sentinels → synthetic error**: compile error, OOM, wall-clock timeout, or a crash before the first test produces a single `evaluation` error result carrying the container's stderr tail (e.g. the compiler output).
+- **Sandbox constants**: `runtime=RUNNER_RUNTIME` (gVisor `runsc` in prod, `runc` for local dev), `network_disabled=True`, `mem_limit=128m`, `memswap_limit=128m`, `nano_cpus=500_000_000` (0.5 cores), `pids_limit=64`, `ulimits=[fsize=10MB, nproc=64, nofile=128, cpu=10s]`, `read_only=True`, `tmpfs={'/tmp': 'size=32m,exec'}`, `cap_drop=['ALL']`, `security_opt=['no-new-privileges:true']`. Wall-clock budget enforced via `container.wait(timeout=...)` + `container.kill()` on overshoot; timeout = `max(10, time_limit_ms // 1000 + 10)` (whole-suite budget + startup/compile headroom).
+- **C++ harness explicitly avoids `<bits/stdc++.h>`** — pulling it under `-O2` exceeds the 128 MB memory cap and OOM-kills `cc1plus`. `testkit.h` includes only what it needs; evaluation scripts are free to add more.
+- **Image overrides**: `RUNNER_IMAGE_PYTHON` / `RUNNER_IMAGE_JAVASCRIPT` / `RUNNER_IMAGE_CPP` / `RUNNER_IMAGE_JAVA`.
+- **Known limitation (accepted)**: the learner's code and the evaluation script execute in the same sandboxed process, so a determined learner can read `/tmp/work/evaluate.*` at runtime and extract the assertions. This is the same trade-off Udemy makes — the sandbox contains real damage, and gaming the tests only cheats the learner. Do not attempt in-container obfuscation.
 - **WARNING (echoed from CLAUDE.md)**: Docker-out-of-Docker — the daemon socket is shared with the host; a sufficiently advanced attacker can escape. Demo / single-tenant use only.
 
 ## Tasks
 
 | Task | Decoration | Purpose |
 |---|---|---|
-| `evaluate_coding_run_task` | `@shared_task` (no retries) | Loads exercise + visible test cases, calls `CodeRunner`, returns a plain dict (no DB write). Run-mode infrastructure failures are reported inside the result dict — they do NOT raise into Celery `FAILURE`. |
-| `evaluate_coding_submission_task` | `bind=True, acks_late=True, autoretry_for=(DockerTransientError,), max_retries=3` | Mirrors `grade_assignment_submission_task`. Early-returns on terminal status (idempotent under `acks_late` redelivery). Atomic block: bulk-insert `CodingSubmissionTestResult` rows + update aggregates. On `status=passed` schedules `recalculate_progress` via `transaction.on_commit`. On final retry exhaustion: `_finalize_with_error` flips status to ERROR. |
-| `reap_stuck_coding_submissions_task` | `@shared_task` (Celery beat, 60 s) | Flips `CodingSubmission` rows whose status is `queued`/`grading` for more than 5 min to `error` with `error_message='Reaped: worker crashed or runner stalled.'`. Prevents polling UIs from hanging on dead workers. |
+| `evaluate_coding_run_task` | `@shared_task` (no retries) | Loads exercise + the language's evaluation script, calls `CodeRunner.run_submission`, returns a plain dict (no DB write). Infrastructure failures are reported inside the result dict — they do NOT raise into Celery `FAILURE`. |
+| `evaluate_coding_submission_task` | `bind=True, acks_late=True, autoretry_for=(DockerTransientError,), max_retries=3` | Mirrors `grade_assignment_submission_task`. Early-returns on terminal status (idempotent under `acks_late` redelivery). Atomic block: bulk-insert `CodingSubmissionTestResult` rows + update aggregates (back-filling `total_tests`). On `status=passed` schedules `recalculate_progress` via `transaction.on_commit`. On final retry exhaustion: `_finalize_with_error` flips status to ERROR. |
+| `reap_stuck_coding_submissions_task` | `@shared_task` (Celery beat, 60 s) | Flips `CodingSubmission` rows whose status is `queued`/`grading` for more than 5 min to `error`. Prevents polling UIs from hanging on dead workers. |
 
-Status precedence on a Submit verdict is **`error > failed > passed`**: if any test errors, the submission is `error`; else if any test fails, `failed`; else `passed`. Implemented in the aggregate block of `evaluate_coding_submission_task`.
+Status precedence on a verdict is **`error > failed > passed`**: if any test errors, the submission is `error`; else if any test fails, `failed`; else `passed`.
 
-## Redaction layers (defence-in-depth)
+## Guard layers
 
-Identical principle to assignments — three layers, each independent:
+1. **Service layer**: `_validate_language` rejects a submitted language that differs from `exercise.language` (400); `_validate_evaluation_script` 422s before dispatch when `evaluation_script` is blank.
+2. **Task layer** (`_get_evaluation_script`): belt-and-braces re-check inside both tasks (covers an instructor blanking the script between dispatch and execution).
+3. **Course lifecycle** (`_validate_course_completeness`): a course cannot leave `draft` while any coding exercise misses a script for any supported language.
 
-1. **Task layer**: `evaluate_coding_run_task` queries `test_cases.filter(is_hidden=False)`. Hidden cases never enter Run pipeline at all.
-2. **Persistence layer**: `evaluate_coding_submission_task` executes every test, but copies `tc.is_hidden` onto each `CodingSubmissionTestResult` row. The redaction layer therefore never re-reads the underlying test case (which may have changed or been deleted).
-3. **Serializer layer**: `LearnerCodingSubmissionSerializer.get_test_results` filters `is_hidden=False` before serialising. Hidden rows are **omitted entirely** from `test_results`. Aggregate fields (`total_tests`, `passed_tests`, `score`, `runtime_ms`) still cover all tests, so the learner sees overall pass/fail without per-row data.
-
-`solution_code` is never declared on `_LearnerCodingLanguageConfigSerializer` — the field is structurally absent, not conditionally stripped.
+`solution_code` / `evaluation_script` are never declared on any learner serializer — structurally absent, not conditionally stripped.
 
 ## Progress integration
 
-`recalculate_progress` in `courses/services/enrollment_service.py` now counts distinct PASSED coding exercises:
+`recalculate_progress` in `courses/services/enrollment_service.py` counts distinct PASSED coding exercises:
 
 ```python
 completed_coding_ids = set(
@@ -310,24 +248,37 @@ Distinct per exercise — multiple PASSED attempts on the same exercise don't do
 
 ## Testing
 
-CLAUDE.md is explicit: tests must **never** hit real Docker. Patch `courses.services.code_runner.CodeRunner.run_submission` to return deterministic `SingleTestResult` lists; Celery is in eager mode so `.delay()` runs synchronously. Coverage lives in `courses/all_tests/test_learner_coding_consumption.py` — 27 tests including:
+CLAUDE.md is explicit: tests must **never** hit real Docker. Patch `courses.services.code_runner.CodeRunner.run_submission` to return deterministic `ScriptTestResult` lists; Celery is in eager mode so `.delay()` runs synchronously. Coverage lives in `courses/all_tests/test_learner_coding_consumption.py`:
 
-- Detail visibility (no `solution_code`, hidden tests filtered, 404 for unenrolled, instructor preview)
-- Run dispatch with visible-tests-only filtering, 403 for instructor, 400 for unsupported language
-- Submit persistence with full test set, hidden row redaction, status precedence (`error > failed > passed`), in-flight 422, owner-only 404
+- Sentinel parser round-trips (dotted names, multi-line tracebacks, embedded sentinel-lookalikes, truncated tails, empty stream)
+- Detail visibility (no `solution_code` / `evaluation_script` anywhere in the payload, 404 for unenrolled, instructor preview)
+- Run dispatch passes the evaluation script, 422 when the language has no script, 403 for instructor, 400 for unsupported language
+- Submit persistence: named result rows, `total_tests` back-filled from 0, status precedence (`error > failed > passed`), load-crash single error row, in-flight 422, owner-only 404
 - Retry: only `error` is retryable, 404 for other learners
-- Reaper: stale rows flipped, fresh rows untouched
-- Progress: PASSED triggers recalc, FAILED doesn't
-- Idempotency under acks_late redelivery (`evaluate_coding_submission_task.run` short-circuits on terminal)
+- Reaper, progress integration, `acks_late` idempotency
+- Course completeness: submission blocked while a supported language misses its script
 
-End-to-end smoke verification against real Docker lives in `scripts/smoke_code_runner.py` (all 4 languages) and `scripts/smoke_runtime_error.py` (per-test try/except isolation). Manual — not in `manage.py test`.
+The Python and JavaScript micro-harnesses are additionally smoke-testable **without Docker** by running the harness constants in a local subprocess with `CODE`/`EVAL` env vars set. The Java and C++ harnesses require the runner containers (javac/g++) to verify end-to-end.
 
 ## System Explanation (Why This Design)
 
-**Why one container per submission instead of one per test case?** A naive `1 test = 1 container` model means, for C++ and Java, N compile cycles per submission plus N × ~300 ms container startup overhead. Batching all tests into one container is the highest-leverage optimisation, so we apply it here. Sandbox isolation is preserved (the container still has the full 128 MB / 0.5 CPU / no-network / read-only contract); only the batching changes.
+**Why script evaluation instead of I/O pairs?** Manually typing input/expected-output pairs was error-prone (nothing validated the instructor's expected output against their own solution), couldn't express multi-function or structural checks, and limited feedback to string diffs. A test script gives the instructor a full assertion vocabulary, produces named per-test feedback with real failure messages, and is the model Udemy validated for instructor-authored coding exercises.
 
-**Why omit hidden test rows entirely instead of redacting fields?** Earlier design kept the row visible with input/expected/actual blanked and status visible. User-requested change: strip rows entirely so the learner can't even see hidden-test row count. Aggregate counts still leak existence (learner can compute `total_tests - len(visible_results)` = hidden count) but no per-test signal. Cheaper to audit too — one `filter(is_hidden=False)` in the serializer vs a conditional `to_representation` branch.
+**Why zero-dependency micro-harnesses instead of jest/JUnit/gtest?** Standard frameworks would require rebuilding all four runner images and pinning framework versions. Reflection (Java), a `test()` registry (JS), and a macro header (C++) provide the 10% of framework behaviour grading needs — named tests, assertion-vs-error distinction, per-test isolation — with zero image changes. Python gets real `unittest` because it's stdlib.
 
-**Why retry only `error`, not `failed`?** `failed` is a correct verdict — the learner's code didn't pass the tests. Retrying it without new code would just produce the same `failed` again. `error` is the only status where the verdict might not reflect the code (transient Docker hiccup, network blip while pulling, etc.), so retry is meaningful.
+**Why is `time_limit_ms` a whole-suite budget?** The evaluation script decides how many tests exist, and that's only discoverable by running it. A per-test budget therefore can't be computed upfront; a single suite budget (+ fixed headroom for startup/compile) is honest and simple.
+
+**Why is `total_tests` back-filled instead of snapshotted at submit time?** Same reason — the count is a property of the evaluation script's run, not of any DB row. `0` while in flight is documented as "unknown".
+
+**Why retry only `error`, not `failed`?** `failed` is a correct verdict — the learner's code didn't pass the tests. Retrying it without new code would just produce the same `failed` again. `error` is the only status where the verdict might not reflect the code (transient Docker hiccup, load crash, etc.), so retry is meaningful.
 
 **Why isn't Run persisted?** Run is the IDE "try it" button — it'd produce one row per keystroke-cycle learner saves. The Celery result backend with a 1-hour TTL is perfect for this: lives long enough to render in the UI, expires before it pollutes anything. The Submit path exists specifically to provide the persistent record.
+
+**Why one container per submission?** Container startup is ~300 ms and C++/Java compiles are expensive; the harness runs every test inside one container, so a suite of N tests costs one startup + one compile. Sandbox isolation is unchanged.
+
+## Deferred (not built)
+
+- Hidden tests within an evaluation script (all script results are learner-visible today)
+- A validate endpoint that runs the evaluation script against `solution_code` at authoring time
+- LLM-assisted evaluation-script generation from the problem statement + solution
+- Per-test time limits

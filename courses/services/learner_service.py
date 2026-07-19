@@ -3,7 +3,7 @@ Learner-facing consumption services.
 
 These power the `/api/v1/courses/learn/...` endpoints and are deliberately
 separate from instructor-facing data loaders so that sensitive fields
-(model_answer, solution_code, hidden test cases, quiz correctness) can
+(model_answer, solution_code, evaluation_script, quiz correctness) can
 never accidentally leak into a learner response.
 
 This module covers Phase 1 of the learner consumption surface:
@@ -27,9 +27,7 @@ from courses.models import (
     AssignmentSubmission,
     AssignmentSubmissionAnswer,
     CodingExercise,
-    CodingExerciseLanguageConfig,
     CodingSubmission,
-    CodingTestCase,
     CourseSection,
     Enrollment,
     Lecture,
@@ -175,7 +173,7 @@ def load_learner_curriculum(
 
     Loads only the minimum fields needed to render the curriculum tree:
     lecture titles + type + duration + completion marker, quiz/assignment
-    titles, coding exercise title + difficulty. Heavy payloads (HLS URLs,
+    titles, coding exercise title + language. Heavy payloads (HLS URLs,
     quiz questions, article text) come from the per-item detail endpoints.
 
     For non-instructor callers, the learner's `WatchProgress.is_completed`
@@ -200,7 +198,7 @@ def load_learner_curriculum(
     coding_exercises: dict[int, CodingExercise] = {
         ex.id: ex for ex in CodingExercise.objects.filter(
             id__in=ids_by_type[SectionContent.ItemType.CODING]
-        ).only('id', 'title', 'difficulty')
+        ).only('id', 'title', 'language')
     } if ids_by_type[SectionContent.ItemType.CODING] else {}
 
     assignments: dict[int, Assignment] = {
@@ -263,7 +261,7 @@ def load_learner_curriculum(
                 if ex is None:
                     continue
                 item['title'] = ex.title
-                item['difficulty'] = ex.difficulty
+                item['language'] = ex.language
             elif row.item_type == SectionContent.ItemType.ASSIGNMENT:
                 a = assignments.get(row.object_id)
                 if a is None:
@@ -741,10 +739,6 @@ def get_coding_exercise_for_consumption(user, exercise_id: int):
     Raises CodingExercise.DoesNotExist when missing OR the user has no
     consumption-side access (numeric-ID URL -> 404, never 403, mirroring
     [docs of 403-vs-404 rule]).
-
-    Hidden test cases are filtered out at the prefetch layer for learners
-    -- the serializer never has the chance to leak them. For instructors
-    we prefetch all test cases (preview mode shows the full set).
     """
     exercise = (
         CodingExercise.objects
@@ -761,18 +755,6 @@ def get_coding_exercise_for_consumption(user, exercise_id: int):
     if not is_instructor and enrollment is None:
         raise CodingExercise.DoesNotExist
     assert_content_released(enrollment, exercise.section)
-
-    # Test cases: learners only get visible ones; instructors preview both.
-    tc_qs = exercise.test_cases.all().order_by('position', 'id')
-    if not is_instructor:
-        tc_qs = tc_qs.filter(is_hidden=False)
-    exercise._prefetched_test_cases = list(tc_qs)
-
-    # Language configs always exclude solution_code at the serializer layer
-    # (absence > conditional strip). The query loads it for instructors only
-    # so the same field is reused at the authoring serializer.
-    config_qs = exercise.language_configs.all().order_by('language')
-    exercise._prefetched_language_configs = list(config_qs)
 
     latest_submission = None
     if not is_instructor:
@@ -792,6 +774,7 @@ def run_coding_exercise(user, exercise: CodingExercise, language: str, code: str
     result backend and expires after CELERY_RESULT_EXPIRES.
     """
     _validate_language(exercise, language)
+    _validate_evaluation_script(exercise, language)
     from courses.tasks import evaluate_coding_run_task  # local: avoid Celery at module load
     async_result = evaluate_coding_run_task.delay(
         exercise.id, language, code, exercise.time_limit_ms,
@@ -818,6 +801,7 @@ def submit_coding_exercise(
         transaction can't leak a phantom task into the queue.
     """
     _validate_language(exercise, language)
+    _validate_evaluation_script(exercise, language)
     if not code or not code.strip():
         raise CodingSubmissionError('Code cannot be empty.', http_status=400)
 
@@ -832,15 +816,15 @@ def submit_coding_exercise(
             http_status=422,
         )
 
-    total_tests = exercise.test_cases.count()
-
+    # The evaluation script decides how many tests exist, so the true count
+    # is only known after the run -- the grading task back-fills it.
     submission = CodingSubmission.objects.create(
         user=user,
         exercise=exercise,
         language=language,
         code=code,
         status=CodingSubmission.Status.QUEUED,
-        total_tests=total_tests,
+        total_tests=0,
     )
 
     from courses.tasks import evaluate_coding_submission_task  # local import
@@ -908,14 +892,20 @@ def retry_coding_submission(user, submission_id: int) -> CodingSubmission:
 
 
 def _validate_language(exercise: CodingExercise, language: str) -> None:
-    supported = exercise.supported_languages or []
-    if supported and language not in supported:
+    """Exercises are single-language: the submitted language must match."""
+    if language != exercise.language:
         raise CodingSubmissionError(
-            f"Language '{language}' is not configured for this exercise.",
+            f"This exercise only accepts '{exercise.language}' submissions.",
             http_status=400,
         )
-    if language not in {'python', 'javascript', 'cpp', 'java'}:
+
+
+def _validate_evaluation_script(exercise: CodingExercise, language: str) -> None:
+    """Grading is driven by the instructor's evaluation script -- without one
+    there is nothing to run the learner's code against.
+    """
+    if not (exercise.evaluation_script or '').strip():
         raise CodingSubmissionError(
-            f"Unsupported language: {language}",
-            http_status=400,
+            'This exercise is missing its evaluation script and cannot be run yet.',
+            http_status=422,
         )

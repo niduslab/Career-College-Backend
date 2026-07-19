@@ -238,8 +238,7 @@ class SectionContentSerializer(serializers.ModelSerializer):
                 return {
                     'id': ex.id,
                     'title': ex.title,
-                    'difficulty': ex.difficulty,
-                    'default_language': ex.default_language,
+                    'language': ex.language,
                 }
 
         elif obj.item_type == SectionContent.ItemType.ASSIGNMENT:

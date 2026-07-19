@@ -25,35 +25,38 @@ from courses.serializers import (
 # ---------------------------------------------------------------------------
 
 class CodingExerciseCreateUpdateSerializerTests(TestCase):
-    def test_create_requires_supported_languages(self):
+    def test_create_accepts_flattened_single_language_payload(self):
         serializer = CodingExerciseCreateUpdateSerializer(
             data={
                 'title': 'Two Sum',
-                'description': 'Find two numbers that add up to target.',
-                'problem_statement': 'Return indices of the two numbers.',
-                'difficulty': 'easy',
-                'default_language': 'python',
+                'description': 'Return indices of the two numbers adding up to target.',
+                'language': 'python',
+                'starter_code': 'def two_sum(nums, target):\n    pass\n',
+                'solution_code': 'def two_sum(nums, target): ...',
+                'evaluation_script': 'import unittest\nfrom exercise import two_sum\n',
                 'time_limit_ms': 2000,
             }
         )
+        self.assertTrue(serializer.is_valid(), serializer.errors)
 
-        self.assertFalse(serializer.is_valid())
-        self.assertIn('supported_languages', serializer.errors)
-
-    def test_create_uses_default_language_when_omitted_for_membership_check(self):
+    def test_create_rejects_unknown_language(self):
         serializer = CodingExerciseCreateUpdateSerializer(
             data={
                 'title': 'Reverse String',
                 'description': 'Reverse a string.',
-                'problem_statement': 'Given a string s, return reversed s.',
-                'difficulty': 'easy',
-                'supported_languages': ['javascript'],
+                'language': 'rust',
                 'time_limit_ms': 2000,
             }
         )
-
         self.assertFalse(serializer.is_valid())
-        self.assertIn('default_language', serializer.errors)
+        self.assertIn('language', serializer.errors)
+
+    def test_create_rejects_short_title(self):
+        serializer = CodingExerciseCreateUpdateSerializer(
+            data={'title': 'ab', 'language': 'python'}
+        )
+        self.assertFalse(serializer.is_valid())
+        self.assertIn('title', serializer.errors)
 
 
 # ---------------------------------------------------------------------------

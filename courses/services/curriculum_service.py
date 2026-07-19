@@ -99,7 +99,7 @@ def load_catalog_curriculum(course) -> dict:
     coding_exercises = {
         ex.id: ex for ex in CodingExercise.objects.filter(
             id__in=ids_by_type[SectionContent.ItemType.CODING]
-        ).only('id', 'title', 'difficulty')
+        ).only('id', 'title', 'language')
     } if ids_by_type[SectionContent.ItemType.CODING] else {}
 
     assignments = {

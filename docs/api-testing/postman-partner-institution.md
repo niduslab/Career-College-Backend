@@ -409,7 +409,14 @@ Content-Type: application/json
 ```
 
 **Expected:** `200 OK`, `data.affiliation_status == "removed"`, `data.is_verified == false`.
-A removed expert can no longer author and cannot be assigned to courses.
+
+> **Known gap, unresolved.** "A removed expert can no longer author" no longer holds for content
+> the expert was already rostered on — `set_expert_active()` doesn't touch `course.instructors`,
+> and authoring endpoints (course/section/content/coding/assignment) no longer check `is_verified`
+> at all (`IsCourseCreator`/`IsInstructorUser`). A removed expert **cannot be newly assigned** to a
+> course (`add_course_instructor` still requires an active affiliated expert), but courses they
+> were already added to remain fully editable by them post-removal. See `CLAUDE.md` → *Partner
+> Institution: Experts & Course Roster*.
 
 > Re-activate with `{ "is_active": true }` → `affiliation_status` back to `active`, `is_verified` true.
 
@@ -543,17 +550,25 @@ pm.environment.set("course_pk", pm.response.json().data.id);
 
 ---
 
-### 4.2 Unverified institution cannot create — 403
+### 4.2 Unverified institution CAN create a draft — verification gate moved to submission
 
 ```
 POST {{base_url}}/courses/create/
 Authorization: {{institution_token}}   (unverified institution)
 Content-Type: application/json
 
-{ "title": "Blocked Course", "description": "Should be rejected." }
+{ "title": "Blocked Course", "description": "Should be rejected.", "category": 1, "price": "0",
+  "learning_objectives": "x", "prerequisites": "x", "audiences": "x" }
 ```
 
-**Expected:** `403 Forbidden` (`IsVerifiedCourseCreator`).
+**Expected (changed from `403` to):** `201 Created`. Course creation/editing now runs on
+`IsCourseCreator` (instructor or partner institution, verification not required) so drafts can be
+built and tested before verification completes. The verified-only checkpoint moved to leaving
+`draft` — `CourseSubmitForReviewView` / the institution-review flow still require
+`IsVerifiedCourseCreator`, so an unverified institution can create and edit but not progress the
+course out of `draft`. (Institution-owned courses go through `/finish/` → `institution_review`,
+not `/submit/` directly — see `CLAUDE.md` → *Course Status State Machine* — so verify the exact
+submission path against the current owner type before asserting a specific status code here.)
 
 ---
 

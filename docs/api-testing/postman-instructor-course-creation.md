@@ -4,8 +4,10 @@ Instructor-facing walkthrough for creating a course end to end: pick a **categor
 course (with the new **text-field metadata**), add **sections** and **content**, then submit for
 review.
 
-Applies to both **verified instructors** and **verified partner institutions** — both use the same
-authoring endpoints (`IsVerifiedCourseCreator`). Where behavior differs, it's called out.
+Applies to both **instructors** and **partner institutions** — both use the same authoring
+endpoints (`IsCourseCreator`; identity verification is not required to create/edit — only to
+submit for review, which stays gated by `IsVerifiedCourseCreator`). Where behavior differs, it's
+called out.
 
 ## Table of Contents
 
@@ -125,8 +127,8 @@ categories are assignable to a course.
 }
 ```
 
-**Required:** `title` (≥ 5 chars), `description`, `category` (active category id).
-Everything else is optional.
+**Required:** `title` (≥ 5 chars), `description`, `category` (active category id), `price`,
+`learning_objectives`, `prerequisites`, `audiences` (each non-blank). Everything else is optional.
 
 **`learning_objectives` / `prerequisites` / `audiences`** are plain **text fields** — put **one
 item per line** (`\n`-separated). The frontend splits on newline to render bullet lists.
@@ -335,14 +337,14 @@ the list; an unrecognized value → `400`.
 | `title` | string | create/patch | Required, ≥ 5 chars |
 | `description` | string | create/patch | Required |
 | `category` | int (FK) | create/patch | **Required on create**; must be an active category id |
-| `price` | decimal string | create/patch | Default `0`; ≥ 0 |
+| `price` | decimal string | create/patch | **Required**; ≥ 0 |
 | `language` | string | create/patch | Default `English` |
 | `level` | string | create/patch | `beginner` / `intermediate` / `advanced` |
 | `duration_minutes` | int | create/patch | Optional |
 | `thumbnail` | image | create/patch | form-data only |
-| `learning_objectives` | text | create/patch | Newline-separated; one item per line |
-| `prerequisites` | text | create/patch | Newline-separated; one item per line |
-| `audiences` | text | create/patch | Newline-separated; one item per line |
+| `learning_objectives` | text | create/patch | **Required**, non-blank; newline-separated, one item per line |
+| `prerequisites` | text | create/patch | **Required**, non-blank; newline-separated, one item per line |
+| `audiences` | text | create/patch | **Required**, non-blank; newline-separated, one item per line |
 | `slug` | string | read-only | Auto-generated from title |
 | `status` | string | read-only | Change via transition endpoints |
 | `is_published` | bool | read-only | |

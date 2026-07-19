@@ -34,10 +34,10 @@ POST courses/{pk}/institution-review/  {submit}  ── ► under_review (platfo
 - Every course **authoring** endpoint scopes by `instructors=request.user`
   (e.g. `NidusCourse.objects.get(pk=..., instructors=request.user)`). Assigning the expert runs
   `course.instructors.add(expert)`, so the expert immediately passes that filter and can edit content.
-- Authoring permission is `IsVerifiedCourseCreator` (verified instructor **or** verified institution) on
-  course-level views; section/content views use `IsAuthenticated` + the `instructors=request.user`
-  queryset filter; coding/assignment views add `IsVerifiedInstructor` (the expert is a verified
-  instructor, so passes).
+- Authoring permission is `IsCourseCreator` (instructor **or** partner institution — identity
+  verification **not** required) on course-level views; section/content views use `IsAuthenticated`
+  + the `instructors=request.user` queryset filter; coding/assignment views use `IsInstructorUser`
+  (verification not required either). See **Known gap** below.
 - Editing is only allowed while the course `is_editable()` → status in **`draft`** or **`rejected`**.
   Once `institution_review` / `under_review` / `published` / `archived`, content writes return **422**.
 - **Submission is two-stage for institution courses.** The expert uses `/finish/` (not `/submit/`);
@@ -272,12 +272,20 @@ Now the expert retries 2.2:
 filter excludes the course. Previously authored content is retained on the course; only the expert's
 access is revoked.
 
-### 5.7 Deactivated expert cannot author
+### 5.7 Deactivated expert — KNOWN GAP, does not currently block authoring
+
+> **Known gap, unresolved.** This section previously documented "deactivated expert can no longer
+> author" as a passing test. That's no longer true — see below. Do not rely on this as a security
+> boundary until it's fixed.
 
 If the institution deactivates the expert (`PATCH /api/v1/auth/partner/experts/{id}/` with
-`is_active=false`), `InstructorProfile.is_verified` flips to `False`. The expert then fails
-`IsVerifiedCourseCreator` / `IsVerifiedInstructor` → course-level and coding/assignment authoring calls
-return **403** even for a course they're still rostered on.
+`is_active=false`), `InstructorProfile.is_verified` flips to `False` and `affiliation_status`
+flips to `removed` — but `set_expert_active()` does **not** remove the expert from
+`course.instructors`, and course/section/content/coding/assignment authoring endpoints no longer
+check `is_verified` at all (`IsCourseCreator` / `IsInstructorUser`). Retrying the expert's
+authoring calls (course detail, add section, add content, coding exercises, assignments) on a
+course they're still rostered on currently returns the **same success responses as before
+deactivation** — not the `403` this section used to assert.
 
 ---
 
@@ -286,8 +294,8 @@ return **403** even for a course they're still rostered on.
 | Step | Method | Endpoint | Permission |
 |------|--------|----------|------------|
 | Login | POST | `/api/v1/auth/login/` | public |
-| List my courses | GET | `/api/v1/courses/` | `IsVerifiedCourseCreator` |
-| Course detail | GET/PATCH | `/api/v1/courses/{pk}/` | `IsVerifiedCourseCreator` + `instructors` filter |
+| List my courses | GET | `/api/v1/courses/` | `IsCourseCreator` |
+| Course detail | GET/PATCH | `/api/v1/courses/{pk}/` | `IsCourseCreator` + `instructors` filter |
 | Create section | POST | `/api/v1/courses/{course_id}/sections/create/` | `instructors` filter |
 | Add content | POST | `/api/v1/courses/sections/{section_id}/contents/` | `instructors` filter |
 | Reorder content | PATCH | `/api/v1/courses/contents/{content_id}/reorder/` | `instructors` filter |

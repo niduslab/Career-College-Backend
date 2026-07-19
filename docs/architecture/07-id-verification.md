@@ -1,8 +1,11 @@
 # 07) Identity Verification
 
-Instructor identity verification is a state-machine workflow. An instructor cannot publish courses
-until their identity is approved by an admin. Approval sets `InstructorProfile.is_verified = True`,
-which enables the `IsVerifiedInstructor` permission class.
+Instructor identity verification is a state-machine workflow. An instructor can build and edit a
+course draft before verification (`IsCourseCreator`, unverified), but cannot submit it for review
+or publish until their identity is approved by an admin. Approval sets
+`InstructorProfile.is_verified = True`, which enables the `IsVerifiedInstructor` permission class
+(used only as a building block of `IsVerifiedCourseCreator` now — see
+[08-core-infrastructure.md](08-core-infrastructure.md)).
 
 > **Partner institutions** have a parallel credential-verification flow (`InstitutionVerification`,
 > in the same `id_verification/models.py`) that mirrors this state machine but targets a
@@ -221,8 +224,8 @@ POST /verification/{id}/submit/
          │                               → status: approved
          │                               → InstructorProfile.is_verified = True
          │
-Now IsVerifiedInstructor passes
-→ instructor can create/publish courses
+Now IsVerifiedInstructor passes (via IsVerifiedCourseCreator)
+→ instructor can submit courses for review / publish (creation/editing never required this)
 ```
 
 **Rejection path:**

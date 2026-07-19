@@ -6,7 +6,7 @@ from rest_framework.response import Response
 from rest_framework.views import APIView
 
 from core.pagination import StandardResultsSetPagination
-from core.permissions import IsEmailVerified, IsVerifiedCourseCreator
+from core.permissions import IsCourseCreator, IsEmailVerified
 from courses.models import NidusCourse
 from courses.serializers import (
     NidusCourseCreateUpdateSerializer,
@@ -18,7 +18,7 @@ from courses.utils import guard_editable, owned_course_qs
 class CourseListAPIView(APIView):
     """GET list courses where authenticated user is owner or assigned instructor."""
 
-    permission_classes = [IsAuthenticated, IsEmailVerified, IsVerifiedCourseCreator]
+    permission_classes = [IsAuthenticated, IsEmailVerified, IsCourseCreator]
 
     def get(self, request):
         queryset = (
@@ -38,7 +38,7 @@ class CourseListAPIView(APIView):
 class CourseCreateAPIView(APIView):
     """POST create a new Nidus course."""
 
-    permission_classes = [IsAuthenticated, IsEmailVerified, IsVerifiedCourseCreator]
+    permission_classes = [IsAuthenticated, IsEmailVerified, IsCourseCreator]
 
     def post(self, request):
         serializer = NidusCourseCreateUpdateSerializer(data=request.data, context={'request': request})
@@ -69,7 +69,7 @@ class CourseCreateAPIView(APIView):
 class CourseDetailView(APIView):
     """Retrieve and partially update a course where user is owner or assigned instructor."""
 
-    permission_classes = [IsAuthenticated, IsEmailVerified, IsVerifiedCourseCreator]
+    permission_classes = [IsAuthenticated, IsEmailVerified, IsCourseCreator]
 
     def _get_course(self, request, pk):
         qs = (

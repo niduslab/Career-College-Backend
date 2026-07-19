@@ -13,7 +13,7 @@ This document covers the full journey of a course from first creation through ad
 | `courses/all_views/status_views.py` | `CourseSubmitForReviewView`, `CourseAdminReviewView`, `CourseReworkView`, `CourseArchiveView` |
 | `courses/serializers.py` | `NidusCourseCreateUpdateSerializer`, `NidusCourseSerializer` |
 | `courses/urls.py` | URL wiring for all course endpoints |
-| `core/permissions.py` | `IsVerifiedInstructor`, `IsAdminUser`, `IsCourseInstructor` |
+| `core/permissions.py` | `IsCourseCreator` (create/edit, unverified), `IsVerifiedCourseCreator` (submit/rework, verified), `IsAdminUser`, `IsCourseInstructor` |
 
 ---
 
@@ -77,10 +77,13 @@ Any attempt to move to a status not in this map raises `ValidationError` immedia
 Permission chain on `CourseCreateAPIView`:
 
 ```
-IsAuthenticated + IsEmailVerified + IsVerifiedInstructor
+IsAuthenticated + IsEmailVerified + IsCourseCreator
 ```
 
-`IsVerifiedInstructor` checks that `InstructorProfile.is_verified == True`. An instructor must have completed identity verification before this endpoint is accessible.
+`IsCourseCreator` checks `user_type in ('instructor', 'partner_institution')` — **identity
+verification is not required** to create or edit a course draft; that gate moved to submission
+(`IsVerifiedCourseCreator` on `/submit/` and `/finish/`). See
+[08-core-infrastructure.md](08-core-infrastructure.md).
 
 ### What the endpoint does
 
@@ -187,7 +190,7 @@ POST /api/v1/courses/{course_id}/submit/
 ### Permissions
 
 ```
-IsAuthenticated + IsEmailVerified + IsVerifiedInstructor
+IsAuthenticated + IsEmailVerified + IsVerifiedCourseCreator
 ```
 
 The view also checks `instructors=request.user` at the query level — an instructor not assigned to the course receives a `404`.
@@ -327,7 +330,7 @@ POST /api/v1/courses/{course_id}/rework/
 ### Permissions
 
 ```
-IsAuthenticated + IsEmailVerified + IsVerifiedInstructor
+IsAuthenticated + IsEmailVerified + IsVerifiedCourseCreator
 ```
 
 Again, `instructors=request.user` is enforced at the query level.
@@ -433,11 +436,11 @@ All `ValidationError` exceptions bubble up to the view, which converts them to `
 
 | Action | Permission classes | Extra query guard |
 |--------|-------------------|------------------|
-| Create course | `IsAuthenticated`, `IsEmailVerified`, `IsVerifiedInstructor` | — |
-| Edit course (PATCH) | `IsAuthenticated`, `IsEmailVerified`, `IsVerifiedInstructor` | `instructors=request.user` |
-| Submit for review | `IsAuthenticated`, `IsEmailVerified`, `IsVerifiedInstructor` | `instructors=request.user` |
+| Create course | `IsAuthenticated`, `IsEmailVerified`, `IsCourseCreator` (unverified) | — |
+| Edit course (PATCH) | `IsAuthenticated`, `IsEmailVerified`, `IsCourseCreator` (unverified) | `instructors=request.user` |
+| Submit for review | `IsAuthenticated`, `IsEmailVerified`, `IsVerifiedCourseCreator` | `instructors=request.user` |
 | Admin review | `IsAuthenticated`, `IsEmailVerified`, `IsAdminUser` | — |
-| Rework | `IsAuthenticated`, `IsEmailVerified`, `IsVerifiedInstructor` | `instructors=request.user` |
+| Rework | `IsAuthenticated`, `IsEmailVerified`, `IsVerifiedCourseCreator` | `instructors=request.user` |
 | Archive | `IsAuthenticated`, `IsEmailVerified` | admin: any course; instructor: own course |
 
 ### Owner vs co-instructor distinction

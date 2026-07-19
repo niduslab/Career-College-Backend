@@ -26,10 +26,12 @@ it still belongs in `core/`.
 |-------|---------------|-------------------|
 | `IsPlatformAdmin` | `user.is_staff == True` OR `user.user_type == 'admin'` | Admin review endpoints, admin verification list |
 | `IsEmailVerified` | `user.is_email_verified == True` | Almost all authenticated endpoints |
-| `IsInstructorUser` | `user.user_type == 'instructor'` | Instructor-only reads (profile, verification listing) |
-| `IsVerifiedInstructor` | `user.user_type == 'instructor'` AND `InstructorProfile.is_verified == True` | Course create, course authoring endpoints |
+| `IsInstructorUser` | `user.user_type == 'instructor'` | Instructor-only reads (profile, verification listing); course/section/lecture/quiz/assignment/coding-exercise authoring (verification not required) |
+| `IsPartnerInstitutionUser` | `user.user_type == 'partner_institution'` | Partner-institution side of course authoring (verification not required) |
+| `IsVerifiedInstructor` | `user.user_type == 'instructor'` AND `InstructorProfile.is_verified == True` | Building block for `IsVerifiedCourseCreator` only — no view uses it directly anymore |
 | `IsVerifiedPartnerInstitution` | `user.user_type == 'partner_institution'` AND `PartnerInstitutionProfile.is_verified AND is_active` | Expert/department management, partner-institution course roster |
-| `IsVerifiedCourseCreator` | Passes for `IsVerifiedInstructor` **OR** `IsVerifiedPartnerInstitution` | All course authoring endpoints (instructor + institution) |
+| `IsCourseCreator` | Passes for `IsInstructorUser` **OR** `IsPartnerInstitutionUser` | Course create/edit, curriculum/content authoring — the day-to-day authoring gate; identity verification not required so a course can be built and tested before verification completes |
+| `IsVerifiedCourseCreator` | Passes for `IsVerifiedInstructor` **OR** `IsVerifiedPartnerInstitution` | Verified-only actions: submitting a course for review, schedule mutations, course-instructor invites |
 | `IsCourseInstructor` | Object-level: `user in course.instructors.all()` | Course detail/edit for multi-instructor courses |
 | `IsLearnerUser` | `user.user_type == 'learner'` | Enrollment writes, progress POST, quiz submit, assignment submit |
 
@@ -37,7 +39,7 @@ it still belongs in `core/`.
 
 ```python
 class CourseCreateAPIView(APIView):
-    permission_classes = [IsAuthenticated, IsEmailVerified, IsVerifiedCourseCreator]
+    permission_classes = [IsAuthenticated, IsEmailVerified, IsCourseCreator]
 ```
 
 Permission classes are evaluated in order. The first failure raises a `PermissionDenied` (403)

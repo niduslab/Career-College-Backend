@@ -36,7 +36,7 @@ Status precedence: error > failed > passed
 - `courses/all_views/coding_views.py`: instructor authoring endpoints
 - `courses/all_serializers/assessment_serializers.py`: `CodingExerciseSerializer`, `CodingExerciseCreateUpdateSerializer`, `CodingExerciseLanguageConfigSerializer`, `CodingTestCaseSerializer`
 - `courses/urls.py`: route definitions
-- `core/permissions.py`: `IsVerifiedInstructor` (gates all authoring endpoints)
+- `core/permissions.py`: `IsInstructorUser` (gates all authoring endpoints; identity verification not required — see [08-core-infrastructure.md](08-core-infrastructure.md))
 
 ### Part 2 — Learner execution
 - `courses/all_models/assessment_models.py`: `CodingSubmission`, `CodingSubmissionTestResult`
@@ -74,7 +74,7 @@ Per-language code templates attached to an exercise.
 - `starter_code` — the boilerplate shown to learners when they open the exercise
 - `solution_code` — the reference implementation used for grading/instructor reference
 
-**Security rule**: `solution_code` must never appear in any learner-facing serializer or response. It is included in `CodingExerciseLanguageConfigSerializer` only because all coding endpoints require `IsVerifiedInstructor`.
+**Security rule**: `solution_code` must never appear in any learner-facing serializer or response. It is included in `CodingExerciseLanguageConfigSerializer` only because all coding endpoints require `IsInstructorUser` (`user_type == 'instructor'`, not learner) plus the `instructors=request.user` ownership filter.
 
 - Unique constraint: `(exercise, language)` — one config per language per exercise.
 
@@ -92,7 +92,7 @@ Ordered input/output test cases for an exercise.
 
 ## API endpoints
 
-All endpoints require `IsAuthenticated`, `IsEmailVerified`, `IsVerifiedInstructor`.
+All endpoints require `IsAuthenticated`, `IsEmailVerified`, `IsInstructorUser` (identity verification not required to author — see [08-core-infrastructure.md](08-core-infrastructure.md)).
 Ownership is enforced via `section__course__instructors=request.user` in every queryset filter.
 
 ### Exercise detail

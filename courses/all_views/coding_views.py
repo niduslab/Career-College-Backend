@@ -9,7 +9,7 @@ from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
-from core.permissions import IsEmailVerified, IsVerifiedInstructor
+from core.permissions import IsEmailVerified, IsInstructorUser
 from courses.models import (
     CodingExercise,
     CodingExerciseLanguageConfig,
@@ -28,7 +28,7 @@ logger = logging.getLogger(__name__)
 
 class CodingExerciseDetailAPIView(APIView):
     """GET / PATCH / DELETE /api/courses/coding-exercises/{exercise_id}/"""
-    permission_classes = [IsAuthenticated, IsEmailVerified, IsVerifiedInstructor]
+    permission_classes = [IsAuthenticated, IsEmailVerified, IsInstructorUser]
     parser_classes = [JSONParser, FormParser, MultiPartParser]
 
     def _get_owned_exercise(self, request, exercise_id):
@@ -86,7 +86,7 @@ class CodingExerciseDetailAPIView(APIView):
 
 class CodingExerciseLanguageConfigListCreateAPIView(APIView):
     """GET / POST /api/courses/coding-exercises/{exercise_id}/language-configs/"""
-    permission_classes = [IsAuthenticated, IsEmailVerified, IsVerifiedInstructor]
+    permission_classes = [IsAuthenticated, IsEmailVerified, IsInstructorUser]
     parser_classes = [JSONParser, FormParser, MultiPartParser]
 
     def _get_owned_exercise(self, request, exercise_id):
@@ -132,7 +132,7 @@ class CodingExerciseLanguageConfigListCreateAPIView(APIView):
 
 class CodingExerciseLanguageConfigDetailAPIView(APIView):
     """GET / PATCH / DELETE /api/courses/coding-exercises/{exercise_id}/language-configs/{config_id}/"""
-    permission_classes = [IsAuthenticated, IsEmailVerified, IsVerifiedInstructor]
+    permission_classes = [IsAuthenticated, IsEmailVerified, IsInstructorUser]
     parser_classes = [JSONParser, FormParser, MultiPartParser]
 
     def _get_owned_config(self, request, exercise_id, config_id):
@@ -187,7 +187,7 @@ class CodingExerciseLanguageConfigDetailAPIView(APIView):
 
 class CodingTestCaseListCreateAPIView(APIView):
     """GET / POST /api/courses/coding-exercises/{exercise_id}/testcases/"""
-    permission_classes = [IsAuthenticated, IsEmailVerified, IsVerifiedInstructor]
+    permission_classes = [IsAuthenticated, IsEmailVerified, IsInstructorUser]
     parser_classes = [JSONParser, FormParser, MultiPartParser]
 
     def _get_owned_exercise(self, request, exercise_id):
@@ -231,7 +231,7 @@ class CodingTestCaseListCreateAPIView(APIView):
 
 class CodingTestCaseDetailAPIView(APIView):
     """GET / PATCH / DELETE /api/courses/coding-exercises/{exercise_id}/testcases/{tc_id}/"""
-    permission_classes = [IsAuthenticated, IsEmailVerified, IsVerifiedInstructor]
+    permission_classes = [IsAuthenticated, IsEmailVerified, IsInstructorUser]
     parser_classes = [JSONParser, FormParser, MultiPartParser]
 
     def _get_owned_test_case(self, request, exercise_id, tc_id):

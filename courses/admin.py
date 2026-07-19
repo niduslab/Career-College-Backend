@@ -2,8 +2,6 @@ from django.contrib import admin
 
 from courses.models import (
     CodingExercise,
-    CodingExerciseLanguageConfig,
-    CodingTestCase,
     CourseCategory,
     CourseInstructorInvite,
     CourseReview,
@@ -20,20 +18,6 @@ from courses.models import (
     VideoProcessingJob,
     WatchProgress,
 )
-
-
-class CodingExerciseLanguageConfigInline(admin.TabularInline):
-    model = CodingExerciseLanguageConfig
-    extra = 0
-    fields = ('language', 'starter_code', 'solution_code')
-    ordering = ('id',)
-
-
-class CodingTestCaseInline(admin.TabularInline):
-    model = CodingTestCase
-    extra = 0
-    fields = ('position', 'is_hidden', 'input_data', 'expected_output', 'explanation')
-    ordering = ('position', 'id')
 
 
 @admin.register(NidusCourse)
@@ -165,31 +149,13 @@ class CodingExerciseAdmin(admin.ModelAdmin):
         'id',
         'title',
         'section',
-        'difficulty',
-        'default_language',
+        'language',
         'time_limit_ms',
         'created_at',
     )
-    list_filter = ('difficulty', 'default_language', 'section')
+    list_filter = ('language', 'section')
     search_fields = ('title', 'section__title', 'section__course__title')
     ordering = ('-created_at',)
-    inlines = (CodingExerciseLanguageConfigInline, CodingTestCaseInline)
-
-
-@admin.register(CodingExerciseLanguageConfig)
-class CodingExerciseLanguageConfigAdmin(admin.ModelAdmin):
-    list_display = ('id', 'exercise', 'language', 'created_at')
-    list_filter = ('language', 'exercise__section')
-    search_fields = ('exercise__title', 'exercise__section__title', 'exercise__section__course__title')
-    ordering = ('exercise', 'language', 'id')
-
-
-@admin.register(CodingTestCase)
-class CodingTestCaseAdmin(admin.ModelAdmin):
-    list_display = ('id', 'exercise', 'position', 'is_hidden')
-    list_filter = ('is_hidden', 'exercise__section')
-    search_fields = ('exercise__title', 'exercise__section__title', 'exercise__section__course__title')
-    ordering = ('exercise', 'position', 'id')
 
 
 @admin.register(CourseReview)

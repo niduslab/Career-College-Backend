@@ -11,12 +11,17 @@ from courses.all_models.course_models import AuthoredModel, CourseSection, Times
 # Coding exercises — instructor-authored programming problems
 
 class CodingExercise(AuthoredModel):
-    """Coding problem attached to a section; ordered via SectionContent."""
+    """Coding problem attached to a section; ordered via SectionContent.
 
-    class Difficulty(models.TextChoices):
-        EASY = 'easy', 'Easy'
-        MEDIUM = 'medium', 'Medium'
-        HARD = 'hard', 'Hard'
+    Single-language: each exercise targets exactly one language and carries
+    its starter code, reference solution, and evaluation script directly.
+    """
+
+    class Language(models.TextChoices):
+        PYTHON = 'python', 'Python'
+        JAVASCRIPT = 'javascript', 'JavaScript'
+        CPP = 'cpp', 'C++'
+        JAVA = 'java', 'Java'
 
     section = models.ForeignKey(
         CourseSection,
@@ -24,20 +29,21 @@ class CodingExercise(AuthoredModel):
         related_name='coding_exercises',
     )
     title = models.CharField(max_length=255)
+    # The problem text shown to learners; must state the function contract
+    # the evaluation script will call.
     description = models.TextField(blank=True, default='')
-    problem_statement = models.TextField()
-    difficulty = models.CharField(
-        max_length=10,
-        choices=Difficulty.choices,
-        default=Difficulty.EASY,
-        db_index=True,
+    language = models.CharField(
+        max_length=20,
+        choices=Language.choices,
+        default=Language.PYTHON,
     )
-    default_language = models.CharField(max_length=20, default='python')
-    supported_languages = models.JSONField(
-        default=list,
-        help_text='e.g. ["python", "javascript", "cpp", "java"]',
+    starter_code = models.TextField(blank=True, default='')
+    solution_code = models.TextField(blank=True, default='')
+    evaluation_script = models.TextField(blank=True, default='')
+    time_limit_ms = models.PositiveIntegerField(
+        default=2000,
+        help_text='Wall-clock budget for the WHOLE evaluation suite, in milliseconds.',
     )
-    time_limit_ms = models.PositiveIntegerField(default=2000)
     section_content = GenericRelation(
         SectionContent,
         content_type_field='content_type',
@@ -48,76 +54,9 @@ class CodingExercise(AuthoredModel):
     class Meta:
         db_table = 'coding_exercises'
         ordering = ['-created_at']
-        indexes = [
-            models.Index(fields=['section', 'difficulty'], name='idx_coding_section_difficulty'),
-        ]
 
     def __str__(self):
         return self.title
-
-
-class CodingExerciseLanguageConfig(TimestampedModel):
-    """Per-language starter and solution code for a CodingExercise."""
-
-    class Language(models.TextChoices):
-        PYTHON = 'python', 'Python'
-        JAVASCRIPT = 'javascript', 'JavaScript'
-        CPP = 'cpp', 'C++'
-        JAVA = 'java', 'Java'
-
-    exercise = models.ForeignKey(
-        CodingExercise,
-        on_delete=models.CASCADE,
-        related_name='language_configs',
-    )
-    language = models.CharField(max_length=20, choices=Language.choices)
-    starter_code = models.TextField(blank=True, default='')
-    # solution_code must NEVER appear in any learner-facing serializer
-    solution_code = models.TextField(blank=True, default='')
-
-    class Meta:
-        db_table = 'coding_exercise_language_configs'
-        constraints = [
-            models.UniqueConstraint(fields=['exercise', 'language'], name='uniq_coding_lang_config'),
-        ]
-        indexes = [
-            models.Index(fields=['exercise', 'language'], name='idx_coding_lang_config'),
-        ]
-
-    def __str__(self):
-        return f'{self.exercise.title} — {self.language}'
-
-
-class CodingTestCase(models.Model):
-    """Input/output test case for a CodingExercise. Hidden cases are grading-only."""
-
-    exercise = models.ForeignKey(
-        CodingExercise,
-        on_delete=models.CASCADE,
-        related_name='test_cases',
-    )
-    input_data = models.TextField()
-    expected_output = models.TextField()
-    is_hidden = models.BooleanField(
-        default=False,
-        db_index=True,
-        help_text='Hidden cases are used for grading only and never shown to learners.',
-    )
-    explanation = models.CharField(max_length=255, blank=True, default='')
-    position = models.PositiveIntegerField(default=1, db_index=True)
-
-    class Meta:
-        db_table = 'coding_test_cases'
-        ordering = ['exercise_id', 'position', 'id']
-        constraints = [
-            models.UniqueConstraint(fields=['exercise', 'position'], name='uniq_testcase_exercise_position'),
-        ]
-        indexes = [
-            models.Index(fields=['exercise', 'position'], name='idx_coding_testcase_pos'),
-        ]
-
-    def __str__(self):
-        return f'TestCase {self.position} for exercise {self.exercise_id}'
 
 
 # Quiz system — MCQ-based assessments via SectionContent
@@ -323,7 +262,7 @@ class QuizAttemptAnswer(models.Model):
         return f'Attempt {self.attempt_id} Q{self.question_id} [{verdict}]'
 
 
-# Assignments — instructor-authored open-ended questions, ordered via SectionContent.
+# Assignments 
 
 class Assignment(AuthoredModel):
     """Open-ended assignment attached to a section; ordered via SectionContent."""
@@ -592,28 +531,18 @@ class CodingSubmissionTestResult(models.Model):
         on_delete=models.CASCADE,
         related_name='test_results',
     )
-    # Nullable on delete so result rows survive when the test case is later
-    # removed -- the snapshot fields below carry the input/output anyway.
-    test_case = models.ForeignKey(
-        CodingTestCase,
-        on_delete=models.SET_NULL,
-        null=True,
-        blank=True,
-        related_name='+',
-    )
+    # Name of the test as reported by the instructor's evaluation script
+    # (e.g. 'evaluate.AddTests.test_positive_numbers').
+    test_name = models.CharField(max_length=255, blank=True, default='')
     status = models.CharField(
         max_length=10,
         choices=Status.choices,
         db_index=True,
     )
-    input_data = models.TextField(blank=True, default='')
-    expected_output = models.TextField(blank=True, default='')
-    actual_output = models.TextField(blank=True, default='')
     stdout = models.TextField(blank=True, default='')
     stderr = models.TextField(blank=True, default='')
     runtime_ms = models.PositiveIntegerField(default=0)
     exit_code = models.IntegerField(default=0)
-    is_hidden = models.BooleanField(default=False, db_index=True)
     position = models.PositiveIntegerField(default=0)
 
     class Meta:

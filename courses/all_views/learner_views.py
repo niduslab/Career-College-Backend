@@ -574,17 +574,17 @@ class LearnerAssignmentSubmissionRetryView(APIView):
 #
 # Six endpoints power the IDE round-trip:
 #
-#   GET  learn/coding-exercises/<id>/                    -> detail (starter + visible tests)
-#   POST learn/coding-exercises/<id>/run/                -> dispatch Run (visible tests only)
+#   GET  learn/coding-exercises/<id>/                    -> detail (starter code + problem)
+#   POST learn/coding-exercises/<id>/run/                -> dispatch Run (transient)
 #   POST learn/coding-exercises/<id>/submit/             -> persist + dispatch Submit
 #   GET  learn/coding-exercises/tasks/<task_id>/         -> poll Run result
 #   GET  learn/coding-exercises/submissions/<id>/        -> poll Submit result
 #   POST learn/coding-exercises/submissions/<id>/retry/  -> retry an errored submission
 #
-# Run and Submit both return HTTP 202; the frontend polls one of the two
-# GET endpoints. Run is cheap, transient, visible-tests-only; Submit is
-# persisted, runs every test case, can mark progress. See
-# docs/submission-flow.md for the full rationale.
+# Run and Submit both execute the instructor's evaluation script against the
+# learner's code and both return HTTP 202; the frontend polls one of the two
+# GET endpoints. Run is cheap and transient; Submit is persisted and can
+# mark progress.
 
 
 class LearnerCodingExerciseDetailView(APIView):
@@ -592,8 +592,8 @@ class LearnerCodingExerciseDetailView(APIView):
     GET /api/v1/courses/learn/coding-exercises/{exercise_id}/
 
     Learner-safe detail for a coding exercise. Returns starter code per
-    language (NOT solution_code), the visible test cases, and a summary
-    of the caller's latest submission (so the UI can light up "solved").
+    language (NOT solution_code / evaluation_script) and a summary of the
+    caller's latest submission (so the UI can light up "solved").
     """
 
     permission_classes = [IsAuthenticated, IsEmailVerified, IsLearnerUser | IsInstructorUser]
@@ -625,11 +625,11 @@ class LearnerCodingRunView(APIView):
     """
     POST /api/v1/courses/learn/coding-exercises/{exercise_id}/run/
 
-    Transient: dispatches a Celery task that runs only the visible test
-    cases, returning a task_id for the frontend to poll. No DB row is
-    created. Instructors are gated out so preview clicks can't pollute
-    history (Run history isn't persisted, but the contract is symmetric
-    with Submit).
+    Transient: dispatches a Celery task that runs the instructor's
+    evaluation script against the submitted code, returning a task_id for
+    the frontend to poll. No DB row is created. Instructors are gated out
+    so preview clicks can't pollute history (Run history isn't persisted,
+    but the contract is symmetric with Submit).
     """
 
     permission_classes = [IsAuthenticated, IsEmailVerified, IsLearnerUser]
@@ -767,10 +767,10 @@ class LearnerCodingTaskStatusView(APIView):
       SUCCESS           -> 200 {state, result}
       FAILURE           -> 500 {state, error}
 
-    Task IDs are unguessable UUIDs and the result payload contains only
-    visible test data (the Run task filters at the source). We don't
-    re-validate user ownership of the task_id; coupled with the UUID this
-    matches the source standalone platform's contract.
+    Task IDs are unguessable UUIDs and the result payload is learner-safe
+    by construction (test names + outputs, never the evaluation script).
+    We don't re-validate user ownership of the task_id; coupled with the
+    UUID this matches the source standalone platform's contract.
     """
 
     permission_classes = [IsAuthenticated, IsEmailVerified]
@@ -836,10 +836,9 @@ class LearnerCodingSubmissionDetailView(APIView):
     """
     GET /api/v1/courses/learn/coding-exercises/submissions/{submission_id}/
 
-    Full Submit-mode submission for the calling learner. Per-test result
-    rows have input/expected/actual redacted to '' when is_hidden=True --
-    status + runtime_ms remain visible so the learner can see whether
-    their hidden tests passed.
+    Full Submit-mode submission for the calling learner: one result row per
+    test the instructor's evaluation script ran (name, status, output,
+    failure message).
 
     Other learners' submissions return 404 (never 403) so existence
     isn't leaked across IDs.

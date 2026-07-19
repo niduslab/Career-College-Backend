@@ -30,10 +30,7 @@ from courses.views import (
     CatalogCourseDetailView,
     CatalogCourseListView,
     CodingExerciseDetailAPIView,
-    CodingExerciseLanguageConfigDetailAPIView,
-    CodingExerciseLanguageConfigListCreateAPIView,
-    CodingTestCaseDetailAPIView,
-    CodingTestCaseListCreateAPIView,
+    CodingExerciseRunAPIView,
     CourseAdminPendingReviewListView,
     CourseAdminReviewView,
     CourseArchiveView,
@@ -231,8 +228,5 @@ urlpatterns = [
     # Coding exercises
     # -------------------------------------------------------------------------
     path('coding-exercises/<int:exercise_id>/', CodingExerciseDetailAPIView.as_view(), name='coding-exercise-detail'),
-    path('coding-exercises/<int:exercise_id>/language-configs/', CodingExerciseLanguageConfigListCreateAPIView.as_view(), name='coding-lang-config-list-create'),
-    path('coding-exercises/<int:exercise_id>/language-configs/<int:config_id>/', CodingExerciseLanguageConfigDetailAPIView.as_view(), name='coding-lang-config-detail'),
-    path('coding-exercises/<int:exercise_id>/testcases/', CodingTestCaseListCreateAPIView.as_view(), name='coding-testcase-list-create'),
-    path('coding-exercises/<int:exercise_id>/testcases/<int:tc_id>/', CodingTestCaseDetailAPIView.as_view(), name='coding-testcase-detail'),
+    path('coding-exercises/<int:exercise_id>/run/', CodingExerciseRunAPIView.as_view(), name='coding-exercise-instructor-run'),
 ]

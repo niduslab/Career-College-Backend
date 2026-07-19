@@ -1,7 +1,5 @@
 import logging
 
-from django.db import IntegrityError, transaction
-from django.db.models import F
 from django.shortcuts import get_object_or_404
 from rest_framework import status
 from rest_framework.parsers import FormParser, JSONParser, MultiPartParser
@@ -10,17 +8,12 @@ from rest_framework.response import Response
 from rest_framework.views import APIView
 
 from core.permissions import IsEmailVerified, IsInstructorUser
-from courses.models import (
-    CodingExercise,
-    CodingExerciseLanguageConfig,
-    CodingTestCase,
-)
+from courses.models import CodingExercise
 from courses.serializers import (
     CodingExerciseCreateUpdateSerializer,
-    CodingExerciseLanguageConfigSerializer,
     CodingExerciseSerializer,
-    CodingTestCaseSerializer,
 )
+from courses.services.code_runner import SMOKE_EVALUATION_SCRIPTS
 from courses.utils import guard_editable, save_authored
 
 logger = logging.getLogger(__name__)
@@ -33,9 +26,7 @@ class CodingExerciseDetailAPIView(APIView):
 
     def _get_owned_exercise(self, request, exercise_id):
         return get_object_or_404(
-            CodingExercise.objects
-            .select_related('section__course')
-            .prefetch_related('language_configs', 'test_cases'),
+            CodingExercise.objects.select_related('section__course'),
             pk=exercise_id,
             section__course__instructors=request.user,
         )
@@ -83,210 +74,75 @@ class CodingExerciseDetailAPIView(APIView):
             status=status.HTTP_200_OK,
         )
 
+class CodingExerciseRunAPIView(APIView):
+    """POST /api/courses/coding-exercises/{exercise_id}/run/
 
-class CodingExerciseLanguageConfigListCreateAPIView(APIView):
-    """GET / POST /api/courses/coding-exercises/{exercise_id}/language-configs/"""
+    Instructor-side transient run so an exercise can be tested while
+    authoring. Body (all optional):
+      - code: source to execute (defaults to the stored solution_code)
+      - evaluation_script: test script to run it against (defaults to the
+        stored evaluation_script) — lets the instructor test unsaved edits
+      - mode: 'tests' (default) runs the evaluation script; 'code' runs the
+        code standalone via a synthetic one-test smoke script (top-level
+        output captured; compile check for java/cpp)
+
+    Returns 202 + {task_id}; poll GET /learn/coding-exercises/tasks/{task_id}/
+    (that endpoint is IsEmailVerified-gated, not learner-only).
+    """
     permission_classes = [IsAuthenticated, IsEmailVerified, IsInstructorUser]
     parser_classes = [JSONParser, FormParser, MultiPartParser]
 
-    def _get_owned_exercise(self, request, exercise_id):
-        return get_object_or_404(
+    def post(self, request, exercise_id):
+        exercise = get_object_or_404(
             CodingExercise.objects.select_related('section__course'),
             pk=exercise_id,
             section__course__instructors=request.user,
         )
 
-    def get(self, request, exercise_id):
-        exercise = self._get_owned_exercise(request, exercise_id)
-        configs = exercise.language_configs.all()
-        serializer = CodingExerciseLanguageConfigSerializer(configs, many=True)
-        return Response({'success': True, 'data': serializer.data}, status=status.HTTP_200_OK)
-
-    def post(self, request, exercise_id):
-        exercise = self._get_owned_exercise(request, exercise_id)
-        if err := guard_editable(exercise.section.course): return err
-        serializer = CodingExerciseLanguageConfigSerializer(data=request.data)
-        if not serializer.is_valid():
+        mode = request.data.get('mode') or 'tests'
+        if mode not in ('tests', 'code'):
             return Response(
-                {'success': False, 'message': 'Validation failed.', 'errors': serializer.errors},
+                {'success': False, 'message': "mode must be 'tests' or 'code'."},
                 status=status.HTTP_400_BAD_REQUEST,
             )
+
+        code = request.data.get('code')
+        if code is None:
+            code = exercise.solution_code
+        if not isinstance(code, str) or not code.strip():
+            return Response(
+                {'success': False, 'message': 'No code to run — write a solution first.'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        if mode == 'code':
+            evaluation_script = SMOKE_EVALUATION_SCRIPTS[exercise.language]
+        else:
+            evaluation_script = request.data.get('evaluation_script')
+            if evaluation_script is None:
+                evaluation_script = exercise.evaluation_script
+            if not isinstance(evaluation_script, str) or not evaluation_script.strip():
+                return Response(
+                    {'success': False, 'message': 'No evaluation script to run — write one first.'},
+                    status=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                )
+
+        from courses.tasks import evaluate_coding_run_task  # local: avoid Celery at module load
         try:
-            config = CodingExerciseLanguageConfig.objects.create(
-                exercise=exercise, **serializer.validated_data
+            async_result = evaluate_coding_run_task.delay(
+                exercise.id,
+                exercise.language,
+                code,
+                exercise.time_limit_ms,
+                evaluation_script,
             )
-        except IntegrityError:
+        except Exception:
+            logger.exception('Instructor run dispatch failed for exercise %s', exercise_id)
             return Response(
-                {'success': False, 'message': 'A config for this language already exists on this exercise.'},
-                status=status.HTTP_400_BAD_REQUEST,
+                {'success': False, 'message': 'An unexpected error occurred. Please try again.'},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
             )
         return Response(
-            {
-                'success': True,
-                'message': 'Language config created successfully.',
-                'data': CodingExerciseLanguageConfigSerializer(config).data,
-            },
-            status=status.HTTP_201_CREATED,
-        )
-
-
-class CodingExerciseLanguageConfigDetailAPIView(APIView):
-    """GET / PATCH / DELETE /api/courses/coding-exercises/{exercise_id}/language-configs/{config_id}/"""
-    permission_classes = [IsAuthenticated, IsEmailVerified, IsInstructorUser]
-    parser_classes = [JSONParser, FormParser, MultiPartParser]
-
-    def _get_owned_config(self, request, exercise_id, config_id):
-        return get_object_or_404(
-            CodingExerciseLanguageConfig.objects.select_related('exercise__section__course'),
-            pk=config_id,
-            exercise_id=exercise_id,
-            exercise__section__course__instructors=request.user,
-        )
-
-    def get(self, request, exercise_id, config_id):
-        config = self._get_owned_config(request, exercise_id, config_id)
-        return Response(
-            {'success': True, 'data': CodingExerciseLanguageConfigSerializer(config).data},
-            status=status.HTTP_200_OK,
-        )
-
-    def patch(self, request, exercise_id, config_id):
-        config = self._get_owned_config(request, exercise_id, config_id)
-        if err := guard_editable(config.exercise.section.course, section=config.exercise.section): return err
-        serializer = CodingExerciseLanguageConfigSerializer(config, data=request.data, partial=True)
-        if not serializer.is_valid():
-            return Response(
-                {'success': False, 'message': 'Validation failed.', 'errors': serializer.errors},
-                status=status.HTTP_400_BAD_REQUEST,
-            )
-        try:
-            config = serializer.save()
-        except IntegrityError:
-            return Response(
-                {'success': False, 'message': 'A config for this language already exists on this exercise.'},
-                status=status.HTTP_400_BAD_REQUEST,
-            )
-        return Response(
-            {
-                'success': True,
-                'message': 'Language config updated successfully.',
-                'data': CodingExerciseLanguageConfigSerializer(config).data,
-            },
-            status=status.HTTP_200_OK,
-        )
-
-    def delete(self, request, exercise_id, config_id):
-        config = self._get_owned_config(request, exercise_id, config_id)
-        if err := guard_editable(config.exercise.section.course, section=config.exercise.section): return err
-        config.delete()
-        return Response(
-            {'success': True, 'message': 'Language config deleted successfully.'},
-            status=status.HTTP_200_OK,
-        )
-
-
-class CodingTestCaseListCreateAPIView(APIView):
-    """GET / POST /api/courses/coding-exercises/{exercise_id}/testcases/"""
-    permission_classes = [IsAuthenticated, IsEmailVerified, IsInstructorUser]
-    parser_classes = [JSONParser, FormParser, MultiPartParser]
-
-    def _get_owned_exercise(self, request, exercise_id):
-        return get_object_or_404(
-            CodingExercise.objects.select_related('section__course'),
-            pk=exercise_id,
-            section__course__instructors=request.user,
-        )
-
-    def get(self, request, exercise_id):
-        exercise = self._get_owned_exercise(request, exercise_id)
-        test_cases = exercise.test_cases.order_by('position', 'id')
-        serializer = CodingTestCaseSerializer(test_cases, many=True)
-        return Response({'success': True, 'data': serializer.data}, status=status.HTTP_200_OK)
-
-    def post(self, request, exercise_id):
-        exercise = self._get_owned_exercise(request, exercise_id)
-        if err := guard_editable(exercise.section.course): return err
-        serializer = CodingTestCaseSerializer(data=request.data)
-        if not serializer.is_valid():
-            return Response(
-                {'success': False, 'message': 'Validation failed.', 'errors': serializer.errors},
-                status=status.HTTP_400_BAD_REQUEST,
-            )
-        try:
-            test_case = CodingTestCase.objects.create(exercise=exercise, **serializer.validated_data)
-        except IntegrityError:
-            return Response(
-                {'success': False, 'message': 'A test case already exists at that position for this exercise.'},
-                status=status.HTTP_400_BAD_REQUEST,
-            )
-        return Response(
-            {
-                'success': True,
-                'message': 'Test case created successfully.',
-                'data': CodingTestCaseSerializer(test_case).data,
-            },
-            status=status.HTTP_201_CREATED,
-        )
-
-
-class CodingTestCaseDetailAPIView(APIView):
-    """GET / PATCH / DELETE /api/courses/coding-exercises/{exercise_id}/testcases/{tc_id}/"""
-    permission_classes = [IsAuthenticated, IsEmailVerified, IsInstructorUser]
-    parser_classes = [JSONParser, FormParser, MultiPartParser]
-
-    def _get_owned_test_case(self, request, exercise_id, tc_id):
-        return get_object_or_404(
-            CodingTestCase.objects.select_related('exercise__section__course'),
-            pk=tc_id,
-            exercise_id=exercise_id,
-            exercise__section__course__instructors=request.user,
-        )
-
-    def get(self, request, exercise_id, tc_id):
-        test_case = self._get_owned_test_case(request, exercise_id, tc_id)
-        return Response(
-            {'success': True, 'data': CodingTestCaseSerializer(test_case).data},
-            status=status.HTTP_200_OK,
-        )
-
-    def patch(self, request, exercise_id, tc_id):
-        test_case = self._get_owned_test_case(request, exercise_id, tc_id)
-        if err := guard_editable(test_case.exercise.section.course, section=test_case.exercise.section): return err
-        serializer = CodingTestCaseSerializer(test_case, data=request.data, partial=True)
-        if not serializer.is_valid():
-            return Response(
-                {'success': False, 'message': 'Validation failed.', 'errors': serializer.errors},
-                status=status.HTTP_400_BAD_REQUEST,
-            )
-        try:
-            test_case = serializer.save()
-        except IntegrityError:
-            return Response(
-                {'success': False, 'message': 'A test case already exists at that position for this exercise.'},
-                status=status.HTTP_400_BAD_REQUEST,
-            )
-        return Response(
-            {
-                'success': True,
-                'message': 'Test case updated successfully.',
-                'data': CodingTestCaseSerializer(test_case).data,
-            },
-            status=status.HTTP_200_OK,
-        )
-
-    def delete(self, request, exercise_id, tc_id):
-        test_case = self._get_owned_test_case(request, exercise_id, tc_id)
-        if err := guard_editable(test_case.exercise.section.course, section=test_case.exercise.section): return err
-        with transaction.atomic():
-            deleted_position = test_case.position
-            owned_exercise_id = test_case.exercise_id
-            test_case.delete()
-            # Keep positions contiguous after deletion: 1,2,3... with no gaps.
-            CodingTestCase.objects.filter(
-                exercise_id=owned_exercise_id,
-                position__gt=deleted_position,
-            ).update(position=F('position') - 1)
-        return Response(
-            {'success': True, 'message': 'Test case deleted successfully.'},
-            status=status.HTTP_200_OK,
+            {'success': True, 'message': 'Run dispatched.', 'data': {'task_id': async_result.id}},
+            status=status.HTTP_202_ACCEPTED,
         )

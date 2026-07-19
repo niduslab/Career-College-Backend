@@ -1,26 +1,27 @@
 """
-Tests for the Phase-2 learner coding-exercise consumption flow.
+Tests for the learner coding-exercise consumption flow (script evaluation).
 
 Covers:
-  - CodeRunner pure-Python helpers: _normalize() (whitespace-collapses only
-    JSON-ish output) and _parse_batch_output() (sentinel decoder).
+  - CodeRunner pure-Python helper: _parse_script_output() (sentinel decoder).
   - GET  /learn/coding-exercises/<id>/                                 (detail)
   - POST /learn/coding-exercises/<id>/run/                             (transient)
-  - GET  /learn/coding-exercises/tasks/<task_id>/                      (Run poll)
   - POST /learn/coding-exercises/<id>/submit/                          (persisted)
   - GET  /learn/coding-exercises/submissions/<id>/                     (Submit poll)
   - POST /learn/coding-exercises/submissions/<id>/retry/               (error recovery)
   - reap_stuck_coding_submissions_task                                 (zombie reaper)
   - recalculate_progress integration when a CodingSubmission passes.
+  - Leak guard: evaluation_script / solution_code never reach learners.
 
 CLAUDE.md is explicit that tests must never hit real Docker. Every test
 patches `courses.services.code_runner.CodeRunner.run_submission` to return
-deterministic SingleTestResult lists.
+deterministic ScriptTestResult lists.
 
 Celery is forced into eager mode by mutating the app config directly so
 .delay() executes synchronously inside the request/response cycle (same
 pattern as test_learner_assignment_consumption.py).
 """
+
+import json
 
 from unittest.mock import patch
 
@@ -35,98 +36,109 @@ from authentication.models import InstructorProfile, User
 from career_college_backend.celery import app as celery_app
 from courses.models import (
     CodingExercise,
-    CodingExerciseLanguageConfig,
     CodingSubmission,
     CodingSubmissionTestResult,
-    CodingTestCase,
     CourseSection,
     Enrollment,
     NidusCourse,
     SectionContent,
 )
 from courses.services.code_runner import (
-    SingleTestResult,
-    _normalize,
-    _parse_batch_output,
+    ScriptTestResult,
+    _parse_script_output,
+)
+
+_EVAL_SCRIPT = (
+    'import unittest\n'
+    'from exercise import add\n'
+    'class AddTests(unittest.TestCase):\n'
+    '    def test_small(self):\n'
+    '        self.assertEqual(add(1, 2), 3)\n'
+    '    def test_medium(self):\n'
+    '        self.assertEqual(add(4, 5), 9)\n'
+    '    def test_large(self):\n'
+    '        self.assertEqual(add(100, 200), 300)\n'
 )
 
 
 # =============================================================================
-# CodeRunner pure-Python helpers (no Docker, no DB)
+# CodeRunner pure-Python helper (no Docker, no DB)
 # =============================================================================
 
-class CodeRunnerNormalizeTests(SimpleTestCase):
-    """_normalize collapses whitespace ONLY for JSON-array / JSON-object
-    output. Strings and numbers keep their internal whitespace.
-    """
-
-    def test_strings_keep_internal_whitespace(self):
-        # 'hello world' != 'helloworld' is the canonical example from the
-        # standalone-platform doc — strings are compared with spaces intact.
-        self.assertNotEqual(_normalize('hello world'), _normalize('helloworld'))
-        self.assertEqual(_normalize('  hello  '), 'hello')
-
-    def test_array_collapses_internal_whitespace(self):
-        self.assertEqual(_normalize('[1, 2, 3]'), _normalize('[1,2,3]'))
-        self.assertEqual(_normalize('[\n  1,\n  2\n]'), '[1,2]')
-
-    def test_object_collapses_internal_whitespace(self):
-        self.assertEqual(
-            _normalize('{"a": 1, "b": 2}'),
-            _normalize('{"a":1,"b":2}'),
-        )
-
-    def test_numeric_strings_kept_literal(self):
-        # 1 != 1.0 — number strings are compared character-by-character.
-        self.assertNotEqual(_normalize('1'), _normalize('1.0'))
-
-
-class CodeRunnerSentinelParserTests(SimpleTestCase):
+class CodeRunnerScriptParserTests(SimpleTestCase):
     """The sentinel parser is the single point where harness output becomes
     structured per-test results, so it earns a unit test independent of
     Docker."""
 
-    def _make_block(self, idx, status_, runtime, exit_code, stdout_b, stderr_b):
+    def _make_block(self, idx, status_, runtime, name_b, stdout_b, stderr_b):
         return (
-            b'<<<TEST_RESULT idx=%d status=%s runtime_ms=%d exit=%d '
-            b'stdout_len=%d stderr_len=%d>>>\n'
-            % (idx, status_.encode(), runtime, exit_code, len(stdout_b), len(stderr_b))
+            b'<<<SCRIPT_RESULT idx=%d status=%s runtime_ms=%d '
+            b'name_len=%d stdout_len=%d stderr_len=%d>>>\n'
+            % (idx, status_.encode(), runtime, len(name_b), len(stdout_b), len(stderr_b))
+            + name_b + b'\n'
             + stdout_b + b'\n'
             + stderr_b + b'\n'
-            + b'<<<END idx=%d>>>\n' % idx
+            + b'<<<SCRIPT_END idx=%d>>>\n' % idx
         )
 
     def test_parses_two_result_blocks_in_order(self):
         stream = (
-            self._make_block(0, 'passed', 12, 0, b'hello', b'')
-            + self._make_block(1, 'error', 4, 1, b'partial', b'boom')
+            self._make_block(0, 'passed', 12, b'evaluate.AddTests.test_small', b'hello', b'')
+            + self._make_block(1, 'error', 4, b'evaluate.AddTests.test_medium', b'partial', b'boom')
         )
-        results = _parse_batch_output(stream, 2)
+        results = _parse_script_output(stream)
         self.assertEqual(len(results), 2)
-        self.assertEqual(results[0].actual_output, 'hello')
-        self.assertEqual(results[0].harness_status, 'passed')
+        self.assertEqual(results[0].test_name, 'evaluate.AddTests.test_small')
+        self.assertEqual(results[0].status, 'passed')
+        self.assertEqual(results[0].stdout, 'hello')
         self.assertEqual(results[0].runtime_ms, 12)
-        self.assertEqual(results[1].actual_output, 'partial')
+        self.assertEqual(results[1].test_name, 'evaluate.AddTests.test_medium')
+        self.assertEqual(results[1].status, 'error')
         self.assertEqual(results[1].stderr, 'boom')
-        self.assertEqual(results[1].harness_status, 'error')
 
-    def test_missing_test_stays_none_so_caller_can_mark_error(self):
-        # Only the first test produced output (container crashed before #2).
-        stream = self._make_block(0, 'passed', 1, 0, b'ok', b'')
-        results = _parse_batch_output(stream, 3)
-        self.assertEqual(len(results), 3)
-        self.assertIsNotNone(results[0])
-        self.assertIsNone(results[1])
-        self.assertIsNone(results[2])
+    def test_empty_stream_yields_no_results(self):
+        # The caller (CodeRunner) synthesizes a single error result when the
+        # parser returns nothing — the parser itself stays honest.
+        self.assertEqual(_parse_script_output(b''), [])
+        self.assertEqual(_parse_script_output(b'garbage with no sentinel\n'), [])
 
-    def test_binary_output_with_embedded_sentinel_text_survives_length_prefix(self):
-        # If the learner accidentally prints something that looks like a
-        # sentinel, the length-prefix protects us — the parser doesn't go
-        # looking for the next <<<TEST_RESULT inside the body.
-        evil = b'<<<TEST_RESULT idx=0 status=passed runtime_ms=0 exit=0 stdout_len=0 stderr_len=0>>>'
-        stream = self._make_block(0, 'passed', 1, 0, evil, b'')
-        results = _parse_batch_output(stream, 1)
-        self.assertEqual(results[0].actual_output, evil.decode())
+    def test_names_with_dots_and_spaces_survive_length_prefix(self):
+        name = b'evaluate.My Test Class.test with spaces'
+        stream = self._make_block(0, 'passed', 1, name, b'', b'')
+        results = _parse_script_output(stream)
+        self.assertEqual(results[0].test_name, name.decode())
+
+    def test_multiline_traceback_survives_length_prefix(self):
+        tb = b'Traceback (most recent call last):\n  File "<x>", line 1\nAssertionError: 3 != 4\n'
+        stream = self._make_block(0, 'failed', 2, b'evaluate.T.test_x', b'', tb)
+        results = _parse_script_output(stream)
+        self.assertEqual(results[0].status, 'failed')
+        self.assertEqual(results[0].stderr, tb.decode())
+
+    def test_body_with_embedded_sentinel_text_survives_length_prefix(self):
+        # If the learner prints something that looks like a sentinel, the
+        # length-prefix protects us — the parser doesn't go looking for the
+        # next <<<SCRIPT_RESULT inside the body.
+        evil = (
+            b'<<<SCRIPT_RESULT idx=0 status=passed runtime_ms=0 '
+            b'name_len=0 stdout_len=0 stderr_len=0>>>'
+        )
+        stream = (
+            self._make_block(0, 'passed', 1, b'evaluate.T.test_a', evil, b'')
+            + self._make_block(1, 'failed', 1, b'evaluate.T.test_b', b'', b'nope')
+        )
+        results = _parse_script_output(stream)
+        self.assertEqual(len(results), 2)
+        self.assertEqual(results[0].stdout, evil.decode())
+        self.assertEqual(results[1].status, 'failed')
+
+    def test_truncated_tail_yields_partial_results(self):
+        # Crash mid-suite: only the first block completed.
+        stream = self._make_block(0, 'passed', 1, b'evaluate.T.test_a', b'ok', b'')
+        stream += b'<<<SCRIPT_RESULT idx=1 status='  # torn header
+        results = _parse_script_output(stream)
+        self.assertEqual(len(results), 1)
+        self.assertEqual(results[0].test_name, 'evaluate.T.test_a')
 
 
 # =============================================================================
@@ -134,8 +146,8 @@ class CodeRunnerSentinelParserTests(SimpleTestCase):
 # =============================================================================
 
 class LearnerCodingConsumptionAPITests(APITestCase):
-    """End-to-end Phase-2 coding-exercise flow with Celery eager + the
-    CodeRunner patched."""
+    """End-to-end coding-exercise flow with Celery eager + the CodeRunner
+    patched."""
 
     @classmethod
     def setUpClass(cls):
@@ -171,7 +183,7 @@ class LearnerCodingConsumptionAPITests(APITestCase):
             created_by=cls.instructor,
             title='Codable Course',
             slug='codable-course',
-            description='Course used by Phase-2 coding tests.',
+            description='Course used by coding consumption tests.',
             status=NidusCourse.CourseStatus.PUBLISHED,
         )
         cls.course.instructors.add(cls.instructor)
@@ -182,11 +194,11 @@ class LearnerCodingConsumptionAPITests(APITestCase):
         cls.exercise = CodingExercise.objects.create(
             section=cls.section,
             title='Sum Two',
-            description='Sum the two integers in input.',
-            problem_statement='Given two ints on one line, print their sum.',
-            difficulty=CodingExercise.Difficulty.EASY,
-            default_language='python',
-            supported_languages=['python', 'javascript'],
+            description='Write add(a, b) returning the sum of two ints.',
+            language=CodingExercise.Language.PYTHON,
+            starter_code='def add(a, b):\n    pass\n',
+            solution_code='def add(a, b):\n    return a + b\n',
+            evaluation_script=_EVAL_SCRIPT,
             time_limit_ms=2000,
         )
         SectionContent.objects.create(
@@ -197,29 +209,6 @@ class LearnerCodingConsumptionAPITests(APITestCase):
             position=1,
         )
 
-        CodingExerciseLanguageConfig.objects.create(
-            exercise=cls.exercise, language='python',
-            starter_code='def solve(s):\n    pass\n',
-            solution_code='def solve(s):\n    a,b=map(int,s.split())\n    return a+b\n',
-        )
-
-        # Two visible cases + one hidden case.
-        cls.tc_v1 = CodingTestCase.objects.create(
-            exercise=cls.exercise, position=1,
-            input_data='1 2', expected_output='3',
-            is_hidden=False, explanation='easy',
-        )
-        cls.tc_v2 = CodingTestCase.objects.create(
-            exercise=cls.exercise, position=2,
-            input_data='4 5', expected_output='9',
-            is_hidden=False,
-        )
-        cls.tc_hidden = CodingTestCase.objects.create(
-            exercise=cls.exercise, position=3,
-            input_data='100 200', expected_output='300',
-            is_hidden=True,
-        )
-
         cls.enrollment = Enrollment.objects.create(
             user=cls.learner, course=cls.course, is_active=True,
         )
@@ -227,11 +216,19 @@ class LearnerCodingConsumptionAPITests(APITestCase):
     def auth(self, user=None):
         self.client.force_authenticate(user=user or self.learner)
 
+    @staticmethod
+    def _passing_results():
+        return [
+            ScriptTestResult('evaluate.AddTests.test_small', 'passed', '', '', 1),
+            ScriptTestResult('evaluate.AddTests.test_medium', 'passed', '', '', 1),
+            ScriptTestResult('evaluate.AddTests.test_large', 'passed', '', '', 1),
+        ]
+
     # -------------------------------------------------------------------------
     # GET /learn/coding-exercises/<id>/
     # -------------------------------------------------------------------------
 
-    def test_detail_omits_solution_code_and_hidden_test_cases(self):
+    def test_detail_never_leaks_solution_or_evaluation_script(self):
         self.auth()
         url = reverse(
             'courses:learner-coding-exercise-detail',
@@ -242,17 +239,25 @@ class LearnerCodingConsumptionAPITests(APITestCase):
         self.assertEqual(response.status_code, status.HTTP_200_OK)
         data = response.data['data']
         self.assertEqual(data['title'], 'Sum Two')
+        self.assertEqual(data['language'], 'python')
+        self.assertIn('starter_code', data)
 
-        # Language configs never expose solution_code.
-        for cfg in data['language_configs']:
-            self.assertNotIn('solution_code', cfg)
-            self.assertIn('starter_code', cfg)
+        # Belt-and-braces: the raw payload must not contain the key names or
+        # the script body anywhere.
+        raw = json.dumps(response.data)
+        self.assertNotIn('evaluation_script', raw)
+        self.assertNotIn('solution_code', raw)
+        self.assertNotIn('assertEqual(add(1, 2), 3)', raw)
 
-        # Only the two visible test cases are present.
-        positions = [tc['position'] for tc in data['test_cases']]
-        self.assertEqual(sorted(positions), [1, 2])
-        for tc in data['test_cases']:
-            self.assertNotIn('is_hidden', tc)  # field isn't even declared
+    def test_detail_has_no_test_cases_key(self):
+        self.auth()
+        url = reverse(
+            'courses:learner-coding-exercise-detail',
+            kwargs={'exercise_id': self.exercise.id},
+        )
+        response = self.client.get(url)
+        self.assertNotIn('test_cases', response.data['data'])
+        self.assertNotIn('language_configs', response.data['data'])
 
     def test_detail_returns_404_for_unenrolled_learner(self):
         self.auth(self.outsider)
@@ -272,34 +277,29 @@ class LearnerCodingConsumptionAPITests(APITestCase):
         response = self.client.get(url)
         self.assertEqual(response.status_code, status.HTTP_200_OK)
         # Instructor preview uses the same learner serializer, so the
-        # absence guarantee for solution_code still holds.
-        for cfg in response.data['data']['language_configs']:
-            self.assertNotIn('solution_code', cfg)
+        # absence guarantee still holds.
+        self.assertNotIn('solution_code', response.data['data'])
+        self.assertNotIn('evaluation_script', response.data['data'])
 
     # -------------------------------------------------------------------------
     # POST /learn/coding-exercises/<id>/run/
     # -------------------------------------------------------------------------
 
-    def test_run_dispatches_visible_tests_only_and_returns_task_id(self):
+    def test_run_passes_evaluation_script_to_runner_and_returns_task_id(self):
         self.auth()
         url = reverse(
             'courses:learner-coding-run',
             kwargs={'exercise_id': self.exercise.id},
         )
 
-        captured_test_cases = []
+        captured = {}
 
-        def _fake_run_submission(self_runner, code, test_cases, time_limit_ms, language):
-            captured_test_cases.append(list(test_cases))
+        def _fake_run_submission(self_runner, code, evaluation_script, time_limit_ms, language):
+            captured['script'] = evaluation_script
+            captured['language'] = language
             return [
-                SingleTestResult(
-                    status='passed', actual_output='3', stdout='3', stderr='',
-                    runtime_ms=2, exit_code=0,
-                ),
-                SingleTestResult(
-                    status='passed', actual_output='9', stdout='9', stderr='',
-                    runtime_ms=2, exit_code=0,
-                ),
+                ScriptTestResult('evaluate.AddTests.test_small', 'passed', '', '', 2),
+                ScriptTestResult('evaluate.AddTests.test_medium', 'failed', '', 'AssertionError: 8 != 9', 2),
             ]
 
         with patch(
@@ -308,15 +308,44 @@ class LearnerCodingConsumptionAPITests(APITestCase):
         ):
             response = self.client.post(
                 url,
-                {'language': 'python', 'code': 'def solve(s): return sum(map(int,s.split()))'},
+                {'language': 'python', 'code': 'def add(a, b): return a + b'},
                 format='json',
             )
 
         self.assertEqual(response.status_code, status.HTTP_202_ACCEPTED)
         self.assertIn('task_id', response.data['data'])
-        # The runner was called with only the visible test cases (hidden filtered upstream).
-        positions = sorted(tc.position for tc in captured_test_cases[0])
-        self.assertEqual(positions, [1, 2])
+        self.assertEqual(captured['script'], _EVAL_SCRIPT)
+        self.assertEqual(captured['language'], 'python')
+
+    def _make_scriptless_exercise(self):
+        exercise = CodingExercise.objects.create(
+            section=self.section,
+            title='No Script Yet',
+            description='Exercise whose evaluation script has not been written.',
+            language=CodingExercise.Language.PYTHON,
+            starter_code='def f():\n    pass\n',
+            evaluation_script='',
+        )
+        SectionContent.objects.create(
+            section=self.section,
+            item_type=SectionContent.ItemType.CODING,
+            content_type=ContentType.objects.get_for_model(CodingExercise),
+            object_id=exercise.pk,
+            position=SectionContent.objects.filter(section=self.section).count() + 1,
+        )
+        return exercise
+
+    def test_run_returns_422_when_exercise_has_no_evaluation_script(self):
+        exercise = self._make_scriptless_exercise()
+        self.auth()
+        url = reverse(
+            'courses:learner-coding-run',
+            kwargs={'exercise_id': exercise.id},
+        )
+        response = self.client.post(
+            url, {'language': 'python', 'code': 'def f(): pass'}, format='json',
+        )
+        self.assertEqual(response.status_code, status.HTTP_422_UNPROCESSABLE_ENTITY)
 
     def test_run_rejects_instructor_preview_with_403(self):
         self.auth(self.instructor)
@@ -325,44 +354,36 @@ class LearnerCodingConsumptionAPITests(APITestCase):
             kwargs={'exercise_id': self.exercise.id},
         )
         response = self.client.post(
-            url, {'language': 'python', 'code': 'def solve(s): pass'}, format='json',
+            url, {'language': 'python', 'code': 'def add(a, b): pass'}, format='json',
         )
         # IsLearnerUser blocks the instructor — preview must not pollute history.
         self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
 
-    def test_run_rejects_unsupported_language(self):
+    def test_run_rejects_mismatched_language(self):
         self.auth()
         url = reverse(
             'courses:learner-coding-run',
             kwargs={'exercise_id': self.exercise.id},
         )
         response = self.client.post(
-            url, {'language': 'cpp', 'code': 'void solve(...){}'}, format='json',
+            url, {'language': 'cpp', 'code': 'int add(int a, int b){return a+b;}'}, format='json',
         )
-        # cpp is not in supported_languages for this exercise.
+        # Exercises are single-language; this one is python.
         self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
 
     # -------------------------------------------------------------------------
     # POST /learn/coding-exercises/<id>/submit/
     # -------------------------------------------------------------------------
 
-    def test_submit_persists_all_tests_with_hidden_redacted(self):
+    def test_submit_persists_named_results_and_backfills_total(self):
         self.auth()
         url = reverse(
             'courses:learner-coding-submit',
             kwargs={'exercise_id': self.exercise.id},
         )
 
-        def _fake_run_submission(self_runner, code, test_cases, time_limit_ms, language):
-            # Runner sees ALL three test cases (visible + hidden) — Submit
-            # mode does not filter.
-            self_test = self
-            self_test.assertEqual(len(test_cases), 3)
-            return [
-                SingleTestResult('passed', '3', '3', '', 5, 0),
-                SingleTestResult('passed', '9', '9', '', 5, 0),
-                SingleTestResult('passed', '300', '300', '', 5, 0),
-            ]
+        def _fake_run_submission(self_runner, code, evaluation_script, time_limit_ms, language):
+            return self._passing_results()
 
         with patch(
             'courses.services.code_runner.CodeRunner.run_submission',
@@ -370,25 +391,26 @@ class LearnerCodingConsumptionAPITests(APITestCase):
         ), self.captureOnCommitCallbacks(execute=True):
             response = self.client.post(
                 url,
-                {'language': 'python', 'code': 'def solve(s): return sum(map(int,s.split()))'},
+                {'language': 'python', 'code': 'def add(a, b): return a + b'},
                 format='json',
             )
 
         self.assertEqual(response.status_code, status.HTTP_202_ACCEPTED)
+        # The immediate 202 body reflects the queued row: count unknown yet.
+        self.assertEqual(response.data['data']['total_tests'], 0)
+
         submission = CodingSubmission.objects.get(pk=response.data['data']['id'])
-        # Celery ran inline -> submission reached PASSED.
+        # Celery ran inline -> submission reached PASSED with total back-filled.
         self.assertEqual(submission.status, CodingSubmission.Status.PASSED)
         self.assertEqual(submission.passed_tests, 3)
         self.assertEqual(submission.total_tests, 3)
         self.assertEqual(submission.score, 100)
-        self.assertEqual(submission.test_results.count(), 3)
-        # The hidden row's flag was copied at write time.
-        hidden_row = submission.test_results.get(position=3)
-        self.assertTrue(hidden_row.is_hidden)
+        rows = list(submission.test_results.order_by('position'))
+        self.assertEqual(len(rows), 3)
+        self.assertEqual(rows[0].test_name, 'evaluate.AddTests.test_small')
+        self.assertEqual([r.position for r in rows], [1, 2, 3])
 
-        # GET the submission and assert hidden rows are stripped entirely
-        # from test_results. Aggregate counts still reflect all 3 tests so
-        # the learner can infer hidden-test outcome from the mismatch.
+        # GET the submission: every row is returned with its test name.
         detail_url = reverse(
             'courses:learner-coding-submission-detail',
             kwargs={'submission_id': submission.id},
@@ -396,11 +418,12 @@ class LearnerCodingConsumptionAPITests(APITestCase):
         detail = self.client.get(detail_url).data['data']
         self.assertEqual(detail['total_tests'], 3)
         self.assertEqual(detail['passed_tests'], 3)
-        # Only visible rows surface in test_results.
-        positions = sorted(r['position'] for r in detail['test_results'])
-        self.assertEqual(positions, [1, 2])
-        for row in detail['test_results']:
-            self.assertFalse(row['is_hidden'])
+        names = [r['test_name'] for r in detail['test_results']]
+        self.assertEqual(names, [
+            'evaluate.AddTests.test_small',
+            'evaluate.AddTests.test_medium',
+            'evaluate.AddTests.test_large',
+        ])
 
     def test_submit_status_precedence_error_over_failed(self):
         """One ERROR + one FAILED + one PASSED -> submission status = ERROR."""
@@ -410,11 +433,11 @@ class LearnerCodingConsumptionAPITests(APITestCase):
             kwargs={'exercise_id': self.exercise.id},
         )
 
-        def _fake_run_submission(self_runner, code, test_cases, time_limit_ms, language):
+        def _fake_run_submission(self_runner, code, evaluation_script, time_limit_ms, language):
             return [
-                SingleTestResult('passed', '3', '3', '', 1, 0),
-                SingleTestResult('failed', '8', '8', '', 1, 0),
-                SingleTestResult('error', '', '', 'crash', 1, 1),
+                ScriptTestResult('evaluate.T.test_a', 'passed', '', '', 1),
+                ScriptTestResult('evaluate.T.test_b', 'failed', '', 'AssertionError', 1),
+                ScriptTestResult('evaluate.T.test_c', 'error', '', 'crash', 1),
             ]
 
         with patch(
@@ -422,18 +445,63 @@ class LearnerCodingConsumptionAPITests(APITestCase):
             new=_fake_run_submission,
         ), self.captureOnCommitCallbacks(execute=True):
             response = self.client.post(
-                url, {'language': 'python', 'code': 'def solve(s): pass'}, format='json',
+                url, {'language': 'python', 'code': 'def add(a, b): pass'}, format='json',
             )
         submission = CodingSubmission.objects.get(pk=response.data['data']['id'])
         self.assertEqual(submission.status, CodingSubmission.Status.ERROR)
         self.assertIn('crash', submission.error_message)
+
+    def test_submit_load_crash_yields_single_error_row(self):
+        """A learner syntax error crashes the suite at import: the runner
+        returns one synthetic 'load' error result."""
+        self.auth()
+        url = reverse(
+            'courses:learner-coding-submit',
+            kwargs={'exercise_id': self.exercise.id},
+        )
+
+        def _fake_run_submission(self_runner, code, evaluation_script, time_limit_ms, language):
+            return [ScriptTestResult(
+                'evaluate (load)', 'error', '',
+                'Traceback (most recent call last):\nSyntaxError: invalid syntax', 0,
+            )]
+
+        with patch(
+            'courses.services.code_runner.CodeRunner.run_submission',
+            new=_fake_run_submission,
+        ), self.captureOnCommitCallbacks(execute=True):
+            response = self.client.post(
+                url, {'language': 'python', 'code': 'def add(a b): return'}, format='json',
+            )
+        submission = CodingSubmission.objects.get(pk=response.data['data']['id'])
+        self.assertEqual(submission.status, CodingSubmission.Status.ERROR)
+        self.assertEqual(submission.total_tests, 1)
+        self.assertIn('SyntaxError', submission.error_message)
+        row = submission.test_results.get()
+        self.assertEqual(row.test_name, 'evaluate (load)')
+
+    def test_submit_returns_422_when_exercise_has_no_evaluation_script(self):
+        exercise = self._make_scriptless_exercise()
+        self.auth()
+        url = reverse(
+            'courses:learner-coding-submit',
+            kwargs={'exercise_id': exercise.id},
+        )
+        response = self.client.post(
+            url, {'language': 'python', 'code': 'def f(): pass'}, format='json',
+        )
+        self.assertEqual(response.status_code, status.HTTP_422_UNPROCESSABLE_ENTITY)
+        # Nothing persisted.
+        self.assertFalse(
+            CodingSubmission.objects.filter(user=self.learner, exercise=exercise).exists()
+        )
 
     def test_submit_blocks_inflight_with_422(self):
         # Park a queued submission for the same (user, exercise).
         CodingSubmission.objects.create(
             user=self.learner, exercise=self.exercise,
             language='python', code='x',
-            status=CodingSubmission.Status.QUEUED, total_tests=3,
+            status=CodingSubmission.Status.QUEUED,
         )
         self.auth()
         url = reverse(
@@ -441,7 +509,7 @@ class LearnerCodingConsumptionAPITests(APITestCase):
             kwargs={'exercise_id': self.exercise.id},
         )
         response = self.client.post(
-            url, {'language': 'python', 'code': 'def solve(s): pass'}, format='json',
+            url, {'language': 'python', 'code': 'def add(a, b): pass'}, format='json',
         )
         self.assertEqual(response.status_code, status.HTTP_422_UNPROCESSABLE_ENTITY)
 
@@ -452,7 +520,7 @@ class LearnerCodingConsumptionAPITests(APITestCase):
             kwargs={'exercise_id': self.exercise.id},
         )
         response = self.client.post(
-            url, {'language': 'python', 'code': 'def solve(s): pass'}, format='json',
+            url, {'language': 'python', 'code': 'def add(a, b): pass'}, format='json',
         )
         self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
 
@@ -463,7 +531,7 @@ class LearnerCodingConsumptionAPITests(APITestCase):
             kwargs={'exercise_id': self.exercise.id},
         )
         response = self.client.post(
-            url, {'language': 'python', 'code': 'def solve(s): pass'}, format='json',
+            url, {'language': 'python', 'code': 'def add(a, b): pass'}, format='json',
         )
         self.assertEqual(response.status_code, status.HTTP_404_NOT_FOUND)
 
@@ -484,6 +552,25 @@ class LearnerCodingConsumptionAPITests(APITestCase):
         )
         response = self.client.get(url)
         self.assertEqual(response.status_code, status.HTTP_404_NOT_FOUND)
+
+    def test_submission_detail_never_leaks_evaluation_script(self):
+        sub = CodingSubmission.objects.create(
+            user=self.learner, exercise=self.exercise,
+            language='python', code='x',
+            status=CodingSubmission.Status.PASSED, total_tests=1, passed_tests=1,
+        )
+        CodingSubmissionTestResult.objects.create(
+            submission=sub, test_name='evaluate.AddTests.test_small',
+            status='passed', position=1,
+        )
+        self.auth()
+        url = reverse(
+            'courses:learner-coding-submission-detail',
+            kwargs={'submission_id': sub.id},
+        )
+        raw = json.dumps(self.client.get(url).data)
+        self.assertNotIn('evaluation_script', raw)
+        self.assertNotIn('solution_code', raw)
 
     # -------------------------------------------------------------------------
     # POST retry/
@@ -507,17 +594,13 @@ class LearnerCodingConsumptionAPITests(APITestCase):
     def test_retry_re_enqueues_errored_submission(self):
         sub = CodingSubmission.objects.create(
             user=self.learner, exercise=self.exercise,
-            language='python', code='def solve(s): return sum(map(int,s.split()))',
-            status=CodingSubmission.Status.ERROR, total_tests=3,
+            language='python', code='def add(a, b): return a + b',
+            status=CodingSubmission.Status.ERROR,
             error_message='transient docker hiccup',
         )
 
-        def _fake_run_submission(self_runner, code, test_cases, time_limit_ms, language):
-            return [
-                SingleTestResult('passed', '3', '3', '', 1, 0),
-                SingleTestResult('passed', '9', '9', '', 1, 0),
-                SingleTestResult('passed', '300', '300', '', 1, 0),
-            ]
+        def _fake_run_submission(self_runner, code, evaluation_script, time_limit_ms, language):
+            return self._passing_results()
 
         self.auth()
         url = reverse(
@@ -532,13 +615,14 @@ class LearnerCodingConsumptionAPITests(APITestCase):
         self.assertEqual(response.status_code, status.HTTP_202_ACCEPTED)
         sub.refresh_from_db()
         self.assertEqual(sub.status, CodingSubmission.Status.PASSED)
+        self.assertEqual(sub.total_tests, 3)
         self.assertEqual(sub.error_message, '')
 
     def test_retry_on_other_learners_submission_returns_404(self):
         sub = CodingSubmission.objects.create(
             user=self.learner, exercise=self.exercise,
             language='python', code='x',
-            status=CodingSubmission.Status.ERROR, total_tests=3,
+            status=CodingSubmission.Status.ERROR,
         )
         self.client.force_authenticate(user=self.outsider)
         url = reverse(
@@ -559,7 +643,7 @@ class LearnerCodingConsumptionAPITests(APITestCase):
         stuck = CodingSubmission.objects.create(
             user=self.learner, exercise=self.exercise,
             language='python', code='x',
-            status=CodingSubmission.Status.QUEUED, total_tests=3,
+            status=CodingSubmission.Status.QUEUED,
         )
         # Backdate submitted_at past the 5-minute stale threshold; auto_now_add
         # set it to now() so we update directly.
@@ -579,7 +663,7 @@ class LearnerCodingConsumptionAPITests(APITestCase):
         fresh = CodingSubmission.objects.create(
             user=self.learner, exercise=self.exercise,
             language='python', code='x',
-            status=CodingSubmission.Status.QUEUED, total_tests=3,
+            status=CodingSubmission.Status.QUEUED,
         )
         result = reap_stuck_coding_submissions_task.run()
         self.assertEqual(result['reaped'], 0)
@@ -598,12 +682,8 @@ class LearnerCodingConsumptionAPITests(APITestCase):
             kwargs={'exercise_id': self.exercise.id},
         )
 
-        def _fake_run_submission(self_runner, code, test_cases, time_limit_ms, language):
-            return [
-                SingleTestResult('passed', '3', '3', '', 1, 0),
-                SingleTestResult('passed', '9', '9', '', 1, 0),
-                SingleTestResult('passed', '300', '300', '', 1, 0),
-            ]
+        def _fake_run_submission(self_runner, code, evaluation_script, time_limit_ms, language):
+            return self._passing_results()
 
         with patch(
             'courses.services.code_runner.CodeRunner.run_submission',
@@ -611,7 +691,7 @@ class LearnerCodingConsumptionAPITests(APITestCase):
         ), self.captureOnCommitCallbacks(execute=True):
             self.client.post(
                 url,
-                {'language': 'python', 'code': 'def solve(s): return sum(map(int,s.split()))'},
+                {'language': 'python', 'code': 'def add(a, b): return a + b'},
                 format='json',
             )
 
@@ -626,11 +706,10 @@ class LearnerCodingConsumptionAPITests(APITestCase):
             kwargs={'exercise_id': self.exercise.id},
         )
 
-        def _fake_run_submission(self_runner, code, test_cases, time_limit_ms, language):
+        def _fake_run_submission(self_runner, code, evaluation_script, time_limit_ms, language):
             return [
-                SingleTestResult('failed', '0', '0', '', 1, 0),
-                SingleTestResult('failed', '0', '0', '', 1, 0),
-                SingleTestResult('failed', '0', '0', '', 1, 0),
+                ScriptTestResult('evaluate.T.test_a', 'failed', '', 'AssertionError', 1),
+                ScriptTestResult('evaluate.T.test_b', 'failed', '', 'AssertionError', 1),
             ]
 
         with patch(
@@ -639,7 +718,7 @@ class LearnerCodingConsumptionAPITests(APITestCase):
         ), self.captureOnCommitCallbacks(execute=True):
             self.client.post(
                 url,
-                {'language': 'python', 'code': 'def solve(s): return 0'},
+                {'language': 'python', 'code': 'def add(a, b): return 0'},
                 format='json',
             )
 
@@ -662,3 +741,168 @@ class LearnerCodingConsumptionAPITests(APITestCase):
             result = evaluate_coding_submission_task.run(sub.id)
         self.assertTrue(result.get('skipped'))
         recalc_mock.assert_not_called()
+
+    # -------------------------------------------------------------------------
+    # Instructor authoring run (run code / run tests)
+    # -------------------------------------------------------------------------
+
+    def _instructor_run_url(self, exercise=None):
+        return reverse(
+            'courses:coding-exercise-instructor-run',
+            kwargs={'exercise_id': (exercise or self.exercise).id},
+        )
+
+    def test_instructor_run_tests_defaults_to_stored_solution_and_script(self):
+        self.auth(self.instructor)
+        captured = {}
+
+        def _fake_run_submission(self_runner, code, evaluation_script, time_limit_ms, language):
+            captured['code'] = code
+            captured['script'] = evaluation_script
+            return self._passing_results()
+
+        with patch(
+            'courses.services.code_runner.CodeRunner.run_submission',
+            new=_fake_run_submission,
+        ):
+            response = self.client.post(self._instructor_run_url(), {}, format='json')
+
+        self.assertEqual(response.status_code, status.HTTP_202_ACCEPTED)
+        self.assertIn('task_id', response.data['data'])
+        self.assertEqual(captured['code'], self.exercise.solution_code)
+        self.assertEqual(captured['script'], _EVAL_SCRIPT)
+
+    def test_instructor_run_accepts_unsaved_code_and_script_overrides(self):
+        self.auth(self.instructor)
+        captured = {}
+
+        def _fake_run_submission(self_runner, code, evaluation_script, time_limit_ms, language):
+            captured['code'] = code
+            captured['script'] = evaluation_script
+            return self._passing_results()
+
+        with patch(
+            'courses.services.code_runner.CodeRunner.run_submission',
+            new=_fake_run_submission,
+        ):
+            response = self.client.post(
+                self._instructor_run_url(),
+                {'code': 'def add(a, b): return a + b  # draft',
+                 'evaluation_script': 'import unittest\n# draft tests'},
+                format='json',
+            )
+        self.assertEqual(response.status_code, status.HTTP_202_ACCEPTED)
+        self.assertIn('# draft', captured['code'])
+        self.assertIn('# draft tests', captured['script'])
+
+    def test_instructor_run_code_mode_uses_smoke_script(self):
+        from courses.services.code_runner import SMOKE_EVALUATION_SCRIPTS
+
+        self.auth(self.instructor)
+        captured = {}
+
+        def _fake_run_submission(self_runner, code, evaluation_script, time_limit_ms, language):
+            captured['script'] = evaluation_script
+            return [ScriptTestResult('evaluate.RunCode.test_run_code', 'passed', 'hi\n', '', 1)]
+
+        with patch(
+            'courses.services.code_runner.CodeRunner.run_submission',
+            new=_fake_run_submission,
+        ):
+            response = self.client.post(
+                self._instructor_run_url(), {'mode': 'code'}, format='json',
+            )
+        self.assertEqual(response.status_code, status.HTTP_202_ACCEPTED)
+        self.assertEqual(captured['script'], SMOKE_EVALUATION_SCRIPTS['python'])
+
+    def test_instructor_run_tests_mode_422_when_no_script_anywhere(self):
+        exercise = self._make_scriptless_exercise()
+        exercise.solution_code = 'def f(): pass'
+        exercise.save(update_fields=['solution_code'])
+        self.auth(self.instructor)
+        response = self.client.post(self._instructor_run_url(exercise), {}, format='json')
+        self.assertEqual(response.status_code, status.HTTP_422_UNPROCESSABLE_ENTITY)
+
+    def test_instructor_run_400_when_no_code_anywhere(self):
+        exercise = self._make_scriptless_exercise()  # blank solution_code too
+        self.auth(self.instructor)
+        response = self.client.post(
+            self._instructor_run_url(exercise), {'mode': 'code'}, format='json',
+        )
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+
+    def test_instructor_run_is_learner_forbidden_and_outsider_hidden(self):
+        self.auth(self.learner)
+        response = self.client.post(self._instructor_run_url(), {}, format='json')
+        self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
+
+        other_instructor = User.objects.create_user(
+            email='cx_other_instructor@example.com', password='pw12345!',
+            full_name='Other Instructor', user_type='instructor', is_email_verified=True,
+        )
+        self.auth(other_instructor)
+        response = self.client.post(self._instructor_run_url(), {}, format='json')
+        # Not on this course's roster -> 404, never 403 (numeric-ID rule).
+        self.assertEqual(response.status_code, status.HTTP_404_NOT_FOUND)
+
+    def test_instructor_can_poll_task_status_endpoint(self):
+        """The task-status endpoint is IsEmailVerified-gated (not learner-
+        only) so instructors poll the same URL. Eager Celery doesn't store
+        results, so the AsyncResult is mocked with a real task payload."""
+        from courses.tasks import evaluate_coding_run_task
+
+        self.auth(self.instructor)
+
+        def _fake_run_submission(self_runner, code, evaluation_script, time_limit_ms, language):
+            return self._passing_results()
+
+        with patch(
+            'courses.services.code_runner.CodeRunner.run_submission',
+            new=_fake_run_submission,
+        ):
+            payload = evaluate_coding_run_task.run(
+                self.exercise.id, 'python',
+                self.exercise.solution_code, 2000, _EVAL_SCRIPT,
+            )
+
+        class _FakeAsyncResult:
+            state = 'SUCCESS'
+
+            def __init__(self, *args, **kwargs):
+                pass
+
+            def get(self, timeout=None):
+                return payload
+
+        with patch('celery.result.AsyncResult', _FakeAsyncResult):
+            poll = self.client.get(reverse(
+                'courses:learner-coding-task-status', kwargs={'task_id': 'x' * 36},
+            ))
+        self.assertEqual(poll.status_code, status.HTTP_200_OK)
+        self.assertEqual(poll.data['data']['state'], 'SUCCESS')
+        self.assertEqual(poll.data['data']['result']['status'], 'passed')
+        names = [r['test_name'] for r in poll.data['data']['result']['test_results']]
+        self.assertIn('evaluate.AddTests.test_small', names)
+
+    # -------------------------------------------------------------------------
+    # Course completeness: evaluation scripts are load-bearing
+    # -------------------------------------------------------------------------
+
+    def test_course_cannot_leave_draft_when_exercise_misses_script(self):
+        from django.core.exceptions import ValidationError
+
+        scriptless = self._make_scriptless_exercise()
+        course = NidusCourse.objects.get(pk=self.course.pk)
+        course.status = NidusCourse.CourseStatus.DRAFT
+        course.save(update_fields=['status'])
+
+        with self.assertRaises(ValidationError) as ctx:
+            course.transition_to(NidusCourse.CourseStatus.UNDER_REVIEW)
+        self.assertIn('coding_exercises', ctx.exception.message_dict)
+        self.assertIn('No Script Yet', str(ctx.exception.message_dict['coding_exercises']))
+
+        # Filling in the missing script clears the block.
+        scriptless.evaluation_script = _EVAL_SCRIPT
+        scriptless.save(update_fields=['evaluation_script'])
+        course.transition_to(NidusCourse.CourseStatus.UNDER_REVIEW)
+        self.assertEqual(course.status, NidusCourse.CourseStatus.UNDER_REVIEW)

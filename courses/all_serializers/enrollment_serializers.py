@@ -88,7 +88,7 @@ class _CatalogCurriculumItemSerializer(serializers.Serializer):
         if item_type == SectionContent.ItemType.CODING:
             ex = coding_exercises.get(obj.object_id)
             if ex:
-                return {'id': ex.id, 'title': ex.title, 'difficulty': ex.difficulty}
+                return {'id': ex.id, 'title': ex.title, 'language': ex.language}
 
         if item_type == SectionContent.ItemType.ASSIGNMENT:
             assignment = assignments.get(obj.object_id)

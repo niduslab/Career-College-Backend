@@ -12,7 +12,7 @@
 | `courses/all_views/assignment_views.py` | Assignment CRUD |
 | `courses/services/section_service.py` | Reorder logic, video pipeline entry point |
 | `courses/urls.py` | All course URL patterns |
-| `core/permissions.py` | `IsVerifiedInstructor`, `IsCourseInstructor` |
+| `core/permissions.py` | `IsCourseCreator` (day-to-day authoring gate), `IsCourseInstructor` |
 
 ---
 
@@ -65,11 +65,16 @@ See `13-multi-instructor-collaboration.md` for the full role table, enforcement 
 ### Supporting text fields
 
 `learning_objectives`, `prerequisites`, and `audiences` are plain `TextField`s directly on
-`NidusCourse` (blank-default), **one item per line** (newline-separated; the frontend splits on
-`\n`). They were previously three normalized 1-to-many tables
+`NidusCourse` (`blank=True` at the model level), **one item per line** (newline-separated; the
+frontend splits on `\n`). They were previously three normalized 1-to-many tables
 (`CourseLearningObjective` / `CoursePreRequisite` / `CourseAudience`) with dedicated CRUD
 endpoints; that machinery was removed in favor of these fields. Set/read them as part of the
 normal course create / PATCH / detail payloads — there are no separate metadata endpoints.
+
+`NidusCourseCreateUpdateSerializer` requires all three (plus `price`) to be non-blank on
+create/update — `_normalize_required()` raises a field error if empty. The model stays
+`blank=True` so nothing below the serializer (admin, migrations, fixtures) is constrained; the
+serializer is the only enforcement point.
 
 ---
 

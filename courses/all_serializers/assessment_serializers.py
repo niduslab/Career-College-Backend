@@ -1,5 +1,6 @@
 import re
 
+from django.db import transaction
 from rest_framework import serializers
 
 from courses.all_serializers.course_serializers import InstructorBriefSerializer
@@ -193,37 +194,29 @@ class QuizAnswerSerializer(serializers.ModelSerializer):
             raise serializers.ValidationError('Answer text cannot be empty.')
         return text
 
-    def validate(self, attrs):
-        # Determine whether the answer will be marked correct after this operation.
-        is_correct = attrs.get('is_correct', getattr(self.instance, 'is_correct', False))
-        if not is_correct:
-            return attrs
-
-        # Resolve the question: from context on create, from instance on update.
-        if self.instance is not None:
-            question = self.instance.question
-        else:
-            question = self.context.get('question')
-
-        if question is not None:
-            qs = QuizAnswer.objects.filter(question=question, is_correct=True)
-            if self.instance is not None:
-                qs = qs.exclude(pk=self.instance.pk)
-            if qs.exists():
-                raise serializers.ValidationError(
-                    {'is_correct': 'A correct answer already exists for this question.'}
-                )
-        return attrs
+    # A QuizQuestion is single-correct: marking one answer correct atomically
+    # demotes whichever sibling was correct before, so switching the correct
+    # option is a single idempotent write (no "unset the old one first" dance).
 
     def create(self, validated_data):
         question = self.context['question']
-        return QuizAnswer.objects.create(question=question, **validated_data)
+        with transaction.atomic():
+            if validated_data.get('is_correct'):
+                QuizAnswer.objects.filter(
+                    question=question, is_correct=True
+                ).update(is_correct=False)
+            return QuizAnswer.objects.create(question=question, **validated_data)
 
     def update(self, instance, validated_data):
-        for attr, value in validated_data.items():
-            setattr(instance, attr, value)
-        instance.save()
-        return instance
+        with transaction.atomic():
+            if validated_data.get('is_correct'):
+                QuizAnswer.objects.filter(
+                    question=instance.question, is_correct=True
+                ).exclude(pk=instance.pk).update(is_correct=False)
+            for attr, value in validated_data.items():
+                setattr(instance, attr, value)
+            instance.save()
+            return instance
 
 
 # ---------------------------------------------------------------------------

@@ -37,9 +37,16 @@ A quiz is authored by an instructor and submitted as a new attempt by learners.
 - `answer_text`
 - `is_correct` (BooleanField)
 
-**Rule:** At most one `is_correct=True` per question. Enforced at both the serializer level and
-via a DB constraint. A quiz cannot be submitted for review until every question has at least one
-correct answer — this is checked in `NidusCourse._validate_course_completeness()`.
+**Rule:** At most one `is_correct=True` per question — a single-correct question type, enforced by
+the partial unique constraint `uniq_correct_answer_per_question` (`question` WHERE
+`is_correct=True`). `QuizAnswerSerializer.create()`/`update()` (`assessment_serializers.py`)
+**auto-demotes** whichever sibling answer was previously correct in the same atomic transaction
+before writing the new one — marking a different answer correct is a single idempotent request,
+not a two-step "unset then set." (The model's `clean()` still raises "Each question may have only
+one correct answer" if two rows are ever `is_correct=True` at once outside that flow — e.g. the
+Django admin form, which calls `full_clean()` — so switching the correct answer via Admin still
+requires demoting the old one first.) A quiz cannot be submitted for review until every question
+has at least one correct answer — this is checked in `NidusCourse._validate_course_completeness()`.
 
 ---
 
@@ -97,7 +104,8 @@ the attempt row preserves the historical verdict.
      ...
 
 4. Correct-answer rule enforced at API:
-   → Serializer rejects a second is_correct=True for the same question (400)
+   → Marking a new answer is_correct=true auto-demotes whichever answer was
+     previously correct for that question — no 400, no manual unset step
 
 5. Reorder questions:
    PATCH /api/v1/courses/quiz-questions/{question_id}/  { "position": 2 }

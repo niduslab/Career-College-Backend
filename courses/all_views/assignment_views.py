@@ -11,7 +11,7 @@ from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
-from core.permissions import IsEmailVerified, IsVerifiedInstructor
+from core.permissions import IsEmailVerified, IsInstructorUser
 from courses.models import Assignment, AssignmentQuestion, CourseSection
 from courses.serializers import (
     AssignmentCreateUpdateSerializer,
@@ -86,7 +86,7 @@ class AssignmentDetailAPIView(APIView):
 
     def get_permissions(self):
         if self.request.method in ('PATCH', 'PUT', 'DELETE'):
-            return [IsAuthenticated(), IsEmailVerified(), IsVerifiedInstructor()]
+            return [IsAuthenticated(), IsEmailVerified(), IsInstructorUser()]
         return super().get_permissions()
 
     def _get_owned_assignment(self, request, assignment_id):
@@ -173,7 +173,7 @@ class AssignmentQuestionListCreateAPIView(APIView):
 
     def get_permissions(self):
         if self.request.method == 'POST':
-            return [IsAuthenticated(), IsEmailVerified(), IsVerifiedInstructor()]
+            return [IsAuthenticated(), IsEmailVerified(), IsInstructorUser()]
         return super().get_permissions()
 
     def _get_owned_assignment(self, request, assignment_id):
@@ -241,7 +241,7 @@ class AssignmentQuestionDetailAPIView(APIView):
 
     def get_permissions(self):
         if self.request.method in ('PATCH', 'PUT', 'DELETE'):
-            return [IsAuthenticated(), IsEmailVerified(), IsVerifiedInstructor()]
+            return [IsAuthenticated(), IsEmailVerified(), IsInstructorUser()]
         return super().get_permissions()
 
     def _get_owned_question(self, request, question_id):
@@ -321,7 +321,7 @@ class AssignmentQuestionDetailAPIView(APIView):
 
 class AssignmentQuestionReorderAPIView(APIView):
     """PATCH /api/v1/courses/assignments/{assignment_id}/questions/reorder/"""
-    permission_classes = [IsAuthenticated, IsEmailVerified, IsVerifiedInstructor]
+    permission_classes = [IsAuthenticated, IsEmailVerified, IsInstructorUser]
     parser_classes = [JSONParser, FormParser, MultiPartParser]
 
     def patch(self, request, assignment_id):

@@ -62,7 +62,7 @@ Think of an assignment as a container (title, instructions, passing score), and 
 
 ## Security and visibility rules
 
-1. Authentication and instructor checks happen in views (`IsAuthenticated`, `IsEmailVerified`, and write operations require `IsVerifiedInstructor`).
+1. Authentication and instructor checks happen in views (`IsAuthenticated`, `IsEmailVerified`, and write operations require `IsInstructorUser` — identity verification not required to author; see [08-core-infrastructure.md](08-core-infrastructure.md)).
 2. Ownership checks ensure the assignment belongs to a course taught by the current instructor.
 3. `model_answer` is instructor-only in serializer output. Non-instructors do not receive it.
 

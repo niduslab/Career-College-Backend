@@ -161,3 +161,20 @@ class IsVerifiedCourseCreator(BasePermission):
             IsVerifiedInstructor().has_permission(request, view)
             or IsVerifiedPartnerInstitution().has_permission(request, view)
         )
+
+
+class IsCourseCreator(BasePermission):
+    """Instructor OR partner-institution account — identity verification NOT required.
+
+    Unverified analog of IsVerifiedCourseCreator; used on course-authoring
+    endpoints so a course can be built and tested before identity verification.
+    Submission (leaving draft) still requires IsVerifiedCourseCreator.
+    """
+
+    message = 'Only instructors or partner institutions can perform this action.'
+
+    def has_permission(self, request, view):
+        return (
+            IsInstructorUser().has_permission(request, view)
+            or IsPartnerInstitutionUser().has_permission(request, view)
+        )

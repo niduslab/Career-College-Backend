@@ -27,7 +27,7 @@ The gate for everything except verification itself is the `IsVerifiedPartnerInst
 | `authentication/all_views/` | `InstitutionExpert*`, `InstitutionDepartment*` views |
 | `courses/services/institution_course_service.py` | `add_course_instructor`, `remove_course_instructor`, `InstitutionCourseError` |
 | `courses/all_views/institution_course_views.py` | `InstitutionCourseInstructorView` (roster add/remove) |
-| `core/permissions.py` | `IsVerifiedPartnerInstitution`, `IsVerifiedCourseCreator` |
+| `core/permissions.py` | `IsVerifiedPartnerInstitution`, `IsCourseCreator` (day-to-day course authoring), `IsVerifiedCourseCreator` (submission/schedules/invites) |
 
 ---
 
@@ -181,10 +181,17 @@ The plaintext password is passed as a **Celery task arg** to `send_expert_creden
 ```python
 def set_expert_active(institution_profile, profile, active):
     profile.affiliation_status = 'active' if active else 'removed'
-    profile.is_verified = active          # ← removed expert can no longer author
+    profile.is_verified = active
 ```
 
-`is_verified` mirrors active state, so a removed expert immediately fails `IsVerifiedCourseCreator`.
+> **Known gap, unresolved.** `is_verified` mirroring active state used to mean a removed expert
+> immediately failed `IsVerifiedCourseCreator` on every authoring endpoint. That's no longer true:
+> course/section/lecture/quiz/assignment/coding-exercise authoring now gate on
+> `IsCourseCreator`/`IsInstructorUser`, which don't check `is_verified`, and `set_expert_active()`
+> never removes the expert from `course.instructors`. A removed expert currently keeps full
+> content-authoring access on any course they were already rostered to — only `/finish/` and
+> `/submit/` (still `IsVerifiedCourseCreator`) remain blocked. See `CLAUDE.md` → *Partner
+> Institution: Experts & Course Roster*.
 
 ### Endpoints
 
@@ -237,7 +244,8 @@ GET/PATCH/DELETE  /api/v1/auth/partner/departments/{id}/   → detail / rename o
 ### Creation
 
 Partner institutions create courses through the **same** `CourseCreateAPIView` as instructors
-(`IsVerifiedCourseCreator` = `IsVerifiedInstructor` OR `IsVerifiedPartnerInstitution`).
+(`IsCourseCreator` = `IsInstructorUser` OR `IsPartnerInstitutionUser` — identity verification not
+required to create/edit; only submission (`IsVerifiedCourseCreator`) requires it).
 
 - `NidusCourseCreateUpdateSerializer.create()` sets `partner_institution` and **skips**
   `instructors.set([self])` for partner creators (partner-institution users are never in `instructors`).

@@ -1508,7 +1508,17 @@ python manage.py createsuperuser
 
 # Course Authoring (Instructor)
 
-> All endpoints in Sections 26–34 require a **verified-instructor or verified-partner-institution** JWT (`IsVerifiedCourseCreator`). Non-owners get `404` (not `403`) so the existence of the course is not leaked. Partner institution users can create, list, and edit their own courses; co-instructors can read and edit content but cannot modify the instructor roster.
+> Sections 26–34 require an **instructor or partner-institution** JWT (`IsCourseCreator`) — identity
+> verification is **not** required to create/edit; only leaving `draft` (submit/finish — Section 34)
+> requires a verified instructor or verified partner institution (`IsVerifiedCourseCreator`).
+> Non-owners get `404` (not `403`) so the existence of the course is not leaked. Partner institution
+> users can create, list, and edit their own courses; co-instructors can read and edit content but
+> cannot modify the instructor roster.
+>
+> **Known gap:** deactivating an institution-affiliated expert does not remove them from
+> `course.instructors`, and content-authoring endpoints no longer check `is_verified` — a removed
+> expert currently keeps authoring access on courses they were already rostered to (see `CLAUDE.md`
+> → *Partner Institution: Experts & Course Roster*).
 
 ## 26. Courses
 
@@ -1524,7 +1534,10 @@ python manage.py createsuperuser
     "language": "English",
     "level": "intermediate",
     "duration_minutes": 240,
-    "category": 1
+    "category": 1,
+    "learning_objectives": "Build production REST APIs.\nContainerize with Docker.",
+    "prerequisites": "Comfortable with Python.",
+    "audiences": "Backend engineers."
 }
 ```
 
@@ -1532,6 +1545,9 @@ python manage.py createsuperuser
 it → 400 `errors.category: ["This field is required."]`. Inactive or unknown id → 400
 `errors.category: ["Invalid pk \"999\" - object does not exist."]`. On PATCH, `category` stays
 optional (partial update), but if sent it must still resolve to an active id.
+
+`price`, `learning_objectives`, `prerequisites`, and `audiences` are also **required** and must be
+non-blank (see Section 27) — omitting any of them → 400 with a field-specific error.
 
 **Expected 201:**
 ```json
@@ -1569,7 +1585,10 @@ Save `data.id` as `{{course_id}}`.
 `learning_objectives`, `prerequisites`, and `audiences` are **plain text fields on the course**
 (newline-separated — one item per line; the frontend splits on `\n`). There are **no separate
 metadata endpoints** — set them directly in the course create/PATCH payload (Section 26), and read
-them back on any course detail response.
+them back on any course detail response. All three are **required and must be non-blank** on
+create/update (`_normalize_required()` in `NidusCourseCreateUpdateSerializer`) — a blank or missing
+value returns a 400 field error. The model column itself stays `blank=True`; only the serializer
+enforces this.
 
 ### 27.1 Set on Create
 
@@ -1987,12 +2006,16 @@ Positions are reassigned to match the order of `ordered_ids`.
 ### 32.9 Auth & Ownership Error Cases
 
 - Unauthenticated create → 401.
-- Unverified instructor → 403: `"Only verified instructors or verified partner institutions can perform this action."`
-- Learner trying to create → 403.
-- Verified instructor not on the course → 404 (existence not leaked).
+- Learner trying to create → 403 (`IsInstructorUser` — identity verification is **not** required
+  to author assignments; an unverified instructor can create/patch freely).
+- Instructor not on the course → 404 (existence not leaked).
 - Cross-instructor read → 404.
-- Unverified instructor patches an assignment they own → 403 on patch (GET still allowed).
 - POST to dedicated assignment list endpoint → 405. Use `sections/{id}/contents/`.
+
+> **Known gap:** an institution-affiliated expert removed from the roster (`is_verified` flipped
+> to `False`) is **not** blocked here — `IsInstructorUser` doesn't check `is_verified`, and removal
+> doesn't drop them from `course.instructors`. See `CLAUDE.md` → *Partner Institution: Experts and
+> Course Roster*.
 
 ---
 
@@ -4076,20 +4099,20 @@ Combine freely: `?sort=rating&rating_min=4.0&min_reviews=5`
 ```
 **Expected 400:** `"position must be a positive integer."`
 
-### 45.3 Two correct answers for one question
+### 45.3 Marking a second answer correct for one question
 
-Trying to create a second answer with `"is_correct": true` for the same question:
+Creating or updating another answer with `"is_correct": true` for a question that already has one
+**no longer returns a 400.** `QuizAnswerSerializer.create()`/`update()` auto-demotes whichever
+answer was previously correct (atomic transaction) and accepts the new one — a question is
+single-correct by construction (`uniq_correct_answer_per_question` DB constraint), so switching
+which answer is correct is a single idempotent request:
 
-**Expected 400:**
 ```json
-{
-    "success": false,
-    "message": "Validation failed.",
-    "errors": {
-        "is_correct": ["A correct answer already exists for this question."]
-    }
-}
+{ "answer_text": "New correct option", "is_correct": true }
 ```
+
+**Expected 200/201:** the new answer is `is_correct: true`; the previously-correct sibling answer
+for the same question is now `is_correct: false` (no separate request needed to unset it).
 
 ---
 

@@ -146,6 +146,12 @@ class NidusCourseCreateUpdateSerializer(serializers.ModelSerializer):
             'prerequisites', 'audiences', 'course_outline',
         ]
         read_only_fields = ['created_by']
+        extra_kwargs = {
+            'learning_objectives': {'required': True, 'allow_blank': False},
+            'prerequisites': {'required': True, 'allow_blank': False},
+            'audiences': {'required': True, 'allow_blank': False},
+            'price': {'required': True},
+        }
 
     def validate_title(self, value):
         title = value.strip()
@@ -162,14 +168,20 @@ class NidusCourseCreateUpdateSerializer(serializers.ModelSerializer):
         lines = [line.strip() for line in value.split('\n')]
         return '\n'.join(line for line in lines if line)
 
+    def _normalize_required(self, value, label):
+        normalized = self._normalize_multiline(value)
+        if not normalized:
+            raise serializers.ValidationError(f'{label} cannot be empty.')
+        return normalized
+
     def validate_learning_objectives(self, value):
-        return self._normalize_multiline(value)
+        return self._normalize_required(value, 'Learning objectives')
 
     def validate_prerequisites(self, value):
-        return self._normalize_multiline(value)
+        return self._normalize_required(value, 'Prerequisites')
 
     def validate_audiences(self, value):
-        return self._normalize_multiline(value)
+        return self._normalize_required(value, 'Audiences')
 
     def validate_course_outline(self, value):
         return self._normalize_multiline(value)

@@ -14,6 +14,8 @@ Everything here is gated to admins only (`is_staff` or `user_type == 'admin'`). 
 
 More back-office features (content moderation, financial administration, platform configuration) are planned on top of the same foundation — see `docs/future_implementations/ADMIN_CONSOLE.md`. They all reuse one shared base view, `AdminConsoleAPIView`, so the auth/permission rules below apply to them automatically.
 
+> This doc covers the **admin console app specifically**. For the cross-cutting map of *everything* a platform admin can do across all apps — course review, identity/institution verification review, category management, platform analytics — see [25 — Platform Admin Capabilities](25-admin-capabilities.md).
+
 ---
 
 ## Part 1 — Signing in
@@ -128,9 +130,9 @@ Every suspend / reactivate / role-change writes one **append-only** `AdminAction
 
 ## What's intentionally not built yet
 
-- **Instant token kill on suspend.** Suspending flips `is_active`, which JWT honors on the user's *next* request — not mid-request. Outstanding **refresh** tokens aren't blacklisted yet, so full "cut them off this instant" revocation is still pending.
+- **Instant token kill on suspend.** Suspend now blacklists every outstanding **refresh** token (in the suspend transaction) and flips `is_active`, which JWT honors on the user's *next* request. What's still not possible is revoking a *stateless access token* mid-life — a copy the user already holds keeps working until it expires (12 h). That's a property of JWT, not a missing feature.
 - **2FA (TOTP)** — deferred; no library wired in.
-- **Support tickets / disputes** and a **"your account was suspended" email** — not built (see `docs/future_implementations/ADMIN_CONSOLE.md` §1).
+- **Support tickets / disputes** — not built (see `docs/future_implementations/ADMIN_CONSOLE.md` §1). The **"your account was suspended/reactivated" email** is now sent (`ACCOUNT_SUSPENDED`/`ACCOUNT_REACTIVATED`, unmutable critical notices).
 
 ## Impact on the rest of the platform
 

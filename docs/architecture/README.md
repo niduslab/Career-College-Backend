@@ -30,6 +30,7 @@ a full tour, or jump to the subsystem you're working on.
 22. `22-scheduled-courses.md` — cohort schedules: schedule state machine, cohort enrollment, drip release, learner gates
 23. `23-scheduled-course-lifecycle.md` — scheduled-course user journey paired with the backend flow at each step
 24. `24-admin-console-auth.md` — admin console: session login, device/session tracking + remote logout, user management + audit log
+25. `25-admin-capabilities.md` — cross-cutting map of **everything** a platform admin can do (console + course review + verification review + category mgmt + platform analytics), the two elevation mechanisms, and where each deep doc lives
 
 ## Scope
 

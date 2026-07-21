@@ -27,6 +27,7 @@ from courses.views import (
     AssignmentQuestionDetailAPIView,
     AssignmentQuestionListCreateAPIView,
     AssignmentQuestionReorderAPIView,
+    AssignmentRubricPreviewAPIView,
     CatalogCourseDetailView,
     CatalogCourseListView,
     CodingExerciseDetailAPIView,
@@ -222,6 +223,7 @@ urlpatterns = [
     path('assignments/<int:assignment_id>/', AssignmentDetailAPIView.as_view(), name='assignment-detail'),
     path('assignments/<int:assignment_id>/questions/', AssignmentQuestionListCreateAPIView.as_view(), name='assignment-question-list-create'),
     path('assignments/<int:assignment_id>/questions/reorder/', AssignmentQuestionReorderAPIView.as_view(), name='assignment-question-reorder'),
+    path('assignments/rubric-preview/', AssignmentRubricPreviewAPIView.as_view(), name='assignment-rubric-preview'),
     path('assignment-questions/<int:question_id>/', AssignmentQuestionDetailAPIView.as_view(), name='assignment-question-detail'),
 
     # -------------------------------------------------------------------------

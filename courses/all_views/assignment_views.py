@@ -26,6 +26,10 @@ from courses.services import (
     update_assignment,
     update_question,
 )
+from courses.services.rubric_autogen import (
+    DEFAULT_MAX_TERMS,
+    generate_rubric_from_model_answer,
+)
 from courses.utils import guard_editable
 
 logger = logging.getLogger(__name__)
@@ -311,6 +315,51 @@ class AssignmentQuestionDetailAPIView(APIView):
             )
         return Response(
             {'success': True, 'message': 'Question deleted successfully.'},
+            status=status.HTTP_200_OK,
+        )
+
+
+# =============================================================================
+# Rubric auto-generation preview
+# =============================================================================
+
+class RubricPreviewInputSerializer(serializers.Serializer):
+    """Body for the rubric-preview endpoint. `points` mirrors the question's
+    integer points; `max_terms` is optional and caps how many keyword criteria
+    are produced."""
+    model_answer = serializers.CharField(allow_blank=True, trim_whitespace=False)
+    points = StrictIntegerField(min_value=0)
+    max_terms = StrictIntegerField(min_value=1, required=False, default=DEFAULT_MAX_TERMS)
+
+
+class AssignmentRubricPreviewAPIView(APIView):
+    """POST /api/v1/courses/assignments/rubric-preview/
+
+    Stateless helper: given a model answer + points, return the rubric that
+    Option B auto-generation would produce. The authoring UI calls this so an
+    instructor can SEE (and then edit) the generated criteria before saving,
+    rather than discovering them only after the question is persisted. Does not
+    touch the database and is not tied to a specific question."""
+    permission_classes = [IsAuthenticated, IsEmailVerified, IsInstructorUser]
+    parser_classes = [JSONParser, FormParser, MultiPartParser]
+
+    def post(self, request):
+        serializer = RubricPreviewInputSerializer(data=request.data)
+        if not serializer.is_valid():
+            return Response(
+                {'success': False, 'message': 'Validation failed.', 'errors': serializer.errors},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        data = serializer.validated_data
+        # split_points=False: return criteria with 0 points so the instructor
+        # assigns points manually per criterion in the UI.
+        rubric = generate_rubric_from_model_answer(
+            data['model_answer'], data['points'], max_terms=data['max_terms'],
+            split_points=False,
+        )
+        return Response(
+            {'success': True, 'data': {'rubric': rubric}},
             status=status.HTTP_200_OK,
         )
 

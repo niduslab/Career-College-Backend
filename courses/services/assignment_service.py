@@ -6,7 +6,20 @@ from courses.models import (
     Assignment,
     AssignmentQuestion,
 )
+from courses.services.rubric_autogen import generate_rubric_from_model_answer
 from courses.services.section_service import reorder_section_content
+
+
+def _autofill_rubric(question) -> None:
+    """Option B auto-grading fallback: when a question has a model answer but
+    an empty rubric, derive a keyword rubric from the model answer so the
+    question doesn't silently grade to 0. Mutates `question` in place; the
+    caller is responsible for saving. No-op once a rubric already exists (an
+    instructor-authored rubric is never overwritten)."""
+    if not question.rubric and question.model_answer:
+        question.rubric = generate_rubric_from_model_answer(
+            question.model_answer, question.points
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -91,11 +104,14 @@ def add_question(assignment_id, user, validated_data) -> AssignmentQuestion:
         or 0
     ) + 1
 
-    return AssignmentQuestion.objects.create(
+    question = AssignmentQuestion(
         assignment_id=assignment_id,
         position=next_position,
         **validated_data,
     )
+    _autofill_rubric(question)
+    question.save()
+    return question
 
 
 @transaction.atomic
@@ -109,6 +125,7 @@ def update_question(question_id, user, validated_data) -> AssignmentQuestion:
     for field in allowed_fields:
         if field in validated_data:
             setattr(question, field, validated_data[field])
+    _autofill_rubric(question)
     question.save()
     return question
 

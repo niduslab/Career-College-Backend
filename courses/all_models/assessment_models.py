@@ -319,7 +319,7 @@ class AssignmentQuestion(models.Model):
             'Sum of criterion.points must equal this question.points.'
         ),
     )
-    points = models.PositiveIntegerField(default=10)
+    points = models.PositiveIntegerField(default=0)
     hint = models.TextField(blank=True, default='')
     position = models.PositiveIntegerField(db_index=True)
 

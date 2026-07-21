@@ -1955,12 +1955,39 @@ Deletes the assignment, cascades all its questions, and removes its `SectionCont
 **Expected 201:** Save `data.id` as `{{aq_id}}`. `position` is server-assigned.
 
 **Rubric authoring rules (enforced by the serializer):**
+- `points` has **no default weight** — it defaults to `0` if omitted. A `0`-point question with a `0`-point (or empty) rubric passes the sum check trivially.
 - `sum(criterion.points)` must equal `question.points`. Mismatch → 400.
 - Supported `type` values: `keyword`, `regex`, `min_length`, `max_length`, `any_of`, `all_of`. Unknown `type` → 400.
 - `regex` criteria are compiled at save time; an unparseable pattern → 400.
 - `case_sensitive` (optional, default `false`) is only honoured by `keyword` and `regex`.
-- An empty rubric (`"rubric": []`) is allowed during draft authoring but will produce a `score=0` submission once published.
+- An empty rubric (`"rubric": []`) is allowed, **but** if the question has a non-empty `model_answer` the server **auto-generates** a rubric from it on save (see below). An empty rubric **and** empty `model_answer` → every answer grades to `score=0`.
 - `rubric` is **instructor-only** in the response. Non-instructors get the question without it (and without `model_answer`).
+
+**Auto-generated rubric from the model answer (Option B):**
+
+To avoid the silent `score=0` hole, a question saved with a `model_answer` but an empty `rubric` gets a rubric built automatically at save time. The generator (`courses/services/rubric_autogen.py`) extracts the model answer's most significant words (stopwords + <3-char words dropped, frequency-ranked) and splits them into several `all_of` groups, dividing `question.points` evenly across the groups (group count = `min(points, keyword_count)`). It never overwrites a rubric you authored yourself.
+
+Preview it without saving:
+
+**POST** `{{base_url}}/courses/assignments/rubric-preview/`
+
+```json
+{ "model_answer": "Django middleware is a plugin that intercepts the request/response cycle.", "points": 2 }
+```
+
+**Expected 200** — the same groups the save-time fallback would build, but with `points: 0` on every group (you assign the points in the authoring UI; Save is blocked until they sum to `question.points`):
+```json
+{
+    "success": true,
+    "data": {
+        "rubric": [
+            { "type": "all_of", "value": ["cycle", "django", "intercepts"], "points": 0, "feedback_on_match": "...", "feedback_on_miss": "..." },
+            { "type": "all_of", "value": ["middleware", "plugin"], "points": 0, "feedback_on_match": "...", "feedback_on_miss": "..." }
+        ]
+    }
+}
+```
+Optional body field `max_terms` (default 5) caps how many keywords are extracted. Blank/stopword-only `model_answer` or `points <= 0` → `"rubric": []`.
 
 **Example error — points mismatch:**
 ```json

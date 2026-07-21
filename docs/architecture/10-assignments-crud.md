@@ -33,6 +33,7 @@ GET    assignment-questions/{question_id}/
 PATCH  assignment-questions/{question_id}/
 DELETE assignment-questions/{question_id}/
 PATCH  assignments/{assignment_id}/questions/reorder/
+POST   assignments/rubric-preview/          (stateless rubric generator; see below)
 ```
 
 ## What an instructor experiences
@@ -56,7 +57,12 @@ Think of an assignment as a container (title, instructions, passing score), and 
 ## `AssignmentQuestion`
 
 - Belongs to one `Assignment`
-- Fields: `question_text`, `model_answer`, `points`, `hint`, `position`
+- Fields: `question_text`, `model_answer`, `rubric`, `points`, `hint`, `position`
+- `points` defaults to **0** (a new question is worth nothing until the
+  instructor sets a value — no implicit default weight).
+- `rubric` (JSONField, instructor-only) is the auto-grading answer key — a list
+  of criterion objects; see *Auto-grading* and *Auto-generated rubric* below.
+  `model_answer` is instructor-only reference text (never used by the grader).
 - Constraint: `(assignment, position)` must be unique
 - Meaning: one assignment cannot have two questions in the same position
 
@@ -324,6 +330,44 @@ score = min( sum(criterion.points for each matching criterion), max_score )
 
 The grader is **defensive**: an unknown criterion type or a matcher that raises an exception
 is recorded as a miss, not a crash. Grading completes even if one criterion is malformed.
+
+### Auto-generated rubric from the model answer (Option B)
+
+An empty rubric grades every answer to **0** (the grader short-circuits on
+`not rubric_snapshot`). To avoid that silent hole when an instructor writes a
+Model Answer but skips the rubric, authoring **auto-generates a multi-group
+`all_of` rubric from the model answer at save time**.
+
+- Logic: `courses/services/rubric_autogen.py` → `generate_rubric_from_model_answer(model_answer, points, max_terms=5)`.
+  Pure function (no Django imports). Extracts the top-N content words (length ≥ 3,
+  stopwords removed) by frequency — ties broken alphabetically for determinism —
+  and splits them into **several `all_of` groups**, dividing the points across
+  the groups. Group count = `min(points, keyword_count)` (one point per group
+  at most, one keyword per group at least); keywords and points are each spread
+  as evenly as possible with the remainder on the earliest groups, so the
+  points sum equals `question.points` exactly (fallback path) and passes
+  `_validate_rubric_criteria`. In the manual-points path every group's points
+  are 0. E.g. a 2-point question with keywords `[a,b,c,d,e]` →
+  `all_of[a,b,c]=1pt` + `all_of[d,e]=1pt`.
+- Wiring: `_autofill_rubric(question)` in `assignment_service.py`, called by both
+  `add_question` and `update_question` **before save**. It only fires when the
+  resulting question has a non-empty `model_answer` **and** an empty `rubric` — an
+  instructor-authored rubric is never overwritten.
+- Fallback of the fallback: if the model answer yields no usable keyword (blank,
+  only stopwords, or `points == 0`), the rubric stays empty and grading keeps its
+  existing score-0 behavior. A question with **no rubric and no model answer**
+  still grades to 0.
+- Preview: `POST /api/v1/courses/assignments/rubric-preview/` (`IsInstructorUser`,
+  body `{model_answer, points, max_terms?}`) returns the generated `all_of`
+  groups **without saving** and with **`points: 0`** on every group
+  (`split_points=False`) — the instructor assigns each group's points in the
+  UI, and the authoring UI blocks Save until the sum equals the question's
+  points. `points` is still sent because it decides the group count. Stateless,
+  not tied to a question id.
+- `split_points` flag on `generate_rubric_from_model_answer`: `True` (silent
+  fallback) divides `question.points` across the `all_of` groups so a
+  fully-skipped rubric still grades; `False` (preview) sets 0 for manual point
+  entry (grouping is unchanged).
 
 ### Retry for grading_failed
 

@@ -33,6 +33,8 @@ EVENT_TO_CATEGORY: dict[str, str] = {
     NotificationEventType.WEBINAR_PUBLISHED:       NotificationCategory.COURSE_MANAGEMENT,
     NotificationEventType.PAYMENT_SUCCESSFUL:      NotificationCategory.COURSE_ACTIVITY,
     NotificationEventType.PAYMENT_FAILED:          NotificationCategory.COURSE_ACTIVITY,
+    NotificationEventType.QUESTION_POSTED:         NotificationCategory.COURSE_ACTIVITY,
+    NotificationEventType.QUESTION_REPLIED:        NotificationCategory.COURSE_ACTIVITY,
 }
 
 

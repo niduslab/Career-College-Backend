@@ -325,6 +325,23 @@ def _account_reactivated(recipient, ctx):
     )
 
 
+def _question_posted(recipient, ctx):
+    return _build(
+        title='New question in your course',
+        body=f'A learner asked a question in "{ctx["course_title"]}".',
+        data={'course_slug': ctx['course_slug'], 'question_id': ctx['question_id']},
+    )
+
+
+def _question_replied(recipient, ctx):
+    who = 'An instructor' if ctx.get('is_instructor_reply') else 'Someone'
+    return _build(
+        title='New reply to a question',
+        body=f'{who} replied to "{ctx["question_title"]}".',
+        data={'course_slug': ctx.get('course_slug'), 'question_id': ctx['question_id']},
+    )
+
+
 _BUILDERS = {
     _ET.ENROLLMENT_CREATED:      _enrollment_created,
     _ET.LECTURE_COMPLETED:       _lecture_completed,
@@ -359,6 +376,8 @@ _BUILDERS = {
     _ET.PAYMENT_FAILED:          _payment_failed,
     _ET.ACCOUNT_SUSPENDED:       _account_suspended,
     _ET.ACCOUNT_REACTIVATED:     _account_reactivated,
+    _ET.QUESTION_POSTED:         _question_posted,
+    _ET.QUESTION_REPLIED:        _question_replied,
 }
 
 

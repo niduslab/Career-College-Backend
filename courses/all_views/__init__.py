@@ -84,6 +84,15 @@ from courses.all_views.review_views import (
     MyReviewView,
     ReviewVoteView,
 )
+from courses.all_views.discussion_views import (
+    CourseQuestionDetailView,
+    CourseQuestionListView,
+    QuestionPinView,
+    QuestionReplyCreateView,
+    QuestionReplyDetailView,
+    QuestionUpvoteView,
+    ReplyUpvoteView,
+)
 from courses.all_views.content_views import (
     CourseSectionCreateAPIView,
     CourseSectionDetailAPIView,
@@ -172,6 +181,13 @@ __all__ = [
     'CourseReviewSummaryView',
     'MyReviewView',
     'ReviewVoteView',
+    'CourseQuestionListView',
+    'CourseQuestionDetailView',
+    'QuestionReplyCreateView',
+    'QuestionReplyDetailView',
+    'QuestionPinView',
+    'QuestionUpvoteView',
+    'ReplyUpvoteView',
     'CourseCategoryListCreateView',
     'CourseCategoryDetailView',
 ]

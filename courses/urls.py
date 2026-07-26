@@ -10,6 +10,13 @@ from courses.views import (
     CourseReviewSummaryView,
     MyReviewView,
     ReviewVoteView,
+    CourseQuestionListView,
+    CourseQuestionDetailView,
+    QuestionReplyCreateView,
+    QuestionReplyDetailView,
+    QuestionPinView,
+    QuestionUpvoteView,
+    ReplyUpvoteView,
     CourseInstructorInviteCreateView,
     CourseInstructorInviteListView,
     CourseInstructorInviteRevokeView,
@@ -116,6 +123,19 @@ urlpatterns = [
     path('<slug:slug>/reviews/my-review/', MyReviewView.as_view(), name='my-course-review'),
     path('<slug:slug>/reviews/', CourseReviewListView.as_view(), name='course-review-list'),
     path('reviews/<int:review_id>/vote/', ReviewVoteView.as_view(), name='review-vote'),
+
+    # -------------------------------------------------------------------------
+    # Course Q&A / discussion (enrolled learners + course instructors only)
+    # Slug list/create → 403 on no access; numeric-ID routes → 404.
+    # Literal segments (replies/, pin/, upvote/) precede bare numeric routes.
+    # -------------------------------------------------------------------------
+    path('<slug:slug>/questions/', CourseQuestionListView.as_view(), name='course-question-list'),
+    path('questions/<int:question_id>/replies/', QuestionReplyCreateView.as_view(), name='question-reply-create'),
+    path('questions/<int:question_id>/pin/', QuestionPinView.as_view(), name='question-pin'),
+    path('questions/<int:question_id>/upvote/', QuestionUpvoteView.as_view(), name='question-upvote'),
+    path('questions/<int:question_id>/', CourseQuestionDetailView.as_view(), name='course-question-detail'),
+    path('replies/<int:reply_id>/upvote/', ReplyUpvoteView.as_view(), name='reply-upvote'),
+    path('replies/<int:reply_id>/', QuestionReplyDetailView.as_view(), name='question-reply-detail'),
 
     # -------------------------------------------------------------------------
     # Learner consumption (Phase 1 — curriculum outline, lecture detail, progress)

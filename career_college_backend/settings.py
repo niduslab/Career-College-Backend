@@ -142,6 +142,10 @@ REST_FRAMEWORK = {
         'authentication.authentication.CookieJWTAuthentication',
         'rest_framework_simplejwt.authentication.JWTAuthentication',
     ),
+    # Rewraps DRF-raised errors (throttle/auth/permission/405/parse) in the
+    # project's success/message envelope. Views build their own envelopes and
+    # are unaffected. See core/exception_handlers.py.
+    'EXCEPTION_HANDLER': 'core.exception_handlers.envelope_exception_handler',
 }
 
 # SimpleJWT
@@ -337,6 +341,9 @@ OTP_RATE_LIMIT = env('OTP_RATE_LIMIT', default='20/min')
 LOGIN_RATE_LIMIT = env('LOGIN_RATE_LIMIT', default='10/min')
 # Per-admin cap on user-management mutations (suspend/reactivate/role).
 ADMIN_ACTION_RATE_LIMIT = env('ADMIN_ACTION_RATE_LIMIT', default='30/min')
+# Per-user cap on Q&A upvotes — the counters have no per-user vote row, so
+# this is the only brake on one caller inflating a thread's ranking.
+DISCUSSION_UPVOTE_RATE_LIMIT = env('DISCUSSION_UPVOTE_RATE_LIMIT', default='30/min')
 
 
 # Logging

@@ -36,6 +36,8 @@ class NotificationEventType(models.TextChoices):
     PAYMENT_FAILED           = 'payment.failed',           'Payment Failed'
     ACCOUNT_SUSPENDED        = 'account.suspended',        'Account Suspended'
     ACCOUNT_REACTIVATED      = 'account.reactivated',      'Account Reactivated'
+    QUESTION_POSTED          = 'question.posted',          'Question Posted'
+    QUESTION_REPLIED         = 'question.replied',         'Question Replied'
 
 
 class NotificationCategory(models.TextChoices):

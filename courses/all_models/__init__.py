@@ -5,3 +5,4 @@ from .enrollment_models import *
 from .schedule_models import *
 from .certificate_models import *
 from .review_models import *
+from .discussion_models import *

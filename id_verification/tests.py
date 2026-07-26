@@ -246,7 +246,16 @@ class PartnerCourseCreationTests(PartnerInstitutionTestBase):
         category = CourseCategory.objects.create(name='Institution Category')
         resp = self.client.post(
             reverse('courses:course-create'),
-            {'title': 'Institution Course', 'description': 'A self-paced course.', 'category': category.pk},
+            {
+                'title': 'Institution Course',
+                'description': 'A self-paced course.',
+                'category': category.pk,
+                # Required by NidusCourseCreateUpdateSerializer.
+                'price': '0.00',
+                'learning_objectives': 'Understand the basics',
+                'prerequisites': 'None',
+                'audiences': 'Beginners',
+            },
             format='json',
         )
         self.assertEqual(resp.status_code, status.HTTP_201_CREATED, resp.data)
@@ -261,15 +270,28 @@ class PartnerCourseCreationTests(PartnerInstitutionTestBase):
         )
         course.clean()  # should not raise (partner_institution now permitted)
 
-    def test_unverified_partner_cannot_create_course(self):
+    def test_unverified_partner_can_create_course(self):
+        # Course creation gates on IsCourseCreator (instructor OR partner
+        # institution), not IsVerifiedCourseCreator — an institution can build
+        # a course before its own verification completes. Verification still
+        # gates leaving draft (/finish/, /submit/).
         self.institution.is_verified = False
         self.institution.save(update_fields=['is_verified'])
+        category = CourseCategory.objects.create(name='Unverified Category')
         resp = self.client.post(
             reverse('courses:course-create'),
-            {'title': 'Blocked Course', 'description': 'Should be blocked.'},
+            {
+                'title': 'Unverified Course',
+                'description': 'Authored before verification completes.',
+                'category': category.pk,
+                'price': '0.00',
+                'learning_objectives': 'Understand the basics',
+                'prerequisites': 'None',
+                'audiences': 'Beginners',
+            },
             format='json',
         )
-        self.assertEqual(resp.status_code, status.HTTP_403_FORBIDDEN)
+        self.assertEqual(resp.status_code, status.HTTP_201_CREATED, resp.data)
 
 
 class InstitutionCourseAssignmentTests(PartnerInstitutionTestBase):

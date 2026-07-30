@@ -27,6 +27,7 @@ from authentication.all_views import (
     InstitutionExpertDetailView,
     InstitutionDepartmentListCreateView,
     InstitutionDepartmentDetailView,
+    WsTokenView,
 )
 
 __all__ = [
@@ -58,4 +59,5 @@ __all__ = [
     'InstitutionExpertDetailView',
     'InstitutionDepartmentListCreateView',
     'InstitutionDepartmentDetailView',
+    'WsTokenView',
 ]

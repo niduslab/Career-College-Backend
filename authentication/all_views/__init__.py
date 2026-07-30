@@ -3,6 +3,7 @@ from authentication.all_views.auth_views import (
     TokenRefreshView,
     UserLoginView,
     UserRegistrationView,
+    WsTokenView,
 )
 from authentication.all_views.google_views import (
     GoogleAuthCallbackView,
@@ -63,4 +64,5 @@ __all__ = [
     'InstitutionDepartmentListCreateView',
     'InstitutionDepartmentDetailView',
     'TokenRefreshView',
+    'WsTokenView',
 ]

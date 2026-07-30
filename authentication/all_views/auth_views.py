@@ -20,6 +20,7 @@ from authentication.serializers import (
 )
 from authentication.tasks import send_otp_email_task
 from authentication.utils.cookie_helpers import delete_jwt_cookies, set_jwt_cookies
+from core.permissions import IsEmailVerified
 
 logger = logging.getLogger(__name__)
 
@@ -218,6 +219,25 @@ class TokenRefreshView(APIView):
                 'success': True,
                 'message': 'Token refreshed successfully.',
                 'tokens': serializer.validated_data,
+            },
+            status=status.HTTP_200_OK,
+        )
+
+
+class WsTokenView(APIView):
+    """
+    Hands back the caller's own access token (already validated by
+    CookieJWTAuthentication/JWTAuthentication) so the frontend can open the
+    WebSocket at /ws/?token=... — the WS handshake has no cookie support, and
+    the access_token cookie is HttpOnly so JS can't read it directly.
+    """
+    permission_classes = [IsAuthenticated, IsEmailVerified]
+
+    def get(self, request):
+        return Response(
+            {
+                'success': True,
+                'data': {'token': str(request.auth)},
             },
             status=status.HTTP_200_OK,
         )

@@ -135,8 +135,6 @@ class AssignmentCRUDTests(AssignmentTestBase):
         self.assertEqual(a.instructions, 'do this')
 
     def test_patch_assignment_persists_total_score(self):
-        # Regression test for the bug where the serializer accepted
-        # total_score but the service's allow-list silently dropped it.
         a = Assignment.objects.create(
             section=self.section, title='Initial', total_score=10, passing_score=0,
         )
@@ -226,16 +224,18 @@ class AssignmentErrorCaseTests(AssignmentTestBase):
         response = self.client.get(url)
         self.assertEqual(response.status_code, status.HTTP_404_NOT_FOUND)
 
-    def test_unverified_instructor_cannot_patch(self):
+    def test_unverified_instructor_can_patch(self):
         a = Assignment.objects.create(section=self.section, title='Mine')
         self.course.instructors.add(self.unverified_instructor)
         self.auth(self.unverified_instructor)
         url = reverse('courses:assignment-detail', kwargs={'assignment_id': a.id})
         response = self.client.patch(url, {'title': 'New'}, format='json')
-        self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
+        self.assertEqual(response.status_code, status.HTTP_200_OK, response.data)
+        a.refresh_from_db()
+        self.assertEqual(a.title, 'New')
 
     def test_unverified_instructor_can_read(self):
-        # Unverified instructor on this course can READ but not write.
+        # Unverified instructor on this course can read its content.
         a = Assignment.objects.create(section=self.section, title='Mine')
         self.course.instructors.add(self.unverified_instructor)
         self.auth(self.unverified_instructor)
@@ -672,13 +672,14 @@ class AssignmentCurriculumFlowTests(AssignmentTestBase):
         response = self._post_assignment_via_contents()
         self.assertEqual(response.status_code, status.HTTP_401_UNAUTHORIZED)
 
-    def test_unverified_instructor_cannot_create(self):
-        # Unverified instructor attached to the course passes IsAuthenticated
-        # / IsEmailVerified but fails IsVerifiedInstructor.
+    def test_unverified_instructor_can_create(self):
+        # Content authoring gates on IsInstructorUser, not IsVerifiedInstructor,
+        # so a course can be built before identity verification completes.
+        # Verification still gates leaving draft (/finish/, /submit/).
         self.course.instructors.add(self.unverified_instructor)
         self.auth(self.unverified_instructor)
         response = self._post_assignment_via_contents()
-        self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED, response.data)
 
     def test_learner_cannot_create(self):
         self.auth(self.learner)

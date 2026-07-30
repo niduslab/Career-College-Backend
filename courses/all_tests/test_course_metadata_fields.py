@@ -9,6 +9,26 @@ from courses.serializers import (
 )
 
 
+def _create_payload(category, **overrides):
+    """Baseline payload the create serializer accepts.
+
+    Besides title/description/category it carries the four fields the
+    serializer marks required — price, learning_objectives, prerequisites and
+    audiences. Tests override only what they are actually exercising.
+    """
+    payload = {
+        'title': 'Baseline Course',
+        'description': 'Baseline course description.',
+        'category': category.pk,
+        'price': '0.00',
+        'learning_objectives': 'Baseline objective',
+        'prerequisites': 'Baseline prerequisite',
+        'audiences': 'Baseline audience',
+    }
+    payload.update(overrides)
+    return payload
+
+
 class CourseMetadataTextFieldTests(APITestCase):
     """learning_objectives / prerequisites / audiences are now plain text fields."""
 
@@ -30,14 +50,14 @@ class CourseMetadataTextFieldTests(APITestCase):
 
     def test_create_persists_text_fields(self):
         serializer = NidusCourseCreateUpdateSerializer(
-            data={
-                'title': 'Metadata Course',
-                'description': 'Course for metadata text fields.',
-                'category': self.category.pk,
-                'learning_objectives': 'Build APIs\nShip it',
-                'prerequisites': 'Know Python',
-                'audiences': 'Backend devs\nStudents',
-            },
+            data=_create_payload(
+                self.category,
+                title='Metadata Course',
+                description='Course for metadata text fields.',
+                learning_objectives='Build APIs\nShip it',
+                prerequisites='Know Python',
+                audiences='Backend devs\nStudents',
+            ),
             context={'request': self._request()},
         )
         self.assertTrue(serializer.is_valid(), serializer.errors)
@@ -87,12 +107,12 @@ class CourseMetadataTextFieldTests(APITestCase):
 
     def test_whitespace_only_lines_are_stripped(self):
         serializer = NidusCourseCreateUpdateSerializer(
-            data={
-                'title': 'Whitespace Course',
-                'description': 'Normalization check.',
-                'category': self.category.pk,
-                'learning_objectives': '  A  \n\n  B  \n   \n',
-            },
+            data=_create_payload(
+                self.category,
+                title='Whitespace Course',
+                description='Normalization check.',
+                learning_objectives='  A  \n\n  B  \n   \n',
+            ),
             context={'request': self._request()},
         )
         self.assertTrue(serializer.is_valid(), serializer.errors)
@@ -100,20 +120,22 @@ class CourseMetadataTextFieldTests(APITestCase):
         course.refresh_from_db()
         self.assertEqual(course.learning_objectives, 'A\nB')
 
-    def test_all_whitespace_normalizes_to_empty_string(self):
+    def test_all_whitespace_is_rejected_on_required_field(self):
+        # These three fields are required and non-blank, so a value that
+        # normalizes away to nothing is a validation error — not an empty
+        # string. (Blank is still the model-level default; see
+        # test_fields_default_to_empty_string.)
         serializer = NidusCourseCreateUpdateSerializer(
-            data={
-                'title': 'All Whitespace Course',
-                'description': 'Normalization check.',
-                'category': self.category.pk,
-                'prerequisites': '   \n   \n',
-            },
+            data=_create_payload(
+                self.category,
+                title='All Whitespace Course',
+                description='Normalization check.',
+                prerequisites='   \n   \n',
+            ),
             context={'request': self._request()},
         )
-        self.assertTrue(serializer.is_valid(), serializer.errors)
-        course = serializer.save()
-        course.refresh_from_db()
-        self.assertEqual(course.prerequisites, '')
+        self.assertFalse(serializer.is_valid())
+        self.assertIn('prerequisites', serializer.errors)
 
     def test_update_replaces_text_field(self):
         course = NidusCourse.objects.create(
@@ -156,11 +178,11 @@ class CourseDeliveryModeTests(APITestCase):
 
     def test_create_defaults_to_self_paced(self):
         serializer = NidusCourseCreateUpdateSerializer(
-            data={
-                'title': 'Default Delivery Course',
-                'description': 'No delivery_mode passed.',
-                'category': self.category.pk,
-            },
+            data=_create_payload(
+                self.category,
+                title='Default Delivery Course',
+                description='No delivery_mode passed.',
+            ),
             context={'request': self._request()},
         )
         self.assertTrue(serializer.is_valid(), serializer.errors)
@@ -169,12 +191,12 @@ class CourseDeliveryModeTests(APITestCase):
 
     def test_create_with_scheduled_persists(self):
         serializer = NidusCourseCreateUpdateSerializer(
-            data={
-                'title': 'Cohort Course',
-                'description': 'A cohort-delivered course.',
-                'category': self.category.pk,
-                'delivery_mode': 'scheduled',
-            },
+            data=_create_payload(
+                self.category,
+                title='Cohort Course',
+                description='A cohort-delivered course.',
+                delivery_mode='scheduled',
+            ),
             context={'request': self._request()},
         )
         self.assertTrue(serializer.is_valid(), serializer.errors)

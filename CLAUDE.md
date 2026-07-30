@@ -422,9 +422,10 @@ Do not duplicate these in individual apps. If you find yourself writing a permis
 
 - Access token: 12 h lifetime, `Bearer` header
 - Refresh token: 7-day lifetime, rotation + blacklist enabled
-- Tokens returned as JSON body **and** optionally as HttpOnly cookies (see `authentication/utils/cookie_helpers.py`)
+- `UserLoginView` (`POST /api/v1/auth/login/`) sets the tokens **only** as HttpOnly cookies via `set_jwt_cookies()` (`authentication/utils/cookie_helpers.py`) — the JSON response body never contains `access`/`refresh` (only `user_id`/`email`/`full_name`/`user_type`/`is_email_verified`). A browser client cannot read the token from JS.
 - Protected endpoints authenticate from **either** the `Authorization: Bearer` header **or** the `access_token` cookie. `CookieJWTAuthentication` (`authentication/authentication.py`) is registered first in `DEFAULT_AUTHENTICATION_CLASSES`, then header-based `JWTAuthentication`. Cookie name is `JWT_ACCESS_COOKIE_NAME` (default `access_token`) — keep the auth class and `cookie_helpers.py` reading the same setting.
 - Token refresh: `POST /api/v1/auth/token/refresh/`
+- **WS token bridge:** `GET /api/v1/auth/ws-token/` (`WsTokenView`, `IsAuthenticated` + `IsEmailVerified`) returns `{'data': {'token': str(request.auth)}}` — the same access token that authenticated the request (via cookie or header), just handed back as JSON. Exists solely because the `/ws/` WebSocket handshake takes the JWT as a `?token=` query param and cannot read the HttpOnly cookie; the frontend calls this once (cookie-authenticated) to get a string it can put in the WS URL. Does not mint a new token — just echoes the validated one back.
 - Logout (`POST /api/v1/auth/logout/`): blacklists the refresh token (**ownership-checked** — a caller can only blacklist a token whose `user_id` matches them; else 400) + clears JWT cookies + flushes the Django session if one exists (admins). A stateless access token can't be revoked — it lives until expiry.
 - OAuth: authorization-code flow for Google and LinkedIn; callback URLs configured via env vars
 

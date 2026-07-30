@@ -10,6 +10,7 @@ from authentication.views import (
     UserLoginView,
     LogoutView,
     TokenRefreshView,
+    WsTokenView,
     VerifyOTPView,
     ResendOTPView,
     ForgotPasswordView,
@@ -38,6 +39,7 @@ urlpatterns = [
     path('login/', UserLoginView.as_view(), name='login'),
     path('token/refresh/', TokenRefreshView.as_view(), name='token-refresh'),
     path('logout/', LogoutView.as_view(), name='logout'),
+    path('ws-token/', WsTokenView.as_view(), name='ws-token'),
 
     # Google OAuth (authorization-code flow)
     path('google/', GoogleAuthRedirectView.as_view(), name='google-redirect'),

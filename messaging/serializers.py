@@ -53,6 +53,7 @@ class ConversationSerializer(serializers.ModelSerializer):
     course_title = serializers.SerializerMethodField()
     course_slug = serializers.SerializerMethodField()
     unread_count = serializers.SerializerMethodField()
+    last_message = serializers.SerializerMethodField()
 
     class Meta:
         model = Conversation
@@ -64,6 +65,7 @@ class ConversationSerializer(serializers.ModelSerializer):
             'course_slug',
             'participants',
             'unread_count',
+            'last_message',
             'updated_at',
             'created_at',
         ]
@@ -74,6 +76,20 @@ class ConversationSerializer(serializers.ModelSerializer):
 
     def get_course_slug(self, obj: Conversation):
         return obj.course.slug if obj.course_id else None
+
+    def get_last_message(self, obj: Conversation):
+        message = (
+            Message.objects.filter(conversation=obj, is_deleted=False)
+            .order_by('-created_at')
+            .first()
+        )
+        if message is None:
+            return None
+        return {
+            'body': message.body,
+            'sender_id': message.sender_id,
+            'created_at': message.created_at,
+        }
 
     def get_unread_count(self, obj: Conversation) -> int:
         request = self.context.get('request')

@@ -1,44 +1,44 @@
-Django>=5.1,<6.0
-djangorestframework>=3.15,<4.0
+Django==5.2.14
+djangorestframework==3.17.1
 
 # API and auth
-djangorestframework-simplejwt>=5.3,<6.0
-django-filter>=24.3,<25.0
-django-allauth>=65.0.0,<66.0.0
-google-auth>=2.38,<3.0
-requests>=2.32,<3.0
+djangorestframework-simplejwt==5.5.1
+django-filter==24.3
+django-allauth==65.16.1
+google-auth==2.52.0
+requests==2.34.1
 
 # Cross-origin requests for frontend apps
-django-cors-headers>=4.4,<5.0
+django-cors-headers==4.9.0
 
 # Environment and config
-python-dotenv>=1.0,<2.0
-django-environ>=0.11,<1.0
+python-dotenv==1.2.2
+django-environ==0.13.0
 
 # Database and media
-psycopg2-binary>=2.9,<3.0
-Pillow>=12.0,<13.0
+psycopg2-binary==2.9.12
+Pillow==12.2.0
 
 # Async processing + queue
-celery>=5.4,<6.0
-redis>=5.2,<6.0
+celery==5.6.3
+redis==5.3.1
 
 # Real-time WebSocket
-channels>=4.0,<5.0
-channels-redis>=4.0,<5.0
-daphne>=4.0,<5.0
+channels==4.3.2
+channels-redis==4.3.0
+daphne==4.2.2
 
 # Video processing
-ffmpeg-python>=0.2,<1.0
+ffmpeg-python==0.2.0
 
 # Code execution sandbox (Docker SDK for the coding-exercise runner)
-docker>=7.0,<8.0
+docker==7.1.0
 
 # Production server
-gunicorn>=22.0,<23.0
+gunicorn==22.0.0
 
 # Certificate PDF generation
-reportlab>=4.0,<5.0
+reportlab==4.5.1
 
 # Admin-console device/session tracking: parse User-Agent → browser/os/device
-user-agents>=2.2,<3.0
+user-agents==2.2.0

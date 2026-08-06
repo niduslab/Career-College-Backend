@@ -250,20 +250,21 @@ MEDIA_ROOT = Path(env('MEDIA_ROOT', default=str(BASE_DIR / 'media')))
 FFMPEG_BINARY_PATH = env('FFMPEG_BINARY_PATH', default='ffmpeg')
 FFPROBE_BINARY_PATH = env('FFPROBE_BINARY_PATH', default='ffprobe')
 
-# Django Channels — Redis channel layer (same Redis instance as Celery)
+# Celery
+CELERY_BROKER_URL = env('CELERY_BROKER_URL', default='redis://127.0.0.1:6379/0')
+CELERY_RESULT_BACKEND = env('CELERY_RESULT_BACKEND', default=CELERY_BROKER_URL)
+
+# Django Channels — Redis channel layer.
 CHANNEL_LAYERS = {
     'default': {
         'BACKEND': 'channels_redis.core.RedisChannelLayer',
         'CONFIG': {
-            'hosts': [env('CELERY_BROKER_URL', default='redis://127.0.0.1:6379/0')],
+            'hosts': [env('CHANNEL_LAYERS_URL', default=CELERY_BROKER_URL)],
             'expiry': 60,
         },
     },
 }
 
-# Celery
-CELERY_BROKER_URL = env('CELERY_BROKER_URL', default='redis://127.0.0.1:6379/0')
-CELERY_RESULT_BACKEND = env('CELERY_RESULT_BACKEND', default=CELERY_BROKER_URL)
 CELERY_ACCEPT_CONTENT = ['json']
 CELERY_TASK_SERIALIZER = 'json'
 CELERY_RESULT_SERIALIZER = 'json'
@@ -278,11 +279,7 @@ CELERY_TASK_ROUTES = {
     'notifications.tasks.purge_old_notifications_task': {'queue': 'notifications'},
 }
 
-# Run tasks inline during the test suite so `.delay()` never hits the real
-# broker (tests would otherwise enqueue tasks that a dev worker later drains
-# against the wrong DB). Set at module level so Celery picks it up at
-# `config_from_object` time — `override_settings` is too late (the app is
-# already configured by then).
+
 if TESTING:
     CELERY_TASK_ALWAYS_EAGER = True
     CELERY_TASK_EAGER_PROPAGATES = True

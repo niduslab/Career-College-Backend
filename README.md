@@ -92,9 +92,10 @@ DB_PORT=5432
 # Email (prints to terminal instead of sending)
 EMAIL_BACKEND=django.core.mail.backends.console.EmailBackend
 
-# Redis / Celery
+# Redis / Celery — one instance, separate db index per concern
 CELERY_BROKER_URL=redis://127.0.0.1:6379/0
-CELERY_RESULT_BACKEND=redis://127.0.0.1:6379/0
+CELERY_RESULT_BACKEND=redis://127.0.0.1:6379/1
+CHANNEL_LAYERS_URL=redis://127.0.0.1:6379/2
 
 # FFmpeg binaries
 FFMPEG_BINARY_PATH=ffmpeg       # or absolute path, e.g. C:\tools\ffmpeg.exe
@@ -227,8 +228,9 @@ For **production / shared hosts** (or any local box you want to test the gVisor 
 | `EMAIL_HOST_PASSWORD` | Prod only | — | SMTP password |
 | `DEFAULT_FROM_EMAIL` | Prod only | — | Sender address |
 | `OTP_RATE_LIMIT` | No | — | e.g. `20/min` |
-| `CELERY_BROKER_URL` | Yes | `redis://127.0.0.1:6379/0` | Redis URL |
-| `CELERY_RESULT_BACKEND` | No | same as broker | |
+| `CELERY_BROKER_URL` | Yes | `redis://127.0.0.1:6379/0` | Redis URL. Also the fallback for the two vars below. |
+| `CELERY_RESULT_BACKEND` | No | same as broker | Use a separate db index (`/1`) to keep result keys off the broker. |
+| `CHANNEL_LAYERS_URL` | No | same as broker | Redis URL for the Channels/WebSocket layer — use a separate db index (`/2`). Must be identical across every daphne process and every worker that calls `group_send`; a mismatch delivers to the wrong db instead of erroring. Requires cluster-mode-disabled Redis (cluster mode has db 0 only). |
 | `CELERY_RESULT_EXPIRES` | No | `3600` | TTL (seconds) for Celery results. Coding-exercise Run task results expire after this — frontend polling should give up past this window. |
 | `RUNNER_RUNTIME` | No | `runc` if `DEBUG=True`, else `runsc` | Docker runtime used to launch coding-exercise containers. Defaults to `runc` in dev (no gVisor needed) and `runsc` (gVisor) in prod for syscall-level isolation. Override explicitly to flip either default. |
 | `RUNNER_IMAGE_PYTHON` | No | `python:3.12-slim` | Override the Python runner container image. |

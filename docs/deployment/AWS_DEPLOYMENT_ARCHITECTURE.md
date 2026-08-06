@@ -146,7 +146,7 @@ flowchart TB
         end
         subgraph privdata [Private subnets — data tier]
             RDS[(RDS PostgreSQL 16<br/>Multi-AZ, gp3)]
-            REDIS[(ElastiCache Redis<br/>cache.t4g.micro)]
+            REDIS[(Self-hosted Redis 7<br/>dedicated EC2 t4g.micro, docker-compose)]
         end
     end
 
@@ -180,7 +180,7 @@ flowchart TB
 | **EC2 ASG (app)** | Gunicorn+Uvicorn behind Nginx | See §3. ASG across 2 AZs, min 2 — that *is* the HA story for the web tier. |
 | **EC2 (worker)** | Celery + beat + FFmpeg + Docker/gVisor runner | Isolates untrusted-code execution and CPU-heavy transcoding away from request latency. Single instance initially (beat must run exactly once); recovery via ASG min=max=1 ("self-healing singleton"). |
 | **RDS PostgreSQL 16** | Primary datastore | Managed backups, Multi-AZ failover, `pg_trgm` supported. Self-managed PG on EC2 saves ~40% but costs far more in operational risk — not worth it. Aurora: 2–3× cost, benefits (fast clones, 15 replicas) irrelevant at this scale — revisit at ~100k users. |
-| **ElastiCache Redis** | Celery broker + channel layer + Django cache | See §7. |
+| **Self-hosted Redis (EC2, docker-compose)** | Celery broker + channel layer + Django cache | Explicit call to self-host instead of ElastiCache — see §7 for rationale and trade-offs. |
 | **S3** (2 buckets) | Media (private) + static (public via CloudFront) | Durability, unlimited size, unblocks horizontal scaling. See §5. |
 | **CloudFront** | CDN for HLS video, thumbnails, static | Video delivery from S3 direct would be slow (single region) and expensive per GB vs CloudFront; signed cookies gate paid content. |
 | **Route 53** | DNS | Alias records to ALB/CloudFront; health-checked failover later. |
@@ -194,7 +194,7 @@ flowchart TB
 | **AWS Backup** | Centralized RDS snapshot + (optional) EBS policies | One place for retention rules and restore testing. |
 | **SES** | Replace Gmail SMTP | $0.10/1k emails, high deliverability, drop-in via Django SMTP settings against SES SMTP endpoint. |
 
-**Not recommended (and why):** ~~EKS~~ (Kubernetes overhead absurd at 3 instances) · ~~EFS for media~~ (works as a stopgap for shared `MEDIA_ROOT`, but ~3× S3 cost/GB, no CDN story, throughput limits vs 10k-course video library — go straight to S3) · ~~SQS as Celery broker~~ (Celery's SQS transport doesn't support the result backend you use for coding-task polling (`AsyncResult`), and Channels needs Redis anyway — you'd run Redis regardless) · ~~ElastiCache Serverless~~ (min ~$90/mo; a t4g.micro node is $11) · ~~Global Accelerator, App Mesh, X-Ray~~ (see §9) · ~~AWS MediaConvert~~ for now (your FFmpeg pipeline works and is 5–10× cheaper per minute; revisit if transcoding operations become a burden).
+**Not recommended (and why):** ~~EKS~~ (Kubernetes overhead absurd at 3 instances) · ~~EFS for media~~ (works as a stopgap for shared `MEDIA_ROOT`, but ~3× S3 cost/GB, no CDN story, throughput limits vs 10k-course video library — go straight to S3) · ~~SQS as Celery broker~~ (Celery's SQS transport doesn't support the result backend you use for coding-task polling (`AsyncResult`), and Channels needs Redis anyway — you'd run Redis regardless) · ~~ElastiCache (any tier)~~ **product decision: self-host Redis instead** — see §7 · ~~Global Accelerator, App Mesh, X-Ray~~ (see §9) · ~~AWS MediaConvert~~ for now (your FFmpeg pipeline works and is 5–10× cheaper per minute; revisit if transcoding operations become a burden).
 
 ---
 
@@ -206,7 +206,7 @@ flowchart TB
 |---|---|---|---|---|
 | **App server ×2** (Nginx + Gunicorn/Uvicorn ASGI) | **t4g.medium** | 2 / 4 GB | 15–35% CPU steady; burst credits absorb spikes. 4 GB fits ~5–6 Gunicorn workers + Nginx. | ~$19 each (~$38) |
 | **Worker** (Celery default+notifications queues, beat, FFmpeg, Docker runner) | **c7g.large** | 2 / 4 GB | Bursty 0–100%: FFmpeg pegs cores per job; code runs are short. Compute-optimized because transcoding is pure CPU; t-family burst credits would exhaust on a batch of uploads. | ~$58 |
-| Redis | — (ElastiCache, §7) | — | — | ~$11 |
+| Redis | **t4g.micro**, self-hosted (docker-compose, §7) | 2 / 1 GB | Low, single-purpose box | ~$8 |
 | Beat | Runs on the worker instance (no separate box) | — | — | $0 |
 
 **Sizing logic:**
@@ -214,6 +214,7 @@ flowchart TB
 - *App tier:* moderate traffic + 12 h JWTs (no per-request auth DB storm) + mostly simple CRUD → 2 vCPU boxes are plenty. Two instances in different AZs is the availability floor; scale out, not up. **t4g** over m7g because the workload is bursty API traffic, and t4g is ~⅓ the price of m7g.large — with `unlimited` burst mode as the safety valve.
 - *Worker:* **c7g** over t4g because sustained FFmpeg encoding is exactly the workload burst instances are worst at (credit exhaustion → 5% baseline throttle mid-transcode). c7g.large transcodes roughly in real-time-or-better for 1080p→5 renditions. If upload volume grows, scale to c7g.xlarge or add a second worker pointed at a dedicated `transcode` queue before touching the web tier.
 - Give the worker a **100–200 GB gp3 EBS volume** — FFmpeg scratch space (source + 5 renditions concurrently) plus Docker images.
+- *Redis:* dedicated box, not co-located on the worker instance — the worker's SG is deliberately ingress-free (§8), and both the app tier (broker enqueue + Channels `group_send`) and the worker (task consume) need network access to Redis. A small 20 GB gp3 volume covers the AOF file; `t4g.micro` (1 GB RAM) is ample for a queue depth that fits comfortably in memory.
 - **Savings plan:** after 1–2 months of stable usage, buy a 1-year no-upfront Compute Savings Plan (~30% off) for the steady-state fleet.
 
 ---
@@ -332,13 +333,22 @@ STORAGES = {
 
 **Verdict from the codebase: Redis and Celery are hard requirements, not optional.** Celery broker/result backend (`CELERY_BROKER_URL`), Channels channel layer (`CHANNEL_LAYERS`), 5 beat schedules, and the coding-exercise polling flow (`AsyncResult` via result backend) all depend on Redis.
 
+**Decision: self-hosted Redis, not ElastiCache — product/team call, overrides the managed-service default.** Production runs the same image as [docker-compose.yml](../../docker-compose.yml) (`redis:7-alpine`, `--appendonly yes`, `--maxmemory-policy noeviction`) on a dedicated small EC2 instance in a private data subnet, wrapped in a systemd unit that runs `docker compose up -d` on boot. Not co-located on the worker box — the worker's SG is deliberately ingress-free (§8), and both the app tier (broker enqueue, Channels `group_send`) and the worker (task consume) need to reach Redis over the network, which would force ingress onto the worker regardless.
+
 | Option | Cost | Complexity | Verdict |
 |---|---|---|---|
-| **ElastiCache Redis, cache.t4g.micro** (single node, no replica) | ~$11/mo | Lowest — managed patching, metrics, snapshots | ✅ **Recommended start.** If the node dies, AWS replaces it in minutes; consequences are tolerable (in-flight Celery tasks redeliver — your tasks are already `acks_late`/idempotent by design; WebSocket clients reconnect; queued emails re-sent via resend flow). |
-| ElastiCache + replica (Multi-AZ) | ~$22/mo | Low | Upgrade when WebSocket messaging becomes business-critical. Cheap insurance later. |
-| Self-hosted Redis on the worker EC2 | ~$0 | You own persistence, memory limits, patching; couples broker to worker lifecycle (a worker redeploy nukes the queue) | ❌ False economy at $11/mo delta. |
+| **Self-hosted Redis, dedicated t4g.micro EC2 (docker-compose)** | ~$8/mo + $2 EBS | You own OS patching, Redis upgrades, and backups; `appendonly yes` gives crash-safe persistence to EBS | ✅ **Chosen.** Cheaper than ElastiCache and keeps ops entirely in the team's existing docker-compose workflow — same config runs in dev and prod. Accepted trade-off: no managed failover, no automatic node replacement. |
+| ElastiCache Redis, cache.t4g.micro (single node) | ~$11/mo | Lowest — managed patching, metrics, snapshots | ❌ Rejected by product decision — team prefers to run and own Redis directly rather than take on a managed-service dependency. |
+| ElastiCache + replica (Multi-AZ) | ~$22/mo | Low | ❌ Same rejection; revisit only if the self-hosted single-node failure mode becomes unacceptable (see mitigations below). |
 | SQS as Celery broker | ~$0 | No result backend → breaks `LearnerCodingTaskStatusView` polling; Channels still needs Redis | ❌ Rejected on functional grounds. |
 | EventBridge Scheduler replacing beat | ~$0 | Would need HTTP endpoints per task or Lambda shims | ❌ Beat already works and runs 5 schedules; keep it. |
+
+**Failure mode & mitigations (the honest cost of self-hosting):** if the Redis instance dies, Celery brokering and the Channels layer both go down until it's replaced — no automatic failover.
+- **Recovery is scripted, not manual:** the instance sits in an ASG (min=max=1, mirroring the worker's "self-healing singleton" pattern) with a launch template that runs the same docker-compose bootstrap; a terminated instance is replaced automatically, but a **new EBS volume means the AOF file — and any in-flight queue — is lost.**
+- **Consequences are tolerable given how the app is built:** Celery tasks are `acks_late`/idempotent by design (survives message loss same as they survive worker crashes), WebSocket clients reconnect and re-fetch state, queued notification emails are covered by the resend flow. This is the same blast radius the original ElastiCache-node-dies scenario had — the difference is AWS doesn't auto-replace the node for you.
+- **Snapshot the EBS volume** (AWS Backup, daily) so a deliberate instance replacement (not just a crash) can restore the AOF file instead of starting from an empty queue.
+- **Never let a deploy touch the Redis service** — app/worker deploys restart their own systemd units only; the Redis box has its own independent deploy path (OS patches only, rarely).
+- If this failure mode ever becomes unacceptable (WebSocket messaging turns business-critical, queue loss starts costing real money), the escalation path is a self-hosted **replica** (Redis replication, manual promotion) before reaching for ElastiCache — see §12.
 
 **Queue topology (small but important change):** split heavy work from latency-sensitive work:
 
@@ -349,7 +359,7 @@ STORAGES = {
 
 One worker instance runs all four queues initially (separate worker *processes* per queue via systemd); the split means scaling later is a config change, not a refactor. Also set `CELERY_BROKER_TRANSPORT_OPTIONS = {'visibility_timeout': ...}` above your longest transcode time, or long jobs will be redelivered mid-run.
 
-**Django cache:** once ElastiCache exists, configure `CACHES` (separate Redis DB index) and cache the catalog list/detail responses (§14).
+**Django cache:** once the self-hosted Redis instance is up, configure `CACHES` (separate Redis DB index) and cache the catalog list/detail responses (§14).
 
 ---
 
@@ -386,7 +396,8 @@ One worker instance runs all four queues initially (separate worker *processes* 
 | ALB p95 latency | > 2 s for 10 min |
 | RDS CPU / FreeableMemory / FreeStorageSpace | > 80% / < 400 MB / < 15 GB |
 | RDS DatabaseConnections | > 80% of max |
-| ElastiCache memory / evictions | > 75% / evictions > 0 (an evicted Celery message is a lost task) |
+| Redis memory / evictions (custom metric via CW agent `redis-cli INFO` or `redis_exporter`) | > 75% / evictions > 0 (an evicted Celery message is a lost task) |
+| Redis instance StatusCheckFailed | ≥ 1 (auto-recover via ASG; page — this is now a self-managed single point of failure) |
 | **Celery queue depth** (custom metric: `LLEN` per queue pushed by a cron/agent script) | default > 100, transcode > 20, notifications > 200 for 15 min — *this is your "emails silently not sending" detector* |
 | Worker instance StatusCheckFailed | ≥ 1 (auto-recover) |
 | EC2 CPUCreditBalance (t4g app tier) | < 50 |
@@ -442,7 +453,7 @@ Approximate, ap-south-1, on-demand, USD/month. CloudFront/S3 lines assume media 
 | EC2 worker | shared with app — $0 | 1× c7g.large — $58 | 2× c7g.xlarge — $230 |
 | EBS (gp3) | 50 GB — $5 | 350 GB total — $32 | 700 GB — $65 |
 | RDS PostgreSQL | db.t4g.small single-AZ + 50 GB — $32 | **db.t4g.medium Multi-AZ** + 100 GB gp3 — $115 | db.m7g.large Multi-AZ + replica — $480 |
-| ElastiCache Redis | self-host on app box — $0 | cache.t4g.micro — $11 | cache.t4g.small ×2 (Multi-AZ) — $46 |
+| Redis (self-hosted, docker-compose) | shared w/ app box — $0 | dedicated t4g.micro — $8 | t4g.small ×2 replicated — $17 |
 | ALB | $22 (16 + LCU) | $28 | $45 |
 | NAT Gateway | none (public subnets + strict SGs) — $0 | 1× — $37 + data | 2× — $80 |
 | S3 media | 200 GB — $5 | 5 TB w/ lifecycle — $95 | 25 TB w/ lifecycle — $420 |
@@ -454,9 +465,9 @@ Approximate, ap-south-1, on-demand, USD/month. CloudFront/S3 lines assume media 
 | CloudWatch (logs+alarms+dashboard) | $5 | $20 | $60 |
 | Backups (RDS retention + AWS Backup) | $3 | $12 | $40 |
 | SES | $1 | $3 | $15 |
-| **Total** | **≈ $115** | **≈ $675** | **≈ $2,950** |
+| **Total** | **≈ $115** | **≈ $672** | **≈ $2,921** |
 
-Notes: recommended-tier total is ≈ $465 *excluding* video storage/egress — the $210 CloudFront + $95 S3 lines swing ±3× with actual watch-hours. A 1-yr Compute Savings Plan cuts the EC2/RDS lines ~30% (≈ –$60/mo at recommended tier). If video costs balloon, the specialist-provider comparison in §5.5 is the lever.
+Notes: recommended-tier total is ≈ $462 *excluding* video storage/egress — the $210 CloudFront + $95 S3 lines swing ±3× with actual watch-hours. A 1-yr Compute Savings Plan cuts the EC2/RDS lines ~30% (≈ –$60/mo at recommended tier). If video costs balloon, the specialist-provider comparison in §5.5 is the lever.
 
 ---
 
@@ -465,7 +476,7 @@ Notes: recommended-tier total is ≈ $465 *excluding* video storage/egress — t
 **50,000 users (~2–3× today's design load)** — configuration changes only:
 - App ASG 2→3–4 × t4g.medium (target-tracking on CPU 60%).
 - Second worker; split queues across workers (`transcode`+`code_exec` on one, `default`+`notifications` on the other).
-- ElastiCache → Multi-AZ replica.
+- Redis → add a self-hosted replica (Redis replication, manual promotion) if the single-node failure mode (§7) starts to bite. Re-evaluate ElastiCache only if the ops burden clearly outweighs the cost delta by this point.
 - RDS: enable Performance Insights, verify cache hit ratio; likely still db.t4g.medium.
 - Add CloudFront in front of the API (`/api/*` behavior, caching disabled, WAF at edge) if latency from outside BD matters.
 
@@ -478,7 +489,7 @@ Notes: recommended-tier total is ≈ $465 *excluding* video storage/egress — t
 **1,000,000 users** — architectural evolution:
 - Aurora PostgreSQL (read scaling to 15 replicas, fast failover) or partitioned RDS; token-blacklist and watch-progress tables get partitioning/pruning strategies.
 - Web tier fully on ECS with target-tracking autoscaling; workers as independent ECS services per queue with queue-depth-based scaling.
-- ElastiCache cluster mode; separate Redis for broker vs channels vs cache.
+- Self-hosted Redis Cluster (sharded), or finally adopt managed ElastiCache once the ops burden of running Redis yourself outweighs the cost saved; separate Redis for broker vs channels vs cache either way.
 - Media: multi-CDN or specialist video platform, mandatory.
 - Split hot paths if profiling justifies it (e.g., progress-tracking write path → its own service + queue). **Nothing in the current design forces a rewrite — the service boundaries (apps, service layer, queues) already map to extraction seams.**
 
@@ -499,7 +510,7 @@ Notes: recommended-tier total is ≈ $465 *excluding* video storage/egress — t
 
 **Phase 2 — Data tier**
 6. RDS PostgreSQL 16, db.t4g.medium, Multi-AZ, gp3 100 GB, encrypted, 14-day backups, deletion protection ON. `CREATE EXTENSION pg_trgm;` (superuser step, before first migrate).
-7. ElastiCache Redis cache.t4g.micro in private subnets.
+7. Redis: launch a dedicated t4g.micro EC2 (20 GB gp3) in a private data subnet; deploy the repo's `docker-compose.yml` redis service via a systemd unit (`docker compose up -d` on boot, `restart: unless-stopped` already set); ASG min=max=1 for self-healing on instance failure (§7 covers the EBS-loss trade-off).
 
 **Phase 3 — Compute**
 8. Build AMI (or user-data script): Python 3.12, Nginx, app venv, CW agent, SSM agent (preinstalled on AL2023). Worker AMI additionally: FFmpeg, Docker + gVisor (`runsc` runtime registered in daemon.json), ECR credential helper.

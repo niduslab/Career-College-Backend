@@ -77,6 +77,21 @@ from courses.all_views.certificate_views import (
     CertificateDownloadView,
     CertificateVerifyView,
     LearnerCertificateView,
+    MyCertificateListView,
+)
+from courses.all_views.dashboard_views import (
+    LearnerActivityFeedView,
+    LearnerContinueView,
+    LearnerDashboardSummaryView,
+    LearnerUpcomingView,
+)
+from courses.all_views.wishlist_views import (
+    CourseWishlistView,
+    WishlistListView,
+)
+from courses.all_views.note_views import (
+    LearnerNoteDetailView,
+    LearnerNoteListCreateView,
 )
 from courses.all_views.review_views import (
     CourseReviewListView,
@@ -175,8 +190,17 @@ __all__ = [
     'LearnerCodingSubmissionDetailView',
     'LearnerCodingSubmissionRetryView',
     'LearnerCertificateView',
+    'MyCertificateListView',
     'CertificateVerifyView',
     'CertificateDownloadView',
+    'LearnerDashboardSummaryView',
+    'LearnerActivityFeedView',
+    'LearnerUpcomingView',
+    'LearnerContinueView',
+    'WishlistListView',
+    'CourseWishlistView',
+    'LearnerNoteListCreateView',
+    'LearnerNoteDetailView',
     'CourseReviewListView',
     'CourseReviewSummaryView',
     'MyReviewView',

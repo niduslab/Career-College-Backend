@@ -33,6 +33,11 @@ gap noted, since the SRS requirement is not fully met.
 - Direct messaging with instructors
 - In-app notification feed + WebSocket real-time delivery
 - Paid course **and** paid webinar purchase via SSLCommerz hosted checkout (sandbox; BDT; cards/bKash/Nagad/mobile banking through the gateway), server-side validation, PAID enrollment / webinar registration on success, order history endpoints
+- Learner dashboard aggregates: KPI summary, recent-activity feed (six sources), upcoming cohort/drip/webinar dates, resume-target ("continue learning")
+- Day streak backed by an append-only activity-day record (`LearnerActivityDay`) — counts lecture/quiz/assignment/coding engagement, excludes mere browsing and instructor preview
+- Certificates list endpoint (alongside the existing per-course fetch, PDF download and public verify)
+- Course wishlist: save/unsave, list, and an `is_wishlisted` flag on catalog cards
+- Private learner notes with tags, colours, pinning, and optional course/lecture/timestamp anchors
 
 ### Features Not Built
 - Learning preferences (topics/difficulty/learning style) and privacy controls
@@ -41,10 +46,11 @@ gap noted, since the SRS requirement is not fully met.
 - Personalized recommendations
 - Dynamic learning-path recommendations
 - Stripe payment option (SSLCommerz only today; SRS also lists Stripe)
-- Wishlist and price-drop alerts
+- Price-drop alerts on wishlisted courses (the wishlist itself is built; alerting is not)
 - Predicted completion timeline
 - Skill assessments (pre-course / post-course)
-- Dashboard: upcoming quizzes/assignments/live sessions, bookmarks, gamification stats
+- Dashboard XP / gamification stats — `total_xp` is deliberately absent from the summary endpoint until a `LearnerXpEvent` ledger exists (see `docs/architecture/27-learner-dashboard.md`)
+- Bookmarks (distinct from notes and wishlist)
 - Adaptive content delivery (reorder by learning style/performance)
 - Playback-speed control (backend not required; no server support)
 - Closed captions, subtitles, video transcripts, interactive transcripts

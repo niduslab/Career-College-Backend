@@ -213,6 +213,9 @@ class QuizAttempt(TimestampedModel):
         indexes = [
             models.Index(fields=['user', 'quiz', '-submitted_at'], name='idx_qattempt_user_quiz_date'),
             models.Index(fields=['quiz', '-submitted_at'], name='idx_qattempt_quiz_date'),
+            # Backs the learner activity feed's per-user top-N scan, which does
+            # not filter on `quiz` and so cannot use the composite above.
+            models.Index(fields=['user', '-submitted_at'], name='idx_qattempt_user_date'),
         ]
 
     def __str__(self):
@@ -393,6 +396,8 @@ class AssignmentSubmission(TimestampedModel):
         indexes = [
             models.Index(fields=['user', 'assignment', '-submitted_at'], name='idx_asub_user_assign_date'),
             models.Index(fields=['assignment', 'status'], name='idx_asub_assign_status'),
+            # Learner activity feed — see the QuizAttempt note above.
+            models.Index(fields=['user', '-submitted_at'], name='idx_asub_user_date'),
         ]
         constraints = [
             models.UniqueConstraint(
@@ -508,6 +513,8 @@ class CodingSubmission(TimestampedModel):
         indexes = [
             models.Index(fields=['user', 'exercise', '-submitted_at'], name='idx_csub_user_ex_date'),
             models.Index(fields=['status'], name='idx_csub_status'),
+            # Learner activity feed — see the QuizAttempt note above.
+            models.Index(fields=['user', '-submitted_at'], name='idx_csub_user_date'),
             models.Index(fields=['submitted_at'], name='idx_csub_submitted_at'),
         ]
 

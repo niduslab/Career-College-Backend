@@ -20,7 +20,9 @@ from courses.services import (
     enroll_learner,
     filter_catalog_courses,
     get_catalog_courses,
+    get_learner_enrollment_status_counts,
     get_learner_enrollments,
+    get_wishlisted_course_ids,
     load_catalog_curriculum,
     unenroll_learner,
     update_last_accessed,
@@ -55,7 +57,14 @@ class CatalogCourseListView(APIView):
 
         paginator = StandardResultsSetPagination()
         page = paginator.paginate_queryset(queryset, request)
-        serializer = CatalogCourseListSerializer(page, many=True)
+        # Wishlist flags resolve after pagination: one IN lookup per page
+        # rather than an Exists subquery evaluated across the full match set.
+        serializer = CatalogCourseListSerializer(page, many=True, context={
+            'request': request,
+            'wishlisted_course_ids': get_wishlisted_course_ids(
+                request.user, [course.id for course in page]
+            ),
+        })
         paginated_response = paginator.get_paginated_response(serializer.data)
         paginated_response.data = {'success': True, 'data': paginated_response.data}
         return paginated_response
@@ -82,6 +91,8 @@ class CatalogCourseDetailView(APIView):
             is_published=True,
         )
         context = load_catalog_curriculum(course)
+        context['request'] = request
+        context['wishlisted_course_ids'] = get_wishlisted_course_ids(request.user, [course.id])
         return Response(
             {'success': True, 'data': CatalogCourseDetailSerializer(course, context=context).data},
             status=status.HTTP_200_OK,
@@ -203,21 +214,44 @@ class CourseUnenrollView(APIView):
 
 class MyCoursesListView(APIView):
     """
-    GET /api/v1/courses/my-courses/
+    GET /api/v1/courses/my-courses/?status=<all|in_progress|completed>
 
     Paginated list of the authenticated learner's active enrollments.
+
+    The response carries a `status_counts` block alongside the usual paginator
+    keys. The tab counts have to come from the server: they describe the whole
+    enrollment set, and a client counting the rows in one page would be wrong
+    for any learner with more than `page_size` courses.
     """
 
     permission_classes = [IsAuthenticated, IsEmailVerified, IsLearnerUser]
 
     def get(self, request):
-        queryset = get_learner_enrollments(request.user)
+        try:
+            queryset = get_learner_enrollments(
+                request.user,
+                request.query_params.get('status'),
+                include_unenrolled_completed=True,
+            )
+        except ValidationError as e:
+            return Response(
+                {'success': False, 'message': 'Invalid filter parameters.', 'errors': e.message_dict},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
 
         paginator = StandardResultsSetPagination()
         page = paginator.paginate_queryset(queryset, request)
         serializer = EnrollmentSerializer(page, many=True)
         paginated_response = paginator.get_paginated_response(serializer.data)
-        paginated_response.data = {'success': True, 'data': paginated_response.data}
+        paginated_response.data = {
+            'success': True,
+            'data': {
+                **paginated_response.data,
+                'status_counts': get_learner_enrollment_status_counts(
+                    request.user, include_unenrolled_completed=True,
+                ),
+            },
+        }
         return paginated_response
 
 

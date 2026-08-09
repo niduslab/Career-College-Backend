@@ -7,6 +7,8 @@ from courses.models import (
     CourseReview,
     CourseSection,
     Enrollment,
+    LearnerActivityDay,
+    LearnerNote,
     Lecture,
     NidusCourse,
     Quiz,
@@ -17,6 +19,7 @@ from courses.models import (
     VideoAsset,
     VideoProcessingJob,
     WatchProgress,
+    Wishlist,
 )
 
 
@@ -194,6 +197,40 @@ class ReviewVoteAdmin(admin.ModelAdmin):
     search_fields = ('voter__email', 'voter__full_name', 'review__course__title')
     raw_id_fields = ('review', 'voter')
     ordering = ('-created_at',)
+
+
+@admin.register(Wishlist)
+class WishlistAdmin(admin.ModelAdmin):
+    list_display = ('id', 'user', 'course', 'created_at')
+    search_fields = ('user__email', 'user__full_name', 'course__title')
+    raw_id_fields = ('user', 'course')
+    ordering = ('-created_at',)
+
+
+@admin.register(LearnerNote)
+class LearnerNoteAdmin(admin.ModelAdmin):
+    list_display = ('id', 'user', 'title', 'course', 'lecture', 'is_pinned', 'color', 'updated_at')
+    list_filter = ('is_pinned', 'color')
+    search_fields = ('user__email', 'title', 'body', 'course__title')
+    raw_id_fields = ('user', 'course', 'lecture')
+    ordering = ('-updated_at',)
+
+
+@admin.register(LearnerActivityDay)
+class LearnerActivityDayAdmin(admin.ModelAdmin):
+    """Read-only: the table is append-only and written only by the service."""
+
+    list_display = ('id', 'user', 'activity_date', 'created_at')
+    search_fields = ('user__email', 'user__full_name')
+    raw_id_fields = ('user',)
+    ordering = ('-activity_date',)
+    readonly_fields = ('user', 'activity_date', 'created_at')
+
+    def has_add_permission(self, request):
+        return False
+
+    def has_change_permission(self, request, obj=None):
+        return False
 
 
 @admin.register(CourseInstructorInvite)

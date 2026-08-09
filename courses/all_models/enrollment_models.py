@@ -95,6 +95,9 @@ class Enrollment(TimestampedModel):
             models.Index(fields=['user', 'is_active', '-last_accessed_at'], name='idx_enroll_user_active_last'),
             models.Index(fields=['course', 'is_active'], name='idx_enroll_course_active'),
             models.Index(fields=['enrollment_type'], name='idx_enroll_type'),
+            # Learner activity feed orders enrollments by creation, not by
+            # last-accessed, so idx_enroll_user_active_last does not apply.
+            models.Index(fields=['user', '-created_at'], name='idx_enroll_user_created'),
         ]
 
     def clean(self):

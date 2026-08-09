@@ -6,6 +6,15 @@ from courses.views import (
     CertificateDownloadView,
     CertificateVerifyView,
     LearnerCertificateView,
+    MyCertificateListView,
+    LearnerActivityFeedView,
+    LearnerContinueView,
+    LearnerDashboardSummaryView,
+    LearnerUpcomingView,
+    CourseWishlistView,
+    WishlistListView,
+    LearnerNoteDetailView,
+    LearnerNoteListCreateView,
     CourseReviewListView,
     CourseReviewSummaryView,
     MyReviewView,
@@ -104,9 +113,37 @@ urlpatterns = [
     # -------------------------------------------------------------------------
     path('<slug:slug>/enroll/', CourseEnrollView.as_view(), name='course-enroll'),
     path('<slug:slug>/unenroll/', CourseUnenrollView.as_view(), name='course-unenroll'),
+    # Wishlist toggle. Safe beside enroll/unenroll: all three are
+    # <slug>/<fixed-literal>, so they cannot shadow one another.
+    path('<slug:slug>/wishlist/', CourseWishlistView.as_view(), name='course-wishlist'),
     path('my-courses/', MyCoursesListView.as_view(), name='my-courses-list'),
     path('my-courses/<slug:slug>/', MyCoursesDetailView.as_view(), name='my-courses-detail'),
     path('my-courses/<slug:slug>/certificate/', LearnerCertificateView.as_view(), name='my-courses-certificate'),
+
+    # -------------------------------------------------------------------------
+    # Learner dashboard aggregates, certificates list, wishlist, notes
+    #
+    # ORDERING: these are literal-prefixed and must stay above the instructor
+    # block's `path('', ...)` / `path('<int:pk>/', ...)`. They are safe against
+    # the `<slug:slug>/...` routes above because those all pin a fixed second
+    # segment (enroll / unenroll / wishlist / reviews / questions).
+    #
+    # DO NOT nest any of these under `my-courses/` — `my-courses/<slug:slug>/`
+    # (declared just above) would swallow them, e.g. `my-courses/certificates/`
+    # resolves to MyCoursesDetailView with slug='certificates'.
+    # -------------------------------------------------------------------------
+    path('learner/dashboard/summary/', LearnerDashboardSummaryView.as_view(), name='learner-dashboard-summary'),
+    path('learner/activity/', LearnerActivityFeedView.as_view(), name='learner-activity'),
+    path('learner/upcoming/', LearnerUpcomingView.as_view(), name='learner-upcoming'),
+    path('learner/continue/', LearnerContinueView.as_view(), name='learner-continue'),
+
+    path('my-certificates/', MyCertificateListView.as_view(), name='my-certificates-list'),
+
+    path('wishlist/', WishlistListView.as_view(), name='wishlist-list'),
+
+    # Literal `notes/` precedes the numeric detail route.
+    path('notes/', LearnerNoteListCreateView.as_view(), name='learner-note-list-create'),
+    path('notes/<int:pk>/', LearnerNoteDetailView.as_view(), name='learner-note-detail'),
 
     # -------------------------------------------------------------------------
     # Certificate verification and download (public)

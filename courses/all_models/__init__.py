@@ -6,3 +6,6 @@ from .schedule_models import *
 from .certificate_models import *
 from .review_models import *
 from .discussion_models import *
+from .wishlist_models import *
+from .note_models import *
+from .activity_models import *

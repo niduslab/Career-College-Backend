@@ -41,6 +41,7 @@ from courses.models import (
     VideoAsset,
     WatchProgress,
 )
+from courses.services.activity_service import record_learner_activity
 from courses.services.enrollment_service import recalculate_progress
 
 
@@ -318,6 +319,10 @@ def get_consumption_lecture(user, lecture_id: int):
     watch_progress = None
     if not is_instructor:
         watch_progress = WatchProgress.objects.filter(user=user, lecture=lecture).first()
+        # Opening course content is studying — this is what makes re-reading a
+        # finished article count, since its "mark complete" button is gone by
+        # then and nothing else would write.
+        record_learner_activity(user)
 
     return lecture, course, is_instructor, watch_progress
 
@@ -365,6 +370,7 @@ def upsert_watch_progress(
             'is_completed': is_completed,
         },
     )
+    record_learner_activity(user)
     return wp
 
 
@@ -418,6 +424,7 @@ def get_quiz_for_consumption(user, quiz_id: int):
             .order_by('-submitted_at')
             .first()
         )
+        record_learner_activity(user)
 
     return quiz, course, is_instructor, latest_attempt
 
@@ -504,6 +511,7 @@ def submit_quiz_attempt(
     if enrollment is not None:
         transaction.on_commit(lambda: recalculate_progress(enrollment))
 
+    record_learner_activity(user)
     return attempt
 
 
@@ -555,6 +563,7 @@ def get_assignment_for_consumption(user, assignment_id: int):
             .order_by('-submitted_at')
             .first()
         )
+        record_learner_activity(user)
 
     return assignment, course, is_instructor, latest_submission
 
@@ -652,6 +661,7 @@ def submit_assignment(
     transaction.on_commit(
         lambda: grade_assignment_submission_task.delay(submission_id)
     )
+    record_learner_activity(user)
     return submission
 
 
@@ -764,6 +774,7 @@ def get_coding_exercise_for_consumption(user, exercise_id: int):
             .order_by('-submitted_at')
             .first()
         )
+        record_learner_activity(user)
 
     return exercise, course, is_instructor, latest_submission
 
@@ -779,6 +790,8 @@ def run_coding_exercise(user, exercise: CodingExercise, language: str, code: str
     async_result = evaluate_coding_run_task.delay(
         exercise.id, language, code, exercise.time_limit_ms,
     )
+    # A Run persists nothing, but it is still the learner working the problem.
+    record_learner_activity(user)
     return async_result.id
 
 
@@ -832,6 +845,7 @@ def submit_coding_exercise(
     transaction.on_commit(
         lambda: evaluate_coding_submission_task.delay(submission_id)
     )
+    record_learner_activity(user)
     return submission
 
 

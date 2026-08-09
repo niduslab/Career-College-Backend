@@ -248,15 +248,92 @@ def _apply_catalog_sort(queryset, sort, search):
     return queryset.order_by(F('published_at').desc(nulls_last=True), '-id')
 
 
-def get_learner_enrollments(user) -> QuerySet[Enrollment]:
-    """Return active enrollments for a learner, most recently accessed first."""
-    return (
+ENROLLMENT_STATUS_OPTIONS = frozenset({'all', 'in_progress', 'completed'})
+
+
+def _learner_enrollment_scope(include_unenrolled_completed: bool) -> Q:
+    """Base row filter shared by the My Courses list and its tab counts.
+
+    `unenroll_learner` is a soft revoke: it flips `is_active` but preserves
+    progress, `completed_at`, and the issued certificate. So a learner who
+    finishes a course and then unenrolls still *completed* it — hiding the row
+    stranded the certificate with no course to open from, and left My Courses
+    reporting 0 completed while the dashboard summary (which has never
+    filtered on `is_active`) reported 1.
+
+    Opt-in rather than the default, because the resume-target selector shares
+    this queryset and must never point a learner at a course they no longer
+    have access to.
+    """
+    if include_unenrolled_completed:
+        return Q(is_active=True) | Q(completed_at__isnull=False)
+    return Q(is_active=True)
+
+
+def get_learner_enrollments(
+    user,
+    status: str = None,
+    *,
+    include_unenrolled_completed: bool = False,
+) -> QuerySet[Enrollment]:
+    """Return a learner's enrollments, most recently accessed first.
+
+    Active only by default. `include_unenrolled_completed=True` also returns
+    courses the learner finished and later unenrolled from — see
+    `_learner_enrollment_scope`.
+
+    `status` narrows to `in_progress` (never completed) or `completed`.
+    Omitted or 'all' returns everything. Raises ValidationError on an unknown
+    value.
+    """
+    if status not in (None, '') and status not in ENROLLMENT_STATUS_OPTIONS:
+        raise ValidationError({
+            'status': (
+                f'Invalid status "{status}". Must be one of: '
+                f'{", ".join(sorted(ENROLLMENT_STATUS_OPTIONS))}.'
+            )
+        })
+
+    queryset = (
         Enrollment.objects
-        .filter(user=user, is_active=True)
+        .filter(_learner_enrollment_scope(include_unenrolled_completed), user=user)
         .select_related('course__created_by', 'course__category')
         .prefetch_related('course__instructors')
         .order_by(F('last_accessed_at').desc(nulls_last=True), '-created_at')
     )
+
+    if status == 'in_progress':
+        # An unenrolled-but-completed row can never land here: it has a
+        # completed_at, so this filter excludes it either way.
+        queryset = queryset.filter(completed_at__isnull=True, is_active=True)
+    elif status == 'completed':
+        queryset = queryset.filter(completed_at__isnull=False)
+
+    return queryset
+
+
+def get_learner_enrollment_status_counts(
+    user,
+    *,
+    include_unenrolled_completed: bool = False,
+) -> dict:
+    """Tab counts for the My Courses list, in one aggregate.
+
+    Must use the same scope as the list it labels, or the tabs advertise rows
+    the list cannot show.
+    """
+    row = Enrollment.objects.filter(
+        _learner_enrollment_scope(include_unenrolled_completed), user=user,
+    ).aggregate(
+        all=Count('id'),
+        in_progress=Count('id', filter=Q(completed_at__isnull=True, is_active=True)),
+        completed=Count('id', filter=Q(completed_at__isnull=False)),
+    )
+    return {
+        'all': row['all'] or 0,
+        'in_progress': row['in_progress'] or 0,
+        'completed': row['completed'] or 0,
+    }
 
 
 def _assert_schedule_enrollable(schedule, *, enforce=True):
@@ -496,9 +573,21 @@ def recalculate_progress(enrollment: Enrollment) -> Enrollment:
         enrollment.completed_at = timezone.now()
         update_fields.append('completed_at')
         newly_completed = True
-    elif progress < 100 and enrollment.completed_at is not None:
-        enrollment.completed_at = None
-        update_fields.append('completed_at')
+
+    # Completion is sticky: `completed_at` is never cleared once set.
+    #
+    # It used to be reset whenever progress fell back below 100, but
+    # `total_items` counts every SectionContent row in the course, so an
+    # instructor adding one lecture silently un-completed every learner who
+    # had already finished — the course dropped out of the My Courses
+    # "Completed" tab and out of the dashboard's completed count on their next
+    # watch tick or submission. Worse, the certificate is issued via
+    # `get_or_create` and is never revoked, so the two disagreed: a learner
+    # held a certificate for a course the platform no longer called complete.
+    #
+    # The learner did finish the course as it existed at the time, and that is
+    # what `completed_at` records. `progress_percent` still moves, so newly
+    # added content is visible as an unfinished remainder.
 
     enrollment.save(update_fields=update_fields)
 

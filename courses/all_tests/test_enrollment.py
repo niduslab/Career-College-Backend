@@ -8,6 +8,7 @@ from rest_framework import status
 from rest_framework.test import APITestCase
 
 from authentication.models import User
+from courses.services.enrollment_service import recalculate_progress
 from courses.models import (
     CourseCategory,
     CourseSection,
@@ -320,6 +321,246 @@ class EnrollmentAPITests(APITestCase):
         enrollment.refresh_from_db()
         self.assertEqual(enrollment.progress_percent, 100)
         self.assertIsNotNone(enrollment.completed_at)
+
+    def test_adding_content_after_completion_does_not_uncomplete(self):
+        """Regression: `completed_at` is sticky.
+
+        It used to be cleared whenever progress fell below 100, so an
+        instructor adding a lecture silently un-completed everyone who had
+        already finished — the course vanished from the My Courses
+        "Completed" tab and from the dashboard's completed count, while the
+        already-issued certificate stayed put.
+        """
+        enrollment = Enrollment.objects.create(
+            user=self.learner, course=self.published_course,
+        )
+        section = CourseSection.objects.create(
+            course=self.published_course, title='Sticky Section', position=1,
+        )
+
+        def _add_lecture(title, position):
+            lecture = Lecture.objects.create(
+                section=section,
+                title=title,
+                lecture_type=Lecture.LectureType.ARTICLE,
+                article_content='Body.',
+            )
+            SectionContent.objects.create(
+                section=section,
+                item_type=SectionContent.ItemType.LECTURE,
+                content_type=ContentType.objects.get_for_model(Lecture),
+                object_id=lecture.pk,
+                position=position,
+            )
+            return lecture
+
+        first = _add_lecture('Only Lecture', 1)
+        WatchProgress.objects.create(
+            user=self.learner, lecture=first, watched_seconds=10, is_completed=True,
+        )
+        enrollment.refresh_from_db()
+        completed_at = enrollment.completed_at
+        self.assertIsNotNone(completed_at)
+
+        # Instructor adds a second lecture, then any learner action triggers
+        # a recalculation.
+        _add_lecture('Added Later', 2)
+        WatchProgress.objects.filter(user=self.learner, lecture=first).update(
+            watched_seconds=11,
+        )
+        recalculate_progress(enrollment)
+
+        enrollment.refresh_from_db()
+        self.assertEqual(enrollment.progress_percent, 50)
+        self.assertEqual(enrollment.completed_at, completed_at)
+
+
+class MyCoursesStatusFilterTests(APITestCase):
+    """`?status=` + `status_counts` on the My Courses list.
+
+    Both exist because the tab counts describe the whole enrollment set. The
+    page previously counted rows client-side over an unpaginated fetch, so any
+    learner past `page_size` courses saw wrong counts and lost the overflow
+    entirely — a finished course sinks first, because the list orders by
+    `last_accessed_at` descending.
+    """
+
+    @classmethod
+    def setUpTestData(cls):
+        cls.instructor = User.objects.create_user(
+            email='status_instructor@example.com',
+            password='pw12345!',
+            full_name='Status Instructor',
+            user_type='instructor',
+            is_email_verified=True,
+        )
+        cls.learner = User.objects.create_user(
+            email='status_learner@example.com',
+            password='pw12345!',
+            full_name='Status Learner',
+            user_type='learner',
+            is_email_verified=True,
+        )
+
+        cls.done_course = cls._make_course('Finished', 'status-finished')
+        cls.doing_course = cls._make_course('Ongoing', 'status-ongoing')
+        cls.dropped_course = cls._make_course('Dropped', 'status-dropped')
+
+        cls.completed = Enrollment.objects.create(
+            user=cls.learner,
+            course=cls.done_course,
+            progress_percent=100,
+            completed_at=timezone.now(),
+        )
+        cls.in_progress = Enrollment.objects.create(
+            user=cls.learner, course=cls.doing_course, progress_percent=30,
+        )
+        # Unenrolled *and* unfinished — the only case still excluded from the
+        # list and the counts. An unenrolled row that was completed stays
+        # visible; see test_completed_then_unenrolled_course_still_appears.
+        Enrollment.objects.create(
+            user=cls.learner,
+            course=cls.dropped_course,
+            progress_percent=20,
+            completed_at=None,
+            is_active=False,
+        )
+
+    @classmethod
+    def _make_course(cls, title, slug):
+        course = NidusCourse.objects.create(
+            created_by=cls.instructor,
+            title=title,
+            slug=slug,
+            description='A course used by status-filter tests.',
+            status=NidusCourse.CourseStatus.PUBLISHED,
+        )
+        course.instructors.add(cls.instructor)
+        return course
+
+    @property
+    def url(self):
+        return reverse('courses:my-courses-list')
+
+    def setUp(self):
+        self.client.force_authenticate(user=self.learner)
+
+    def test_default_returns_every_active_enrollment(self):
+        response = self.client.get(self.url)
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data['data']['count'], 2)
+
+    def test_completed_course_is_listed_by_default(self):
+        """The reported bug: a finished course must still appear."""
+        slugs = [
+            row['course']['slug']
+            for row in self.client.get(self.url).data['data']['results']
+        ]
+        self.assertIn(self.done_course.slug, slugs)
+
+    def test_status_completed_filters(self):
+        results = self.client.get(self.url, {'status': 'completed'}).data['data']['results']
+
+        self.assertEqual(len(results), 1)
+        self.assertEqual(results[0]['course']['slug'], self.done_course.slug)
+
+    def test_status_in_progress_filters(self):
+        results = self.client.get(self.url, {'status': 'in_progress'}).data['data']['results']
+
+        self.assertEqual(len(results), 1)
+        self.assertEqual(results[0]['course']['slug'], self.doing_course.slug)
+
+    def test_status_all_is_the_same_as_omitting_it(self):
+        self.assertEqual(
+            self.client.get(self.url, {'status': 'all'}).data['data']['count'],
+            self.client.get(self.url).data['data']['count'],
+        )
+
+    def test_invalid_status_returns_400(self):
+        response = self.client.get(self.url, {'status': 'bogus'})
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn('status', response.data['errors'])
+
+    def test_status_counts_are_exact_and_exclude_unenrolled_unfinished(self):
+        counts = self.client.get(self.url).data['data']['status_counts']
+
+        self.assertEqual(counts, {'all': 2, 'in_progress': 1, 'completed': 1})
+
+    def test_unenrolled_unfinished_course_is_hidden(self):
+        slugs = [
+            row['course']['slug']
+            for row in self.client.get(self.url).data['data']['results']
+        ]
+        self.assertNotIn(self.dropped_course.slug, slugs)
+
+    def test_completed_then_unenrolled_course_still_appears(self):
+        """The reported bug.
+
+        `unenroll_learner` is a soft revoke that preserves `completed_at` and
+        never touches the issued certificate, so a learner who finished a
+        course and then unenrolled kept the certificate while My Courses
+        reported 0 completed — and the dashboard summary, which has never
+        filtered on `is_active`, reported 1.
+        """
+        Enrollment.objects.filter(pk=self.completed.pk).update(is_active=False)
+
+        payload = self.client.get(self.url).data['data']
+        slugs = [row['course']['slug'] for row in payload['results']]
+
+        self.assertIn(self.done_course.slug, slugs)
+        self.assertEqual(payload['status_counts']['completed'], 1)
+
+    def test_unenrolled_completed_course_shows_only_under_completed(self):
+        Enrollment.objects.filter(pk=self.completed.pk).update(is_active=False)
+
+        in_progress = self.client.get(self.url, {'status': 'in_progress'}).data['data']
+        completed = self.client.get(self.url, {'status': 'completed'}).data['data']
+
+        self.assertNotIn(
+            self.done_course.slug,
+            [row['course']['slug'] for row in in_progress['results']],
+        )
+        self.assertEqual(
+            [row['course']['slug'] for row in completed['results']],
+            [self.done_course.slug],
+        )
+
+    def test_counts_agree_with_the_dashboard_summary(self):
+        """The two surfaces disagreeing is what the learner actually saw."""
+        from courses.services.dashboard_service import get_learner_summary
+
+        Enrollment.objects.filter(pk=self.completed.pk).update(is_active=False)
+
+        counts = self.client.get(self.url).data['data']['status_counts']
+        summary = get_learner_summary(self.learner)
+
+        self.assertEqual(counts['completed'], summary['courses_completed'])
+
+    def test_unenrolled_course_is_never_the_resume_target(self):
+        """My Courses lists it; "continue learning" must not send the learner
+        into content they no longer have access to."""
+        from courses.services.dashboard_service import get_continue_target
+
+        Enrollment.objects.filter(pk=self.completed.pk).update(is_active=False)
+
+        target = get_continue_target(self.learner)
+
+        self.assertIsNotNone(target)
+        self.assertEqual(target['course']['slug'], self.doing_course.slug)
+
+    def test_status_counts_describe_the_whole_set_not_the_page(self):
+        for index in range(12):
+            course = self._make_course(f'Bulk {index}', f'status-bulk-{index}')
+            Enrollment.objects.create(user=self.learner, course=course)
+
+        payload = self.client.get(self.url, {'page_size': 5}).data['data']
+
+        self.assertEqual(len(payload['results']), 5)
+        self.assertEqual(payload['count'], 14)
+        self.assertEqual(payload['status_counts']['all'], 14)
+        self.assertEqual(payload['status_counts']['completed'], 1)
 
 
 class CatalogFilterTests(APITestCase):

@@ -7,3 +7,6 @@ from .certificate_serializers import *
 from .review_serializers import *
 from .schedule_serializers import *
 from .discussion_serializers import *
+from .wishlist_serializers import *
+from .note_serializers import *
+from .dashboard_serializers import *

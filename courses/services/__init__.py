@@ -18,9 +18,11 @@ from courses.services.assignment_service import (
 )
 from courses.services.enrollment_service import (
     CATALOG_SORT_OPTIONS,
+    ENROLLMENT_STATUS_OPTIONS,
     enroll_learner,
     filter_catalog_courses,
     get_catalog_courses,
+    get_learner_enrollment_status_counts,
     get_learner_enrollments,
     recalculate_progress,
     unenroll_learner,
@@ -60,7 +62,36 @@ from courses.services.learner_service import (
 from courses.services.certificate_service import (
     get_certificate_by_uid,
     get_certificate_for_learner,
+    get_learner_certificates,
     issue_certificate,
+)
+from courses.services.wishlist_service import (
+    add_to_wishlist,
+    get_learner_wishlist,
+    get_wishlisted_course_ids,
+    remove_from_wishlist,
+)
+from courses.services.note_service import (
+    MAX_NOTE_TAGS,
+    NOTE_ORDERING_OPTIONS,
+    NoteError,
+    create_note,
+    delete_note,
+    get_learner_notes,
+    get_note,
+    update_note,
+)
+from courses.services.activity_service import (
+    get_activity_dates,
+    record_learner_activity,
+)
+from courses.services.dashboard_service import (
+    ACTIVITY_TYPES,
+    ACTIVITY_WINDOW,
+    get_continue_target,
+    get_learner_activity_feed,
+    get_learner_summary,
+    get_learner_upcoming,
 )
 from courses.services.schedule_service import (
     ScheduleError,
@@ -104,6 +135,8 @@ __all__ = [
     'update_assignment',
     'update_question',
     'CATALOG_SORT_OPTIONS',
+    'ENROLLMENT_STATUS_OPTIONS',
+    'get_learner_enrollment_status_counts',
     'enroll_learner',
     'filter_catalog_courses',
     'get_catalog_courses',
@@ -133,7 +166,28 @@ __all__ = [
     'submit_coding_exercise',
     'get_certificate_by_uid',
     'get_certificate_for_learner',
+    'get_learner_certificates',
     'issue_certificate',
+    'add_to_wishlist',
+    'get_learner_wishlist',
+    'get_wishlisted_course_ids',
+    'remove_from_wishlist',
+    'MAX_NOTE_TAGS',
+    'NOTE_ORDERING_OPTIONS',
+    'NoteError',
+    'create_note',
+    'delete_note',
+    'get_learner_notes',
+    'get_note',
+    'update_note',
+    'get_activity_dates',
+    'record_learner_activity',
+    'ACTIVITY_TYPES',
+    'ACTIVITY_WINDOW',
+    'get_continue_target',
+    'get_learner_activity_feed',
+    'get_learner_summary',
+    'get_learner_upcoming',
     'ScheduleError',
     'activate_schedule',
     'archive_schedule',

@@ -21,18 +21,37 @@ from courses.models import (
 # Public catalog serializers (no auth required)
 # ---------------------------------------------------------------------------
 
-class CatalogCourseListSerializer(serializers.ModelSerializer):
+class _WishlistFlagMixin:
+    """Adds `is_wishlisted` from a pre-computed id set in serializer context.
+
+    Never queries. The view computes `wishlisted_course_ids` once per page via
+    `get_wishlisted_course_ids` and passes it in — one round-trip per page, not
+    per row (same principle as the viewer-vote annotation on review lists).
+    When the key is absent (anonymous callers, or the nested use inside
+    EnrollmentSerializer) the flag is simply False, so no existing caller pays
+    a query or changes behaviour.
+    """
+
+    def get_is_wishlisted(self, obj) -> bool:
+        wishlisted_ids = self.context.get('wishlisted_course_ids')
+        if not wishlisted_ids:
+            return False
+        return obj.id in wishlisted_ids
+
+
+class CatalogCourseListSerializer(_WishlistFlagMixin, serializers.ModelSerializer):
     """Compact course card for catalog browse lists."""
 
     instructors = InstructorBriefSerializer(read_only=True, many=True)
     category = CourseCategoryBriefSerializer(read_only=True)
+    is_wishlisted = serializers.SerializerMethodField()
 
     class Meta:
         model = NidusCourse
         fields = [
             'id', 'title', 'slug', 'description', 'thumbnail', 'price',
             'language', 'level', 'duration_minutes',
-            'instructors', 'category', 'published_at',
+            'instructors', 'category', 'published_at', 'is_wishlisted',
         ]
         read_only_fields = fields
 
@@ -118,7 +137,7 @@ class _CatalogCurriculumSectionSerializer(serializers.Serializer):
         return _CatalogCurriculumItemSerializer(rows, many=True, context=self.context).data
 
 
-class CatalogCourseDetailSerializer(serializers.ModelSerializer):
+class CatalogCourseDetailSerializer(_WishlistFlagMixin, serializers.ModelSerializer):
     """Public detail for a single course.
 
     Includes course metadata + curriculum outline. Lecture rows expose
@@ -132,6 +151,7 @@ class CatalogCourseDetailSerializer(serializers.ModelSerializer):
     total_sections = serializers.SerializerMethodField()
     total_content_items = serializers.SerializerMethodField()
     sections = serializers.SerializerMethodField()
+    is_wishlisted = serializers.SerializerMethodField()
 
     class Meta:
         model = NidusCourse
@@ -141,7 +161,7 @@ class CatalogCourseDetailSerializer(serializers.ModelSerializer):
             'instructors', 'partner_institution', 'category',
             'learning_objectives', 'prerequisites', 'audiences', 'course_outline',
             'total_sections', 'total_content_items', 'sections',
-            'published_at',
+            'published_at', 'is_wishlisted',
         ]
         read_only_fields = fields
 

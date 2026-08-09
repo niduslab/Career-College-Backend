@@ -49,6 +49,21 @@ def get_certificate_for_learner(user, course_slug: str) -> Certificate:
     return Certificate.objects.get(enrollment=enrollment)
 
 
+def get_learner_certificates(user):
+    """A learner's certificates, newest first, with the course joined.
+
+    The explicit order_by is required: Certificate.Meta declares no `ordering`,
+    and paginating an unordered queryset warns and can skip or duplicate rows
+    across pages.
+    """
+    return (
+        Certificate.objects
+        .filter(enrollment__user=user)
+        .select_related('enrollment__course')
+        .order_by('-issued_at', '-id')
+    )
+
+
 def get_certificate_by_uid(certificate_uid) -> Certificate:
     """Public lookup by UUID. Raises Certificate.DoesNotExist if not found."""
     return Certificate.objects.select_related(

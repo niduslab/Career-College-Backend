@@ -1,11 +1,14 @@
 """
-Bulk-loader for the public catalog curriculum tree.
+Bulk-loaders for the course curriculum tree, one per audience.
 
 `load_catalog_curriculum` returns just the fields the catalog detail page
 needs — section/item titles, lecture durations, and the master playlist
-URL for `is_preview=True` lectures. Curriculum loading for enrolled
-learners lives in `courses/services/learner_service.py`
-(`load_learner_curriculum`).
+URL for `is_preview=True` lectures. `load_admin_review_curriculum` returns
+the full instructor-depth tree (video/article content, quiz answers,
+assignment model answers/rubric, coding solution + eval script) for
+`CourseAdminCurriculumView` — never learner- or catalog-safe, admin-only.
+Curriculum loading for enrolled learners lives in
+`courses/services/learner_service.py` (`load_learner_curriculum`).
 """
 
 from collections import defaultdict
@@ -116,4 +119,47 @@ def load_catalog_curriculum(course) -> dict:
         'coding_exercises': coding_exercises,
         'assignments': assignments,
         'lecture_durations': _lecture_durations(list(lectures.keys())),
+    }
+
+
+def load_admin_review_curriculum(course) -> dict:
+    """
+    Full curriculum tree for platform-admin review — same depth an instructor
+    sees (solution code, correct answers, model answers, rubric). Read-only;
+    consumed only by `CourseAdminCurriculumView`, never by an editing path.
+    """
+    sections, contents_by_section = _load_sections_and_contents(course)
+    ids_by_type = _split_object_ids(contents_by_section)
+
+    lectures = {
+        lec.id: lec for lec in Lecture.objects.filter(
+            id__in=ids_by_type[SectionContent.ItemType.LECTURE]
+        ).select_related('created_by', 'last_edited_by').prefetch_related('video_assets')
+    } if ids_by_type[SectionContent.ItemType.LECTURE] else {}
+
+    quizzes = {
+        q.id: q for q in Quiz.objects.filter(
+            id__in=ids_by_type[SectionContent.ItemType.QUIZ]
+        ).prefetch_related('questions__answers')
+    } if ids_by_type[SectionContent.ItemType.QUIZ] else {}
+
+    coding_exercises = {
+        ex.id: ex for ex in CodingExercise.objects.filter(
+            id__in=ids_by_type[SectionContent.ItemType.CODING]
+        ).select_related('created_by', 'last_edited_by')
+    } if ids_by_type[SectionContent.ItemType.CODING] else {}
+
+    assignments = {
+        a.id: a for a in Assignment.objects.filter(
+            id__in=ids_by_type[SectionContent.ItemType.ASSIGNMENT]
+        ).prefetch_related('questions')
+    } if ids_by_type[SectionContent.ItemType.ASSIGNMENT] else {}
+
+    return {
+        'sections': sections,
+        'contents_by_section': contents_by_section,
+        'lectures': lectures,
+        'quizzes': quizzes,
+        'coding_exercises': coding_exercises,
+        'assignments': assignments,
     }

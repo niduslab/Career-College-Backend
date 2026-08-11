@@ -17,10 +17,18 @@ from core.permissions import (
     IsVerifiedCourseCreator,
     IsVerifiedPartnerInstitution,
 )
+from courses.all_models.content_models import SectionContent
 from courses.all_models.schedule_models import CourseSchedule
+from courses.all_serializers.assessment_serializers import (
+    AdminAssignmentDetailSerializer,
+    AdminQuizDetailSerializer,
+    CodingExerciseSerializer,
+)
+from courses.all_serializers.content_serializers import LectureSerializer
 from courses.all_serializers.schedule_serializers import CourseAdminReviewDetailSerializer
 from courses.models import NidusCourse
 from courses.serializers import NidusCourseSerializer
+from courses.services.curriculum_service import load_admin_review_curriculum
 from courses.services.schedule_service import activate_schedule
 
 logger = logging.getLogger(__name__)
@@ -440,6 +448,57 @@ class CourseAdminReviewView(APIView):
                 'message': message,
                 'data': NidusCourseSerializer(course).data,
             },
+            status=status.HTTP_200_OK,
+        )
+
+
+class CourseAdminCurriculumView(APIView):
+    """
+    Read-only full curriculum tree for platform-admin review — same depth an
+    instructor sees (solution code, correct answers, model answers, rubric).
+    Never used for editing; admin content mutation isn't a thing.
+    """
+
+    permission_classes = [IsAuthenticated, IsEmailVerified, IsPlatformAdmin]
+
+    def get(self, request, pk):
+        course = get_object_or_404(NidusCourse, pk=pk)
+        ctx = load_admin_review_curriculum(course)
+
+        sections_data = []
+        for section in ctx['sections']:
+            contents_data = []
+            for row in ctx['contents_by_section'].get(section.id, []):
+                content = {'id': row.id, 'item_type': row.item_type, 'position': row.position}
+                if row.item_type == SectionContent.ItemType.LECTURE:
+                    lecture = ctx['lectures'].get(row.object_id)
+                    content['lecture'] = LectureSerializer(lecture).data if lecture else None
+                elif row.item_type == SectionContent.ItemType.QUIZ:
+                    quiz = ctx['quizzes'].get(row.object_id)
+                    content['quiz'] = AdminQuizDetailSerializer(quiz).data if quiz else None
+                elif row.item_type == SectionContent.ItemType.CODING:
+                    exercise = ctx['coding_exercises'].get(row.object_id)
+                    content['coding_exercise'] = (
+                        CodingExerciseSerializer(exercise).data if exercise else None
+                    )
+                elif row.item_type == SectionContent.ItemType.ASSIGNMENT:
+                    assignment = ctx['assignments'].get(row.object_id)
+                    content['assignment'] = (
+                        AdminAssignmentDetailSerializer(assignment).data if assignment else None
+                    )
+                contents_data.append(content)
+
+            sections_data.append({
+                'id': section.id,
+                'title': section.title,
+                'description': section.description,
+                'position': section.position,
+                'unlocks_at': section.unlocks_at,
+                'contents': contents_data,
+            })
+
+        return Response(
+            {'success': True, 'data': {'sections': sections_data}},
             status=status.HTTP_200_OK,
         )
 

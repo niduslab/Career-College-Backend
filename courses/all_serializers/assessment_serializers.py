@@ -343,6 +343,64 @@ class AssignmentSerializer(serializers.ModelSerializer):
         return obj.questions.aggregate(total=Sum('points'))['total'] or 0
 
 
+# ---------------------------------------------------------------------------
+# Admin-review serializers — full depth (correct answers, model answers,
+# rubric), unlike the stripped-for-non-instructor fields above. Read-only;
+# consumed only by CourseAdminCurriculumView.
+# ---------------------------------------------------------------------------
+
+class AdminQuizAnswerSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = QuizAnswer
+        fields = ['id', 'answer_text', 'is_correct']
+        read_only_fields = fields
+
+
+class AdminQuizQuestionSerializer(serializers.ModelSerializer):
+    answers = AdminQuizAnswerSerializer(many=True, read_only=True)
+
+    class Meta:
+        model = QuizQuestion
+        fields = ['id', 'question_text', 'position', 'answers']
+        read_only_fields = fields
+
+
+class AdminQuizDetailSerializer(serializers.ModelSerializer):
+    questions = AdminQuizQuestionSerializer(many=True, read_only=True)
+
+    class Meta:
+        model = Quiz
+        fields = ['id', 'title', 'description', 'questions']
+        read_only_fields = fields
+
+
+class AdminAssignmentQuestionSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = AssignmentQuestion
+        fields = ['id', 'question_text', 'model_answer', 'rubric', 'points', 'hint', 'position']
+        read_only_fields = fields
+
+
+class AdminAssignmentDetailSerializer(serializers.ModelSerializer):
+    questions = AdminAssignmentQuestionSerializer(many=True, read_only=True)
+    max_score = serializers.SerializerMethodField()
+
+    class Meta:
+        model = Assignment
+        fields = [
+            'id', 'title', 'description', 'instructions',
+            'total_score', 'passing_score', 'max_score', 'questions',
+        ]
+        read_only_fields = fields
+
+    def get_max_score(self, obj) -> int:
+        prefetched = getattr(obj, '_prefetched_objects_cache', {})
+        if 'questions' in prefetched:
+            return sum((q.points or 0) for q in prefetched['questions'])
+        from django.db.models import Sum
+        return obj.questions.aggregate(total=Sum('points'))['total'] or 0
+
+
 class AssignmentCreateUpdateSerializer(serializers.ModelSerializer):
     class Meta:
         model = Assignment

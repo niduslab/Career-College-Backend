@@ -134,7 +134,7 @@ Open a second terminal, activate the venv, then:
 
 ```bash
 # Windows (solo pool avoids multiprocessing issues)
-celery -A career_college_backend worker --loglevel=info --pool=solo -Q celery,notifications
+
 
 # macOS / Linux
 celery -A career_college_backend worker --loglevel=info -Q celery,notifications
@@ -171,7 +171,7 @@ The coding runner picks its Docker runtime from `DEBUG`: local dev (`DEBUG=True`
 
 For **production / shared hosts** (or any local box you want to test the gVisor path on):
 
-1. Install gVisor (`runsc`):
+1. Install gVisor (`runsc`):celery -A career_college_backend worker --loglevel=info --pool=solo -Q celery,notifications
 
    ```bash
    sudo apt-get install -y apt-transport-https ca-certificates curl gnupg

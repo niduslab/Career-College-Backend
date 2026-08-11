@@ -16,6 +16,7 @@ from courses.all_views.course_views import (
     CourseListAPIView,
 )
 from courses.all_views.status_views import (
+    CourseAdminCurriculumView,
     CourseAdminPendingReviewListView,
     CourseAdminReviewView,
     CourseArchiveView,
@@ -163,6 +164,7 @@ __all__ = [
     'CourseMarkFinishedView',
     'CourseInstitutionReviewQueueView',
     'CourseInstitutionReviewView',
+    'CourseAdminCurriculumView',
     'CourseAdminPendingReviewListView',
     'CourseAdminReviewView',
     'CourseReworkView',

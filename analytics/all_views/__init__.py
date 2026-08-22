@@ -16,8 +16,28 @@ from analytics.all_views.analytics_views import (
     InstitutionTopCoursesView,
     InstitutionWebinarTrendView,
 )
+from analytics.all_views.instructor_analytics_views import (
+    InstructorAnalyticsSummaryView,
+)
+from analytics.all_views.instructor_students_views import (
+    InstructorStudentListView,
+    InstructorStudentSummaryView,
+)
+from analytics.all_views.instructor_revenue_views import (
+    InstructorOrderListView,
+    InstructorRevenueSummaryView,
+)
+from analytics.all_views.institution_revenue_views import (
+    InstitutionOrderListView,
+    InstitutionRevenueSummaryView,
+)
 
 __all__ = [
+    'InstructorAnalyticsSummaryView',
+    'InstructorStudentListView',
+    'InstructorStudentSummaryView',
+    'InstructorOrderListView',
+    'InstructorRevenueSummaryView',
     'InstitutionAnalyticsSummaryView',
     'InstitutionCertificateTrendView',
     'InstitutionEnrollmentTrendView',
@@ -25,6 +45,8 @@ __all__ = [
     'InstitutionExpertPerformanceView',
     'InstitutionTopCoursesView',
     'InstitutionWebinarTrendView',
+    'InstitutionOrderListView',
+    'InstitutionRevenueSummaryView',
     'AdminAnalyticsSummaryView',
     'AdminCertificateTrendView',
     'AdminEnrollmentTrendView',

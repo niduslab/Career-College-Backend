@@ -15,6 +15,7 @@ from authentication.models import InstructorProfile
 from courses.all_models.certificate_models import Certificate
 from courses.all_models.course_models import NidusCourse
 from courses.all_models.enrollment_models import Enrollment
+from payments.all_models.order_models import Order
 from webinars.all_models.registration_models import WebinarRegistration
 from webinars.all_models.webinar_models import Webinar
 
@@ -199,6 +200,42 @@ def _roster_metrics(institution):
     }
 
 
+def _revenue_metrics(institution, now, window_days):
+    """Real institution gross from PAID orders on the institution's courses
+    and webinars — see analytics/services/institution_revenue_service.py for
+    the full revenue-page breakdown this summarizes."""
+    paid = Order.objects.filter(
+        Q(course__partner_institution=institution) | Q(webinar__partner_institution=institution),
+        status=Order.Status.PAID,
+    )
+    agg = paid.aggregate(
+        gross=Sum('amount'),
+        course=Sum('amount', filter=Q(course__isnull=False)),
+        webinar=Sum('amount', filter=Q(webinar__isnull=False)),
+        orders=Count('id'),
+    )
+
+    window_start = now - timedelta(days=window_days)
+    prev_start = now - timedelta(days=window_days * 2)
+    current = paid.filter(created_at__gte=window_start, created_at__lt=now).aggregate(s=Sum('amount'))['s'] or 0
+    previous = paid.filter(created_at__gte=prev_start, created_at__lt=window_start).aggregate(s=Sum('amount'))['s'] or 0
+    growth_pct = round(float(current - previous) / float(previous) * 100, 1) if previous else None
+
+    return {
+        'enabled': True,
+        'currency': 'BDT',
+        'gross': float(agg['gross'] or 0),
+        'paid_orders': agg['orders'],
+        'by_item_type': {
+            'course': float(agg['course'] or 0),
+            'webinar': float(agg['webinar'] or 0),
+        },
+        'this_window': float(current),
+        'growth_pct': growth_pct,
+        'window_days': window_days,
+    }
+
+
 def _engagement_score(courses, enrollments, webinars):
     """0-100 composite health score plus its normalized components."""
     active = enrollments['active']
@@ -229,8 +266,7 @@ def institution_summary(institution, window_days=_DEFAULT_WINDOW_DAYS):
         'certificates': _certificate_metrics(institution, now),
         'webinars': webinars,
         'roster': _roster_metrics(institution),
-        # No payments/orders model exists, so revenue is not computed.
-        'revenue': {'enabled': False, 'estimated_gross': None},
+        'revenue': _revenue_metrics(institution, now, window_days),
         'engagement_score': _engagement_score(courses, enrollments, webinars),
     }
 

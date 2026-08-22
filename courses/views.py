@@ -90,6 +90,16 @@ from courses.all_views import (
     QuizQuestionListCreateAPIView,
     SectionContentListCreateAPIView,
     SectionContentReorderAPIView,
+    LearningPathListView,
+    LearningPathDetailView,
+    LearningPathProgressView,
+    LearningPathEnrollView,
+    MyLearningPathsView,
+    LearningPathManageListView,
+    LearningPathManageDetailView,
+    LearningPathMilestoneCreateView,
+    LearningPathMilestoneDetailView,
+    LearningPathMilestoneReorderView,
 )
 
 __all__ = [
@@ -179,4 +189,14 @@ __all__ = [
     'LearnerCodingTaskStatusView',
     'LearnerCodingSubmissionDetailView',
     'LearnerCodingSubmissionRetryView',
+    'LearningPathListView',
+    'LearningPathDetailView',
+    'LearningPathProgressView',
+    'LearningPathEnrollView',
+    'MyLearningPathsView',
+    'LearningPathManageListView',
+    'LearningPathManageDetailView',
+    'LearningPathMilestoneCreateView',
+    'LearningPathMilestoneDetailView',
+    'LearningPathMilestoneReorderView',
 ]

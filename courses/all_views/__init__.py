@@ -123,6 +123,18 @@ from courses.all_views.content_views import (
     SectionContentListCreateAPIView,
     SectionContentReorderAPIView,
 )
+from courses.all_views.learning_path_views import (
+    LearningPathDetailView,
+    LearningPathEnrollView,
+    LearningPathListView,
+    LearningPathManageDetailView,
+    LearningPathManageListView,
+    LearningPathMilestoneCreateView,
+    LearningPathMilestoneDetailView,
+    LearningPathMilestoneReorderView,
+    LearningPathProgressView,
+    MyLearningPathsView,
+)
 
 __all__ = [
     'CourseInstructorInviteCreateView',
@@ -216,4 +228,14 @@ __all__ = [
     'ReplyUpvoteView',
     'CourseCategoryListCreateView',
     'CourseCategoryDetailView',
+    'LearningPathListView',
+    'LearningPathDetailView',
+    'LearningPathProgressView',
+    'LearningPathEnrollView',
+    'MyLearningPathsView',
+    'LearningPathManageListView',
+    'LearningPathManageDetailView',
+    'LearningPathMilestoneCreateView',
+    'LearningPathMilestoneDetailView',
+    'LearningPathMilestoneReorderView',
 ]

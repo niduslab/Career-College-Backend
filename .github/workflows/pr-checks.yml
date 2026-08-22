@@ -79,6 +79,9 @@ jobs:
       - name: Generate migrations
         run: python manage.py makemigrations
 
+      - name: Enable Postgres extensions
+        run: PGPASSWORD=postgres psql -h 127.0.0.1 -U postgres -d career_college_test -c "CREATE EXTENSION IF NOT EXISTS pg_trgm;"
+
       - name: Run migrations
         run: python manage.py migrate --noinput
 

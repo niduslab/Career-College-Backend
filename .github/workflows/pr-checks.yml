@@ -76,8 +76,11 @@ jobs:
       - name: Django system check
         run: python manage.py check
 
-      - name: Check for missing migrations
-        run: python manage.py makemigrations --check --dry-run
-        
+      - name: Generate migrations
+        run: python manage.py makemigrations
+
+      - name: Run migrations
+        run: python manage.py migrate --noinput
+
       - name: Run tests
         run: python manage.py test

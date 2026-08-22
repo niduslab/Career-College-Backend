@@ -92,6 +92,16 @@ from courses.views import (
     QuizQuestionListCreateAPIView,
     SectionContentListCreateAPIView,
     SectionContentReorderAPIView,
+    LearningPathListView,
+    LearningPathDetailView,
+    LearningPathProgressView,
+    LearningPathEnrollView,
+    MyLearningPathsView,
+    LearningPathManageListView,
+    LearningPathManageDetailView,
+    LearningPathMilestoneCreateView,
+    LearningPathMilestoneDetailView,
+    LearningPathMilestoneReorderView,
 )
 
 app_name = 'courses'
@@ -141,6 +151,27 @@ urlpatterns = [
     path('my-certificates/', MyCertificateListView.as_view(), name='my-certificates-list'),
 
     path('wishlist/', WishlistListView.as_view(), name='wishlist-list'),
+
+    # -------------------------------------------------------------------------
+    # Learning paths (see docs/architecture/28-learning-paths.md)
+    # `manage/` and `manage/<int:pk>/...` (literal-prefixed, instructor/admin
+    # authoring) are declared before `<slug:slug>/...` so "manage" is never
+    # swallowed as a path slug. `my-learning-paths/` sits at the top level
+    # (not nested under `learning-paths/`) for the same reason `my-courses/`
+    # isn't nested under a slug route.
+    # -------------------------------------------------------------------------
+    path('learning-paths/manage/', LearningPathManageListView.as_view(), name='learning-path-manage-list'),
+    path('learning-paths/manage/<int:pk>/', LearningPathManageDetailView.as_view(), name='learning-path-manage-detail'),
+    path('learning-paths/manage/<int:pk>/milestones/', LearningPathMilestoneCreateView.as_view(), name='learning-path-milestone-create'),
+    path('learning-paths/manage/<int:pk>/milestones/reorder/', LearningPathMilestoneReorderView.as_view(), name='learning-path-milestone-reorder'),
+    path('learning-paths/manage/<int:pk>/milestones/<int:milestone_id>/', LearningPathMilestoneDetailView.as_view(), name='learning-path-milestone-detail'),
+
+    path('my-learning-paths/', MyLearningPathsView.as_view(), name='my-learning-paths'),
+
+    path('learning-paths/', LearningPathListView.as_view(), name='learning-path-list'),
+    path('learning-paths/<slug:slug>/progress/', LearningPathProgressView.as_view(), name='learning-path-progress'),
+    path('learning-paths/<slug:slug>/enroll/', LearningPathEnrollView.as_view(), name='learning-path-enroll'),
+    path('learning-paths/<slug:slug>/', LearningPathDetailView.as_view(), name='learning-path-detail'),
 
     # Literal `notes/` precedes the numeric detail route.
     path('notes/', LearnerNoteListCreateView.as_view(), name='learner-note-list-create'),

@@ -85,22 +85,16 @@ def _watch_metrics(user) -> dict:
     }
 
 
-def _compute_day_streak(user, now) -> int:
+def _compute_day_streak(dates, now) -> int:
     """Consecutive days of activity ending today (or yesterday — grace day).
 
-    Reads `LearnerActivityDay`, an append-only record written by every
-    learner-side content read and submission. It replaced a union over four
-    consumption tables, which could not be made accurate: three of them were
-    fine (`auto_now_add` submission timestamps), but `WatchProgress
-    .last_watched_at` is `auto_now`, so it stored only the latest touch per
-    lecture — re-reading a finished article recorded nothing at all, and
-    re-opening an old lecture erased the historical date it carried.
+    Takes the same `LearnerActivityDay` date set `_week_activity` reads —
+    one shared query for both, since the streak's 120-day window already
+    covers the week view's 7-day window.
 
     The grace rule prevents the streak reading 0 at 00:01 before the learner
     has had a chance to study.
     """
-    since = timezone.localdate(now) - timedelta(days=STREAK_WINDOW_DAYS)
-    dates = get_activity_dates(user, since)
     if not dates:
         return 0
 
@@ -116,10 +110,26 @@ def _compute_day_streak(user, now) -> int:
     return streak
 
 
+def _week_activity(dates, now) -> list[dict]:
+    """Last 7 local days, oldest first, each flagged studied or not.
+
+    Reuses the streak's date set — no new query shape, no invented duration.
+    `LearnerActivityDay` only records whether a day had activity, never how
+    long, so this is presence-only by construction: never render it as a
+    magnitude bar.
+    """
+    today = timezone.localdate(now)
+    since = today - timedelta(days=6)
+    return [
+        {'date': since + timedelta(days=i), 'is_active': (since + timedelta(days=i)) in dates}
+        for i in range(7)
+    ]
+
+
 def get_learner_summary(user) -> dict:
     """KPI tiles for the learner dashboard. Four constant queries.
 
-    Two caveats are part of the contract:
+    Three caveats are part of the contract:
 
     `total_learning_seconds` sums `WatchProgress.watched_seconds`, which
     `upsert_watch_progress` stores as the furthest playback cursor position
@@ -142,15 +152,23 @@ def get_learner_summary(user) -> dict:
     an XP timeline or leaderboard. `LearnerActivityDay` does not fill that
     gap: XP needs one row per scoring event with a points value, which is the
     opposite de-duplication rule. It needs its own ledger.
+
+    `week_activity` is presence-only, not a duration. It reads the same
+    `LearnerActivityDay` table as the streak, which records only whether a day
+    had activity — never how long. Render it as a studied/not-studied marker,
+    never as a magnitude bar.
     """
     now = timezone.now()
+    since = timezone.localdate(now) - timedelta(days=STREAK_WINDOW_DAYS)
+    dates = get_activity_dates(user, since)
 
     data = _enrollment_metrics(user)
     data.update(_watch_metrics(user))
     data['certificates_earned'] = Certificate.objects.filter(enrollment__user=user).count()
-    data['day_streak'] = _compute_day_streak(user, now)
+    data['day_streak'] = _compute_day_streak(dates, now)
     data['day_streak_is_approximate'] = False
     data['day_streak_timezone'] = timezone.get_current_timezone_name()
+    data['week_activity'] = _week_activity(dates, now)
     return data
 
 

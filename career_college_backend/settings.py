@@ -1,3 +1,4 @@
+import os
 import sys
 from datetime import timedelta
 from pathlib import Path
@@ -356,7 +357,12 @@ def _is_log_file_writable(path: Path) -> bool:
     except OSError:
         return False
 
-FILE_LOGGING_ENABLED = _is_log_file_writable(LOG_FILE_PATH)
+# `runserver` spawns a watcher process plus a reloaded child (RUN_MAIN=true).
+# Both import settings.py, so without this check both processes would open
+# app.log and race RotatingFileHandler's rename on rollover — fatal only on
+# Windows, where you can't rename a file another process has open.
+IS_RELOADER_CHILD = os.environ.get('RUN_MAIN') == 'true'
+FILE_LOGGING_ENABLED = (not DEBUG or IS_RELOADER_CHILD) and _is_log_file_writable(LOG_FILE_PATH)
 DEFAULT_LOG_HANDLERS = ['console', 'file'] if FILE_LOGGING_ENABLED else ['console']
 
 LOGGING = {

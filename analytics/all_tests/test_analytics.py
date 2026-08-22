@@ -171,8 +171,9 @@ class AnalyticsSummaryTests(AnalyticsTestBase):
         self.auth(self.inst_user)
         data = self.client.get(self.url).data['data']
         self.assertEqual(data['roster']['experts_active'], 1)
-        self.assertFalse(data['revenue']['enabled'])
-        self.assertIsNone(data['revenue']['estimated_gross'])
+        self.assertTrue(data['revenue']['enabled'])
+        self.assertEqual(data['revenue']['gross'], 0.0)
+        self.assertEqual(data['revenue']['paid_orders'], 0)
         self.assertIn('composite', data['engagement_score'])
 
     def test_empty_institution_zero_filled(self):

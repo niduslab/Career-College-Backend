@@ -1,0 +1,70 @@
+name: Deploy Backend to EC2
+
+on:
+  push:
+    branches: [master]
+  workflow_dispatch:
+
+# Prevents two deploys from racing each other on the same box.
+concurrency:
+  group: deploy-backend
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Setup SSH key
+        run: |
+          mkdir -p ~/.ssh
+          chmod 700 ~/.ssh
+          echo "${{ secrets.EC2_SSH_KEY }}" | base64 -d > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+          ssh-keyscan -H "${{ secrets.EC2_HOST }}" >> ~/.ssh/known_hosts
+
+      - name: Deploy backend via SSH
+        env:
+          EC2_USER: ${{ secrets.EC2_USER }}
+          EC2_HOST: ${{ secrets.EC2_HOST }}
+        run: |
+          ssh -i ~/.ssh/deploy_key \
+              -o ServerAliveInterval=30 \
+              "$EC2_USER@$EC2_HOST" 'bash -s' <<'REMOTE'
+          set -euo pipefail
+
+          REPO_DIR=/opt/niduscareer/backend
+          STACK_DIR=/opt/niduscareer
+          BRANCH=master
+          SERVICES="api asgi worker beat fastapi"
+
+          echo "==> Syncing repo to origin/$BRANCH"
+          cd "$REPO_DIR"
+          git fetch origin "$BRANCH"
+          git reset --hard "origin/$BRANCH"
+          echo "    now at $(git rev-parse --short HEAD)"
+
+          echo "==> Building images"
+          cd "$STACK_DIR"
+          sudo docker compose build $SERVICES
+
+          echo "==> Running migrations"
+          sudo docker compose run --rm --no-deps api python manage.py migrate --noinput
+
+          echo "==> Collecting static files"
+          sudo docker compose run --rm --no-deps api python manage.py collectstatic --noinput
+
+          echo "==> Recreating services"
+          sudo docker compose up -d --force-recreate $SERVICES
+
+          echo "==> Pruning dangling images"
+          sudo docker image prune -f
+
+          echo "==> Deploy complete"
+          sudo docker compose ps
+          REMOTE
+
+      - name: Remove SSH key
+        if: always()
+        run: rm -f ~/.ssh/deploy_key

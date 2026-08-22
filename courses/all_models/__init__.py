@@ -9,3 +9,4 @@ from .discussion_models import *
 from .wishlist_models import *
 from .note_models import *
 from .activity_models import *
+from .learning_path_models import *

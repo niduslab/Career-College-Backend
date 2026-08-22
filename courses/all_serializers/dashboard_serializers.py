@@ -10,6 +10,14 @@ class _CourseRefSerializer(serializers.Serializer):
     thumbnail = serializers.CharField(allow_null=True)
 
 
+class _WeekActivityDaySerializer(serializers.Serializer):
+    """One day of the presence-only week-activity strip. No duration field —
+    `LearnerActivityDay` never records how long, only whether."""
+
+    date = serializers.DateField()
+    is_active = serializers.BooleanField()
+
+
 class LearnerSummarySerializer(serializers.Serializer):
     """KPI tiles.
 
@@ -29,6 +37,7 @@ class LearnerSummarySerializer(serializers.Serializer):
     day_streak = serializers.IntegerField()
     day_streak_is_approximate = serializers.BooleanField()
     day_streak_timezone = serializers.CharField()
+    week_activity = _WeekActivityDaySerializer(many=True)
 
 
 class LearnerActivityItemSerializer(serializers.Serializer):

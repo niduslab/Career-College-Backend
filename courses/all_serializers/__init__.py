@@ -10,3 +10,4 @@ from .discussion_serializers import *
 from .wishlist_serializers import *
 from .note_serializers import *
 from .dashboard_serializers import *
+from .learning_path_serializers import *

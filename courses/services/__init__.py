@@ -113,6 +113,22 @@ from courses.services.review_service import (
     get_review_summary,
     vote_on_review,
 )
+from courses.services.learning_path_service import (
+    LearningPathError,
+    add_milestone,
+    build_milestone_progress,
+    enroll_in_path,
+    get_my_paths,
+    get_owned_path_or_404,
+    get_owned_paths,
+    get_path_progress_percent,
+    get_published_path_by_slug,
+    get_published_paths,
+    is_enrolled_in_path,
+    leave_path,
+    remove_milestone,
+    reorder_milestones,
+)
 
 __all__ = [
     'InviteError',
@@ -204,4 +220,18 @@ __all__ = [
     'get_my_review',
     'get_review_summary',
     'vote_on_review',
+    'LearningPathError',
+    'add_milestone',
+    'build_milestone_progress',
+    'enroll_in_path',
+    'get_my_paths',
+    'get_owned_path_or_404',
+    'get_owned_paths',
+    'get_path_progress_percent',
+    'get_published_path_by_slug',
+    'get_published_paths',
+    'is_enrolled_in_path',
+    'leave_path',
+    'remove_milestone',
+    'reorder_milestones',
 ]

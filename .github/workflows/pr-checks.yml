@@ -37,6 +37,7 @@ jobs:
       DEBUG: "False"
       ALLOWED_HOSTS: 127.0.0.1,localhost
       SITE_ID: "1"
+      TIME_ZONE: UTC
       DB_ENGINE: django.db.backends.postgresql
       DB_NAME: career_college_test
       DB_USER: postgres
@@ -55,6 +56,11 @@ jobs:
       SSLCOMMERZ_STORE_PASSWORD: qwerty
       SSLCOMMERZ_SANDBOX: "True"
       BACKEND_URL: http://localhost:8000
+      RUNNER_IMAGE_PYTHON: python:3.12-slim
+      RUNNER_IMAGE_JAVASCRIPT: node:20-slim
+      RUNNER_IMAGE_CPP: gcc:13
+      RUNNER_IMAGE_JAVA: eclipse-temurin:21
+      RUNNER_RUNTIME_PROD: runc
 
     steps:
       - uses: actions/checkout@v4

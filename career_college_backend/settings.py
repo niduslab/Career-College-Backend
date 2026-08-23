@@ -48,6 +48,7 @@ INSTALLED_APPS = [
     'rest_framework_simplejwt.token_blacklist',
     'corsheaders',
     'django_filters',
+    'storages',
     'allauth',
     'allauth.account',
     'allauth.socialaccount',
@@ -244,12 +245,55 @@ USE_TZ = True
 
 # Static files
 STATIC_URL = 'static/'
+STATIC_ROOT = Path(env('STATIC_ROOT', default=str(BASE_DIR / 'staticfiles')))
 
 # Media files (user uploads)
 MEDIA_URL = env('MEDIA_URL', default='/media/')
 MEDIA_ROOT = Path(env('MEDIA_ROOT', default=str(BASE_DIR / 'media')))
 FFMPEG_BINARY_PATH = env('FFMPEG_BINARY_PATH', default='ffmpeg')
 FFPROBE_BINARY_PATH = env('FFPROBE_BINARY_PATH', default='ffprobe')
+
+# Object storage (S3). Set AWS_STORAGE_BUCKET_NAME to switch default/staticfiles
+# storage from local disk to S3 — used in production, unset for local dev.
+AWS_STORAGE_BUCKET_NAME = env('AWS_STORAGE_BUCKET_NAME', default='')
+
+if AWS_STORAGE_BUCKET_NAME:
+    AWS_S3_CUSTOM_DOMAIN = env('AWS_S3_CUSTOM_DOMAIN', default='')
+    AWS_LOCATION = env('AWS_LOCATION', default='media')
+    AWS_S3_OBJECT_PARAMETERS = env.json('AWS_S3_OBJECT_PARAMETERS', default={'CacheControl': 'max-age=86400'})
+    AWS_S3_REGION_NAME = env('AWS_S3_REGION_NAME', default='')
+
+    STORAGES = {
+        'default': {
+            'BACKEND': 'storages.backends.s3boto3.S3Boto3Storage',
+            'OPTIONS': {
+                'bucket_name': AWS_STORAGE_BUCKET_NAME,
+                'custom_domain': AWS_S3_CUSTOM_DOMAIN,
+                'location': AWS_LOCATION,
+                'object_parameters': AWS_S3_OBJECT_PARAMETERS,
+                'default_acl': None,
+                'querystring_auth': False,
+                **({'region_name': AWS_S3_REGION_NAME} if AWS_S3_REGION_NAME else {}),
+            },
+        },
+        'staticfiles': {
+            'BACKEND': 'storages.backends.s3boto3.S3StaticStorage',
+            'OPTIONS': {
+                'bucket_name': AWS_STORAGE_BUCKET_NAME,
+                'custom_domain': AWS_S3_CUSTOM_DOMAIN,
+                'location': 'static',
+            },
+        },
+    }
+else:
+    STORAGES = {
+        'default': {
+            'BACKEND': 'django.core.files.storage.FileSystemStorage',
+        },
+        'staticfiles': {
+            'BACKEND': 'django.contrib.staticfiles.storage.StaticFilesStorage',
+        },
+    }
 
 # Celery
 CELERY_BROKER_URL = env('CELERY_BROKER_URL', default='redis://127.0.0.1:6379/0')

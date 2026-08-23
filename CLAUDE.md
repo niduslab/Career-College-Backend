@@ -191,11 +191,13 @@ Pattern: define dedicated `Learner*Serializer` classes that simply don't declare
 1. Client uploads raw video → `VideoAsset` created with status `uploading`
 2. Celery task `transcode_video_asset_task` (`courses/tasks.py`) picks it up
 3. FFmpeg (`courses/transcoding.py`) produces 5 HLS renditions: 240p, 360p, 480p, 720p, 1080p
-4. Output written to `media/courses/{course_slug}/lectures/{lecture_id}/hls/{video_asset_id}/`
+4. Output uploaded to storage under `courses/{course_slug}/lectures/{lecture_id}/hls/{video_asset_id}/`
 5. `VideoAsset.status` transitions: `uploading → processing → ready | failed`
 6. `VideoProcessingJob` tracks per-job metadata
 
-`FFMPEG_BINARY_PATH` and `FFPROBE_BINARY_PATH` env vars must point to installed binaries.
+**Storage-agnostic by design** — `transcoding.py` never assumes a local filesystem. The source video is read via `video_asset.video_file.open('rb')` (falls back to a temp-file copy when the storage backend's `.path()` raises `NotImplementedError`, e.g. S3), and ffmpeg's output (playlists + `.ts` segments) is generated into a temp dir, then pushed through `default_storage.save()` — so it lands wherever `STORAGES['default']` points (local disk in dev, S3 in production). Never write transcoding output directly under `settings.MEDIA_ROOT` — that bypasses the storage backend and breaks the moment `MEDIA_URL` points at S3/CDN instead of local disk.
+
+`FFMPEG_BINARY_PATH` and `FFPROBE_BINARY_PATH` env vars must point to installed binaries. See *Object Storage (S3)* below for the storage backend switch.
 
 ### Identity Verification State Machine
 
@@ -686,8 +688,19 @@ Critical ones not obvious from the code:
 | `SSLCOMMERZ_SANDBOX` | `True` → sandbox base URL; `False` → live `securepay` host |
 | `BACKEND_URL` | Public base URL used to build gateway callback URLs (IPN needs it reachable) |
 | `FRONTEND_PAYMENT_SUCCESS_PATH` / `_FAIL_PATH` / `_CANCEL_PATH` | Frontend paths the payment callbacks 302 to |
+| `AWS_STORAGE_BUCKET_NAME` | Set in production to switch `default`/`staticfiles` storage to S3 (`storages.backends.s3boto3.S3Boto3Storage`/`S3StaticStorage`); blank/unset → local `FileSystemStorage`, the local-dev default |
+| `AWS_S3_CUSTOM_DOMAIN` | Public domain (CloudFront/custom domain) media/static URLs are built from — must match what `MEDIA_URL` serves |
+| `AWS_LOCATION` | Key prefix inside the bucket for the `default` (media) storage, e.g. `media` |
+| `AWS_S3_REGION_NAME` | Bucket's AWS region; omit to let boto3 resolve it (e.g. from the EC2 instance region) |
+| `AWS_S3_OBJECT_PARAMETERS` | JSON dict of extra S3 object params, e.g. `{"CacheControl": "max-age=86400"}` |
 
 For local dev, `EMAIL_BACKEND=django.core.mail.backends.console.EmailBackend` prints OTP emails to the terminal instead of sending them.
+
+### Object Storage (S3)
+
+`STORAGES` in `career_college_backend/settings.py` switches on whether `AWS_STORAGE_BUCKET_NAME` is set: blank (local dev, `.env.example` default) → `FileSystemStorage` for both `default` and `staticfiles`; set (production) → `S3Boto3Storage`/`S3StaticStorage`, credentials resolved by boto3 from the EC2 instance role (no `AWS_ACCESS_KEY_ID`/`AWS_SECRET_ACCESS_KEY` needed there — only set those for local S3 testing off-EC2). No AWS credentials or bucket config ever appear in code — everything is env-driven, so the same settings.py runs against either backend.
+
+**Everything that touches uploaded files must go through `default_storage`/`FieldFile` — never assume a local path.** `courses/transcoding.py` is the canonical example: it reads the source video via `.open('rb')` (with a temp-file fallback for backends where `.path()` raises `NotImplementedError`) and writes ffmpeg's HLS output through `default_storage.save()` rather than directly under `MEDIA_ROOT`. Any future feature that processes an uploaded file (thumbnailing, virus scanning, etc.) must follow the same pattern.
 
 ## Docs
 

@@ -1,9 +1,14 @@
+import contextlib
 import logging
 import re
+import shutil
 import subprocess
+import tempfile
 from pathlib import Path
 
 from django.conf import settings
+from django.core.files.base import File
+from django.core.files.storage import default_storage
 
 from courses.models import VideoAsset
 
@@ -35,11 +40,26 @@ def _ffprobe_binary() -> str:
     return 'ffprobe'
 
 
-def _build_output_root(video_asset: VideoAsset) -> Path:
+def _build_output_relative_root(video_asset: VideoAsset) -> str:
     lecture = video_asset.lecture
     course_slug = lecture.section.course.slug
-    root = Path(settings.MEDIA_ROOT) / 'courses' / course_slug / 'lectures' / str(lecture.id) / 'hls'
-    return root / str(video_asset.id)
+    return f'courses/{course_slug}/lectures/{lecture.id}/hls/{video_asset.id}'
+
+
+def _upload_output_dir(local_root: Path, relative_root: str) -> None:
+    """
+    Push every generated HLS file (playlists + segments) to the configured
+    storage backend (S3 in production) under relative_root. ffmpeg can only
+    write to a real local path, so generation happens in a temp dir first.
+    """
+    for local_file in sorted(local_root.rglob('*')):
+        if not local_file.is_file():
+            continue
+        relative_name = f'{relative_root}/{local_file.relative_to(local_root).as_posix()}'
+        if default_storage.exists(relative_name):
+            default_storage.delete(relative_name)
+        with local_file.open('rb') as fh:
+            default_storage.save(relative_name, File(fh))
 
 
 def _run_ffmpeg_command(command: list[str]) -> None:
@@ -105,6 +125,36 @@ def _probe_video_duration_seconds(video_file: Path) -> int | None:
         return None
 
 
+@contextlib.contextmanager
+def _local_input_path(video_asset: VideoAsset):
+    """
+    Yield a local filesystem path for the video file. Storage backends that
+    don't support absolute paths (e.g. object storage) raise NotImplementedError
+    on .path() — fall back to streaming the file into a temp copy.
+    """
+    try:
+        local_path = Path(video_asset.video_file.path)
+    except NotImplementedError:
+        local_path = None
+
+    if local_path is not None:
+        if not local_path.exists():
+            raise FileNotFoundError(f'Video file not found: {local_path}')
+        yield local_path
+        return
+
+    suffix = Path(video_asset.video_file.name).suffix
+    with tempfile.NamedTemporaryFile(suffix=suffix, delete=False) as tmp:
+        tmp_path = Path(tmp.name)
+        with video_asset.video_file.open('rb') as remote_file:
+            shutil.copyfileobj(remote_file, tmp)
+
+    try:
+        yield tmp_path
+    finally:
+        tmp_path.unlink(missing_ok=True)
+
+
 def _write_master_playlist(output_root: Path, variant_rows: list[dict]) -> Path:
     master_path = output_root / 'master.m3u8'
     lines = ['#EXTM3U', '#EXT-X-VERSION:3']
@@ -118,90 +168,89 @@ def _write_master_playlist(output_root: Path, variant_rows: list[dict]) -> Path:
 def transcode_video_asset(video_asset: VideoAsset) -> tuple[str, list[dict], int | None]:
     """
     Transcode one raw video into HLS renditions and return:
-    - master playlist relative path (MEDIA_ROOT-relative)
+    - master playlist relative path (storage-relative, e.g. under AWS_LOCATION)
     - list of rendition metadata dicts
     - duration_seconds (if probe succeeds)
     """
-    input_path = Path(video_asset.video_file.path)
-    if not input_path.exists():
-        raise FileNotFoundError(f'Video file not found: {input_path}')
-
     ffmpeg_bin = _ffmpeg_binary()
-    duration_seconds = _probe_video_duration_seconds(input_path)
-    output_root = _build_output_root(video_asset)
-    output_root.mkdir(parents=True, exist_ok=True)
+    relative_root = _build_output_relative_root(video_asset)
 
     variant_rows = []
-    for rendition in DEFAULT_RENDITIONS:
-        playlist_name = f"{rendition['name']}.m3u8"
-        segment_pattern = output_root / f"{rendition['name']}_%03d.ts"
-        playlist_path = output_root / playlist_name
+    with tempfile.TemporaryDirectory() as tmp_dir, _local_input_path(video_asset) as input_path:
+        output_root = Path(tmp_dir)
+        duration_seconds = _probe_video_duration_seconds(input_path)
 
-        command = [
-            ffmpeg_bin,
-            '-y',
-            '-i',
-            str(input_path),
-            '-vf',
-            f"scale=-2:{rendition['height']}",
-            '-c:a',
-            'aac',
-            '-ar',
-            '48000',
-            '-b:a',
-            rendition['audio_bitrate'],
-            '-c:v',
-            'h264',
-            '-profile:v',
-            'main',
-            '-crf',
-            '20',
-            '-g',
-            '48',
-            '-keyint_min',
-            '48',
-            '-sc_threshold',
-            '0',
-            '-b:v',
-            rendition['video_bitrate'],
-            '-maxrate',
-            rendition['video_bitrate'],
-            '-bufsize',
-            str(int(rendition['video_bitrate'].replace('k', '')) * 2) + 'k',
-            '-hls_time',
-            '6',
-            '-hls_playlist_type',
-            'vod',
-            '-hls_segment_filename',
-            str(segment_pattern),
-            str(playlist_path),
-        ]
-        _run_ffmpeg_command(command)
+        for rendition in DEFAULT_RENDITIONS:
+            playlist_name = f"{rendition['name']}.m3u8"
+            segment_pattern = output_root / f"{rendition['name']}_%03d.ts"
+            playlist_path = output_root / playlist_name
 
-        bitrate_value = int(rendition['video_bitrate'].replace('k', '')) * 1000
-        first_segment_path = output_root / f"{rendition['name']}_000.ts"
-        probed_resolution = _probe_video_resolution(first_segment_path)
-        if probed_resolution:
-            resolution = f'{probed_resolution[0]}x{probed_resolution[1]}'
-        else:
-            resolution = f"0x{rendition['height']}"
+            command = [
+                ffmpeg_bin,
+                '-y',
+                '-i',
+                str(input_path),
+                '-vf',
+                f"scale=-2:{rendition['height']}",
+                '-c:a',
+                'aac',
+                '-ar',
+                '48000',
+                '-b:a',
+                rendition['audio_bitrate'],
+                '-c:v',
+                'h264',
+                '-profile:v',
+                'main',
+                '-crf',
+                '20',
+                '-g',
+                '48',
+                '-keyint_min',
+                '48',
+                '-sc_threshold',
+                '0',
+                '-b:v',
+                rendition['video_bitrate'],
+                '-maxrate',
+                rendition['video_bitrate'],
+                '-bufsize',
+                str(int(rendition['video_bitrate'].replace('k', '')) * 2) + 'k',
+                '-hls_time',
+                '6',
+                '-hls_playlist_type',
+                'vod',
+                '-hls_segment_filename',
+                str(segment_pattern),
+                str(playlist_path),
+            ]
+            _run_ffmpeg_command(command)
 
-        variant_rows.append(
-            {
-                'name': rendition['name'],
-                'playlist_name': playlist_name,
-                'resolution': resolution,
-                'bandwidth': bitrate_value,
-            }
-        )
+            bitrate_value = int(rendition['video_bitrate'].replace('k', '')) * 1000
+            first_segment_path = output_root / f"{rendition['name']}_000.ts"
+            probed_resolution = _probe_video_resolution(first_segment_path)
+            if probed_resolution:
+                resolution = f'{probed_resolution[0]}x{probed_resolution[1]}'
+            else:
+                resolution = f"0x{rendition['height']}"
 
-    master_path = _write_master_playlist(output_root, variant_rows)
-    master_relative = str(master_path.relative_to(Path(settings.MEDIA_ROOT))).replace('\\', '/')
+            variant_rows.append(
+                {
+                    'name': rendition['name'],
+                    'playlist_name': playlist_name,
+                    'resolution': resolution,
+                    'bandwidth': bitrate_value,
+                }
+            )
 
+        _write_master_playlist(output_root, variant_rows)
+        _upload_output_dir(output_root, relative_root)
+
+    master_relative = f'{relative_root}/master.m3u8'
     renditions = [
         {
             'name': row['name'],
-            'playlist': str((output_root / row['playlist_name']).relative_to(Path(settings.MEDIA_ROOT))).replace('\\', '/'),
+            'playlist': f"{relative_root}/{row['playlist_name']}",
             'resolution': row['resolution'],
             'bandwidth': row['bandwidth'],
         }

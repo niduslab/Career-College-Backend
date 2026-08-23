@@ -49,6 +49,9 @@ jobs:
           cd "$STACK_DIR"
           sudo docker compose build $SERVICES
 
+          echo "==> Create migrations"
+          sudo docker compose run --rm --no-deps api python manage.py makemigrations --noinput
+
           echo "==> Running migrations"
           sudo docker compose run --rm --no-deps api python manage.py migrate --noinput
 

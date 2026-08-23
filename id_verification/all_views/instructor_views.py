@@ -37,7 +37,6 @@ def _check_profile_completeness(user):
 
     required_fields = {
         'headline': 'Headline is required.',
-        'bio': 'Bio is required.',
         'specialization': 'At least one specialization is required.',
         'years_of_experience': 'Years of experience is required.',
         'current_title': 'Current title is required.',

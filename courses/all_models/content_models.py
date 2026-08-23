@@ -239,6 +239,8 @@ class VideoProcessingJob(TimestampedModel):
         COMPLETED = 'completed', 'Completed'
         FAILED = 'failed', 'Failed'
 
+    TERMINAL_STATUSES = (Status.COMPLETED, Status.FAILED)
+
     video_asset = models.ForeignKey(
         VideoAsset,
         on_delete=models.CASCADE,

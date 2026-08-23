@@ -32,12 +32,33 @@ logger = logging.getLogger(__name__)
 _SUBMISSION_OUTPUT_CAP = 5000
 
 
-@shared_task(bind=True, autoretry_for=(Exception,), retry_backoff=True, retry_jitter=True, max_retries=3)
+@shared_task(
+    bind=True,
+    acks_late=True,
+    autoretry_for=(Exception,),
+    retry_backoff=True,
+    retry_jitter=True,
+    max_retries=3,
+)
 def transcode_video_asset_task(self, video_asset_id: int, job_id: int):
+    """Transcode a VideoAsset to HLS renditions.
+
+    Idempotent under retries and redelivery:
+      - early-returns if the job is already terminal (completed/failed)
+      - acks_late=True so a worker death mid-transcode (e.g. deploy
+        force-recreate) causes the broker to redeliver instead of silently
+        losing the job.
+    """
     logger.info('Starting transcoding task for video_asset=%s job=%s', video_asset_id, job_id)
 
     video_asset = VideoAsset.objects.select_related('lecture__section__course').get(pk=video_asset_id)
     job = VideoProcessingJob.objects.get(pk=job_id)
+
+    # Short-circuit if already terminal. Without this guard, a redelivered
+    # message (acks_late) would re-transcode a completed/failed job.
+    if job.status in VideoProcessingJob.TERMINAL_STATUSES:
+        logger.info('Job %s already terminal (%s); skipping.', job_id, job.status)
+        return {'video_asset_id': video_asset_id, 'job_id': job_id, 'status': job.status, 'skipped': True}
 
     job.status = VideoProcessingJob.Status.PROCESSING
     job.started_at = job.started_at or timezone.now()

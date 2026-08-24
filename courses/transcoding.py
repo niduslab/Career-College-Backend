@@ -132,6 +132,7 @@ def _local_input_path(video_asset: VideoAsset):
     don't support absolute paths (e.g. object storage) raise NotImplementedError
     on .path() — fall back to streaming the file into a temp copy.
     """
+    #--------------------------------------------------------------
     try:
         local_path = Path(video_asset.video_file.path)
     except NotImplementedError:

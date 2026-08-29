@@ -386,6 +386,15 @@ ADMIN_ACTION_RATE_LIMIT = env('ADMIN_ACTION_RATE_LIMIT', default='30/min')
 # Per-user cap on Q&A upvotes — the counters have no per-user vote row, so
 # this is the only brake on one caller inflating a thread's ranking.
 DISCUSSION_UPVOTE_RATE_LIMIT = env('DISCUSSION_UPVOTE_RATE_LIMIT', default='30/min')
+# Per-user cap on AI outline generation. Unlike the throttles above this one
+# guards real spend — every call is a paid LLM request taking several seconds.
+AI_OUTLINE_RATE_LIMIT = env('AI_OUTLINE_RATE_LIMIT', default='10/min')
+
+
+# AI services (FastAPI project — hosts every AI feature, not just outlines).
+# Server-to-server only; the provider API key lives there, never here.
+AI_SERVICES_BASE_URL = env('AI_SERVICES_BASE_URL', default='http://localhost:8001')
+AI_SERVICES_KEY = env('AI_SERVICES_KEY', default='')
 
 
 # Logging

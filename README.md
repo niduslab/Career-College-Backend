@@ -134,7 +134,7 @@ Open a second terminal, activate the venv, then:
 
 ```bash
 # Windows (solo pool avoids multiprocessing issues)
-
+celery -A career_college_backend worker --loglevel=info --pool=solo -Q celery,notifications
 
 # macOS / Linux
 celery -A career_college_backend worker --loglevel=info -Q celery,notifications

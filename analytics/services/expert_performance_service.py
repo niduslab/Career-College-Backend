@@ -100,8 +100,12 @@ def expert_performance(institution, *, expert_id=None):
     }
     certs = {
         r['enrollment__course']: r['n']
+        # Revoked certificates do not count toward an expert's outcomes.
         for r in Certificate.objects
-        .filter(enrollment__course__partner_institution=institution)
+        .filter(
+            enrollment__course__partner_institution=institution,
+            status=Certificate.Status.VALID,
+        )
         .values('enrollment__course')
         .annotate(n=Count('id'))
     }

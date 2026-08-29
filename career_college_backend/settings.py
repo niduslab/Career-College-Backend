@@ -168,6 +168,10 @@ GOOGLE_CALLBACK_URL = env('GOOGLE_CALLBACK_URL', default='http://localhost:8000/
 FRONTEND_URL = env('FRONTEND_URL', default='http://localhost:3000')
 FRONTEND_GOOGLE_CALLBACK = env('FRONTEND_GOOGLE_CALLBACK', default='')
 FRONTEND_ERROR_URL = env('FRONTEND_ERROR_URL', default='')
+# Frontend path certificate verification URLs are built on (joined onto FRONTEND_URL).
+# FRONTEND_URL must be the production domain in production — its value is printed
+# on every issued certificate PDF and encoded in the QR code.
+CERTIFICATE_VERIFY_PATH = env('CERTIFICATE_VERIFY_PATH', default='/verify/')
 
 # SSLCommerz payment gateway
 SSLCOMMERZ_STORE_ID = env('SSLCOMMERZ_STORE_ID', default='')

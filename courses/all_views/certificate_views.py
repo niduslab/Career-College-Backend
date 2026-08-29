@@ -6,6 +6,9 @@ Routes (all under /api/v1/courses/):
     GET  my-courses/<slug>/certificate/                      -> LearnerCertificateView
     GET  certificates/<uuid:certificate_uid>/verify/         -> CertificateVerifyView
     GET  certificates/<uuid:certificate_uid>/download/       -> CertificateDownloadView
+    POST certificates/<uuid:certificate_uid>/revoke/         -> CertificateRevokeView
+    POST certificates/<uuid:certificate_uid>/restore/        -> CertificateRestoreView
+    GET  certificates/verify/<str:identifier>/               -> CertificatePublicVerifyView
 """
 
 import logging
@@ -17,7 +20,7 @@ from rest_framework.response import Response
 from rest_framework.views import APIView
 
 from core.pagination import StandardResultsSetPagination
-from core.permissions import IsEmailVerified, IsLearnerUser
+from core.permissions import IsEmailVerified, IsLearnerUser, IsPlatformAdmin
 from courses.all_models.certificate_models import Certificate
 from courses.all_models.course_models import NidusCourse
 from courses.all_serializers.certificate_serializers import (
@@ -27,12 +30,26 @@ from courses.all_serializers.certificate_serializers import (
 )
 from courses.certificate_pdf import generate_certificate_pdf
 from courses.services.certificate_service import (
+    CertificateError,
+    get_certificate_by_public_id,
     get_certificate_by_uid,
     get_certificate_for_learner,
     get_learner_certificates,
+    restore_certificate,
+    revoke_certificate,
 )
 
 logger = logging.getLogger(__name__)
+
+
+def _verification_payload(certificate):
+    """Envelope for a public verification response, valid or revoked."""
+    is_valid = certificate.status == Certificate.Status.VALID
+    return {
+        'success': True,
+        'message': 'Certificate is valid.' if is_valid else 'This certificate has been revoked.',
+        'data': PublicCertificateSerializer(certificate).data,
+    }
 
 
 class MyCertificateListView(APIView):
@@ -101,6 +118,8 @@ class CertificateVerifyView(APIView):
 
     Public (AllowAny). Returns metadata for the certificate if it exists.
     UUID identifier → 404 when not found (never leaks existence of other certs).
+    A revoked certificate still returns 200 — the verdict is in `status`, since
+    "this credential exists but is revoked" is the answer a verifier needs.
     """
 
     permission_classes = [AllowAny]
@@ -113,14 +132,30 @@ class CertificateVerifyView(APIView):
                 {'success': False, 'message': 'Certificate not found.'},
                 status=status.HTTP_404_NOT_FOUND,
             )
-        return Response(
-            {
-                'success': True,
-                'message': 'Certificate is valid.',
-                'data': PublicCertificateSerializer(certificate).data,
-            },
-            status=status.HTTP_200_OK,
-        )
+        return Response(_verification_payload(certificate), status=status.HTTP_200_OK)
+
+
+class CertificatePublicVerifyView(APIView):
+    """
+    GET /api/v1/courses/certificates/verify/<str:identifier>/
+
+    Public (AllowAny). Accepts either the human-readable certificate ID
+    (CC-2026-NEXT-000123, what is printed on the certificate and encoded in the
+    QR code) or the UUID, so a verifier can paste whichever they hold.
+    Unknown identifier → 404, same message either way.
+    """
+
+    permission_classes = [AllowAny]
+
+    def get(self, request, identifier):
+        try:
+            certificate = get_certificate_by_public_id(identifier)
+        except Certificate.DoesNotExist:
+            return Response(
+                {'success': False, 'message': 'Certificate not found.'},
+                status=status.HTTP_404_NOT_FOUND,
+            )
+        return Response(_verification_payload(certificate), status=status.HTTP_200_OK)
 
 
 class CertificateDownloadView(APIView):
@@ -150,7 +185,85 @@ class CertificateDownloadView(APIView):
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR,
             )
         response = HttpResponse(pdf_bytes, content_type='application/pdf')
-        response['Content-Disposition'] = (
-            f'attachment; filename="certificate-{certificate.certificate_uid}.pdf"'
-        )
+        filename = certificate.certificate_id or certificate.certificate_uid
+        response['Content-Disposition'] = f'attachment; filename="certificate-{filename}.pdf"'
         return response
+
+
+class CertificateRevokeView(APIView):
+    """
+    POST /api/v1/courses/certificates/<uuid:certificate_uid>/revoke/
+
+    Admin-only. Body: {"reason": "..."} (optional). Flips the verification
+    verdict without touching the issued snapshot — the record of what was
+    awarded stays intact. Already revoked → 422.
+    """
+
+    permission_classes = [IsAuthenticated, IsEmailVerified, IsPlatformAdmin]
+
+    def post(self, request, certificate_uid):
+        reason = (request.data.get('reason') or '').strip()
+        try:
+            certificate = revoke_certificate(
+                certificate_uid, actor=request.user, reason=reason,
+            )
+        except Certificate.DoesNotExist:
+            return Response(
+                {'success': False, 'message': 'Certificate not found.'},
+                status=status.HTTP_404_NOT_FOUND,
+            )
+        except CertificateError as e:
+            return Response(
+                {'success': False, 'message': e.message}, status=e.http_status,
+            )
+        except Exception:
+            logger.exception('Certificate revoke failed for %s', certificate_uid)
+            return Response(
+                {'success': False, 'message': 'An unexpected error occurred. Please try again.'},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            )
+        return Response(
+            {
+                'success': True,
+                'message': 'Certificate revoked.',
+                'data': CertificateSerializer(certificate).data,
+            },
+            status=status.HTTP_200_OK,
+        )
+
+
+class CertificateRestoreView(APIView):
+    """
+    POST /api/v1/courses/certificates/<uuid:certificate_uid>/restore/
+
+    Admin-only. Lifts a revocation. Not revoked → 422.
+    """
+
+    permission_classes = [IsAuthenticated, IsEmailVerified, IsPlatformAdmin]
+
+    def post(self, request, certificate_uid):
+        try:
+            certificate = restore_certificate(certificate_uid, actor=request.user)
+        except Certificate.DoesNotExist:
+            return Response(
+                {'success': False, 'message': 'Certificate not found.'},
+                status=status.HTTP_404_NOT_FOUND,
+            )
+        except CertificateError as e:
+            return Response(
+                {'success': False, 'message': e.message}, status=e.http_status,
+            )
+        except Exception:
+            logger.exception('Certificate restore failed for %s', certificate_uid)
+            return Response(
+                {'success': False, 'message': 'An unexpected error occurred. Please try again.'},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            )
+        return Response(
+            {
+                'success': True,
+                'message': 'Certificate restored.',
+                'data': CertificateSerializer(certificate).data,
+            },
+            status=status.HTTP_200_OK,
+        )

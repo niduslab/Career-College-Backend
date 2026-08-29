@@ -171,7 +171,10 @@ def build_student_queryset(instructor, params):
     qs = qs.select_related(
         'user', 'user__learner_profile', 'course', 'schedule',
     ).annotate(
-        has_certificate=Exists(Certificate.objects.filter(enrollment=OuterRef('pk'))),
+        # A revoked certificate reads as "no certificate" on the roster.
+        has_certificate=Exists(Certificate.objects.filter(
+            enrollment=OuterRef('pk'), status=Certificate.Status.VALID,
+        )),
     )
 
     # 'id' tiebreaker keeps pagination stable across equal sort keys.

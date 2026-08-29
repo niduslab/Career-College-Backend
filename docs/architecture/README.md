@@ -19,7 +19,7 @@ a full tour, or jump to the subsystem you're working on.
 11. `11-course-lifecycle.md` — course status state machine, completeness checks, admin review
 12. `12-enrollment.md` — enrollment, progress calculation, learner consumption endpoints
 13. `13-multi-instructor-collaboration.md` — owner vs co-instructor roles, roster protection, guard_owner utility
-14. `14-certificate-system.md` — completion certificate issuance, on-the-fly PDF generation, public share URLs
+14. `14-certificate-system.md` — completion certificate issuance, the frozen signature/signatory snapshot, credential IDs, public verification, revocation, on-the-fly PDF generation
 15. `15-review-rating-system.md` — review/rating model, vote atomicity, denormalized catalog fields, access policy
 16. `16-notification-system.md` — notification dispatcher, event types, WebSocket delivery
 17. `17-messaging-system.md` — learner ↔ instructor messaging, REST + WebSocket protocol, unread semantics

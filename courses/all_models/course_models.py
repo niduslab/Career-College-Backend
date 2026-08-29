@@ -199,6 +199,11 @@ class NidusCourse(models.Model):
         default=0,
         help_text='Total course video duration in minutes.',
     )
+    learning_hours = models.PositiveIntegerField(
+        default=0,
+        help_text='Instructor-declared total learning hours, shown on the certificate. '
+                  'Distinct from duration_minutes, which is raw video runtime.',
+    )
     delivery_mode = models.CharField(
         max_length=20,
         choices=DeliveryMode.choices,

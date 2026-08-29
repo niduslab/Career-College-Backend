@@ -10,16 +10,21 @@ demo_certificate_template.html:
 """
 
 import io
+import logging
 import math
 import os
 
 import reportlab
-from django.conf import settings
 from reportlab.lib import colors
 from reportlab.lib.pagesizes import A4, landscape
+from reportlab.lib.utils import ImageReader
 from reportlab.pdfbase import pdfmetrics
 from reportlab.pdfbase.ttfonts import TTFont
 from reportlab.pdfgen import canvas
+
+from courses.services.certificate_service import build_verification_url
+
+logger = logging.getLogger(__name__)
 
 # Register a Unicode-capable bold font for learner name rendering.
 # VeraBd ships with every ReportLab installation and covers Latin Extended,
@@ -231,6 +236,69 @@ def _draw_signature(c, base_x, base_y):
     c.setLineJoin(0)
 
 
+def _draw_signature_image(c, image_field, base_x, base_y, max_w=155, max_h=44):
+    """Draw a stored signature image, scaled to fit and bottom-left anchored.
+
+    Reads through the FieldFile so it works on S3 as well as local disk — never
+    .path(). Returns True when something was drawn; the caller falls back to the
+    hand-drawn flourish otherwise, so a missing or corrupt image never breaks
+    the PDF.
+    """
+    if not image_field:
+        return False
+    try:
+        image_field.open('rb')
+        try:
+            data = image_field.read()
+        finally:
+            image_field.close()
+
+        reader = ImageReader(io.BytesIO(data))
+        iw, ih = reader.getSize()
+        if not iw or not ih:
+            return False
+
+        scale = min(max_w / iw, max_h / ih)
+        w, h = iw * scale, ih * scale
+        # mask='auto' honours PNG alpha so a transparent signature does not
+        # paint a white box over the certificate background.
+        c.drawImage(reader, base_x, base_y, width=w, height=h,
+                    mask='auto', preserveAspectRatio=True, anchor='sw')
+        return True
+    except Exception:
+        logger.warning(
+            'Certificate signature image could not be drawn: %s',
+            getattr(image_field, 'name', '?'), exc_info=True,
+        )
+        return False
+
+
+def _draw_signatory_block(c, certificate, x, baseline_y, name, designation, org,
+                          signature_field, rule_w=162):
+    """One signature column: image (or flourish), dotted rule, name, designation, org."""
+    if not _draw_signature_image(c, signature_field, x, baseline_y):
+        _draw_signature(c, x, baseline_y)
+
+    rule_y = baseline_y - 6
+    c.setStrokeColor(_GREY_BB)
+    c.setLineWidth(1)
+    c.setDash(1, 3)
+    c.line(x, rule_y, x + rule_w, rule_y)
+    c.setDash()
+
+    if name:
+        c.setFont('Helvetica-Bold', 10.5)
+        c.setFillColor(_GREY_22)
+        c.drawString(x, rule_y - 14, name)
+
+    c.setFont('Helvetica', 9)
+    c.setFillColor(_GREY_77)
+    if designation:
+        c.drawString(x, rule_y - 26, designation)
+    if org:
+        c.drawString(x, rule_y - 38, org)
+
+
 def _fit_text(c, text, font, max_size, min_size, max_width):
     """Shrink font until text fits max_width, then truncate with ellipsis if still too wide."""
     size = max_size
@@ -386,41 +454,61 @@ def generate_certificate_pdf(certificate) -> bytes:
     c.setFillColor(_NEAR_BLACK)
     c.drawString(pad_l, title_y, course_title)
 
-    # Attribution
+    # Attribution — issuer comes from the snapshot, not a hardcoded name, so an
+    # institution-owned course credits that institution.
+    issuer = certificate.issuer_name or 'Career College'
     attr_y = title_y - 18
     c.setFont('Helvetica', 8.5)
     c.setFillColor(_GREY_88)
-    c.drawString(pad_l, attr_y,      'an online course authorized by Career College and offered')
+    c.drawString(pad_l, attr_y,      f'an online course authorized by {issuer} and offered')
     c.drawString(pad_l, attr_y - 12, 'through the Career College learning platform.')
 
-    # ── Signature block ───────────────────────────────────────────────────────
-    # sig_svg_bottom = bottom-left of the 155×44 SVG drawing area
-    sig_svg_bottom = 148
-    # _draw_signature(c, pad_l, sig_svg_bottom)
+    # ── Credential metadata ───────────────────────────────────────────────────
+    meta_y = attr_y - 32
+    meta_rows = []
+    if certificate.course_duration:
+        meta_rows.append(('Course Duration', certificate.course_duration))
+    if certificate.learning_hours:
+        meta_rows.append(('Learning Hours', f'{certificate.learning_hours} Hours'))
+    if certificate.completion_date:
+        meta_rows.append(
+            ('Completion Date', certificate.completion_date.strftime('%B %d, %Y'))
+        )
+    if certificate.certificate_id:
+        meta_rows.append(('Certificate ID', certificate.certificate_id))
 
-    # Dotted rule (below SVG, matching .sig-rule)
-    rule_y = sig_svg_bottom - 6
-    c.setStrokeColor(_GREY_BB)
-    c.setLineWidth(1)
-    c.setDash(1, 3)
-    c.line(pad_l, rule_y, pad_l + 162, rule_y)
-    c.setDash()
+    for i, (label, value) in enumerate(meta_rows):
+        row_y = meta_y - i * 11
+        c.setFont('Helvetica', 7.5)
+        c.setFillColor(_GREY_99)
+        c.drawString(pad_l, row_y, f'{label}:')
+        c.setFont('Helvetica-Bold', 7.5)
+        c.setFillColor(_GREY_55)
+        c.drawString(pad_l + 78, row_y, value)
 
-    # Instructor name & meta
-    try:
-        instructor_name = certificate.enrollment.course.created_by.full_name
-    except Exception:
-        instructor_name = 'Career College'
-    instructor_title = 'Course Instructor'
+    # ── Signature blocks ──────────────────────────────────────────────────────
+    # Two columns: the course instructor on the left, the authorized signatory
+    # on the right. Every value is read from the certificate's frozen snapshot,
+    # so re-rendering an old certificate never picks up a changed signature.
+    sig_baseline = 148
+    sig_col2_x = pad_l + 250
 
-    c.setFont('Helvetica-Bold', 10.5)
-    c.setFillColor(_GREY_22)
-    c.drawString(pad_l, rule_y - 14, instructor_name)
+    _draw_signatory_block(
+        c, certificate, pad_l, sig_baseline,
+        name=certificate.instructor_name,
+        designation=certificate.instructor_designation,
+        org=issuer,
+        signature_field=certificate.instructor_signature,
+    )
 
-    c.setFont('Helvetica', 9)
-    c.setFillColor(_GREY_77)
-    c.drawString(pad_l, rule_y - 26, instructor_title)
-    c.drawString(pad_l, rule_y - 38, 'Career College')
+    if certificate.authorized_signatory_name:
+        _draw_signatory_block(
+            c, certificate, sig_col2_x, sig_baseline,
+            name=certificate.authorized_signatory_name,
+            designation=certificate.authorized_signatory_designation,
+            org=issuer,
+            signature_field=certificate.authorized_signature,
+        )
 
     # ═════════════════════════════════════════════════════════════════════════
     # RIGHT COLUMN
@@ -447,9 +535,11 @@ def generate_certificate_pdf(certificate) -> bytes:
     verify_x = right_x + right_w - 16
     verify_y  = 72
 
-    frontend = getattr(settings, 'FRONTEND_URL', 'https://careercollege.com').rstrip('/')
-    domain   = frontend.replace('https://', '').replace('http://', '')
-    verify_str = f'{domain}/verify/{certificate.certificate_uid}'
+    # Built from the shared helper so the printed URL, the API payload, and the
+    # QR code the frontend renders can never disagree. FRONTEND_URL must be the
+    # production domain in production — its value is printed here verbatim.
+    verify_str = build_verification_url(certificate)
+    verify_str = verify_str.replace('https://', '').replace('http://', '')
 
     c.setFont('Helvetica-Bold', 7)
     c.setFillColor(_GREY_3A)
@@ -458,7 +548,7 @@ def generate_certificate_pdf(certificate) -> bytes:
     c.setFont('Helvetica', 6.5)
     c.setFillColor(_GREY_55)
     c.drawRightString(verify_x, verify_y - 11,
-                      'Career College has confirmed the identity of this')
+                      f'{issuer} has confirmed the identity of this')
     c.drawRightString(verify_x, verify_y - 21,
                       'individual and their participation in the course.')
 

@@ -113,6 +113,10 @@ from courses.services.review_service import (
     get_review_summary,
     vote_on_review,
 )
+from courses.services.ai_outline_service import (
+    AIOutlineError,
+    generate_course_outline,
+)
 from courses.services.learning_path_service import (
     LearningPathError,
     add_milestone,
@@ -220,6 +224,8 @@ __all__ = [
     'get_my_review',
     'get_review_summary',
     'vote_on_review',
+    'AIOutlineError',
+    'generate_course_outline',
     'LearningPathError',
     'add_milestone',
     'build_milestone_progress',

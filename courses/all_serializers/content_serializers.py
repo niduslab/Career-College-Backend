@@ -99,7 +99,8 @@ class LectureSerializer(serializers.ModelSerializer):
             'id', 'section_id', 'title',
             'lecture_type', 'article_content', 'is_preview',
             'stream_master_playlist', 'stream_renditions', 'transcoding_error',
-            'active_video_asset', 'created_by', 'last_edited_by', 'created_at', 'updated_at',
+            'active_video_asset', 'is_awaiting_content',
+            'created_by', 'last_edited_by', 'created_at', 'updated_at',
         ]
         read_only_fields = fields
 
@@ -120,8 +121,17 @@ class LectureSerializer(serializers.ModelSerializer):
 
 
 class LectureCreateUpdateSerializer(serializers.ModelSerializer):
+    """Two-step authoring.
+
+    Step 1 creates the lecture from a title alone — `lecture_type` and any
+    payload are optional, and the row defaults to an empty `video` lecture.
+    Step 2 PATCHes the real type together with its content: `article_content`
+    for an article, a multipart `video_file` for a video. A lecture left at
+    step 1 blocks course submission (`_validate_course_completeness`).
+    """
+
     video_file = serializers.FileField(write_only=True, required=False, allow_null=True)
-    lecture_type = serializers.ChoiceField(choices=Lecture.LectureType.choices, required=True)
+    lecture_type = serializers.ChoiceField(choices=Lecture.LectureType.choices, required=False)
 
     class Meta:
         model = Lecture
@@ -143,13 +153,22 @@ class LectureCreateUpdateSerializer(serializers.ModelSerializer):
 
     def validate(self, attrs):
         lecture_type = attrs.get('lecture_type')
-        article_content = attrs.get('article_content')
         video_file = attrs.get('video_file')
+        # Distinguish "client sent article_content" from "client omitted it":
+        # only an explicitly supplied body can conflict with a video lecture.
+        article_supplied = 'article_content' in attrs
+        article_content = attrs.get('article_content')
 
-        if self.instance is not None and lecture_type is None:
-            lecture_type = self.instance.lecture_type
-        if self.instance is not None and article_content is None:
-            article_content = self.instance.article_content
+        if self.instance is not None:
+            if lecture_type is None:
+                lecture_type = self.instance.lecture_type
+            if not article_supplied:
+                article_content = self.instance.article_content
+        elif lecture_type is None:
+            # Step 1: title only. Mirrors the model default so the payload
+            # and the saved row can't disagree.
+            lecture_type = Lecture.LectureType.VIDEO
+            attrs['lecture_type'] = lecture_type
 
         if lecture_type == Lecture.LectureType.ARTICLE:
             if video_file:
@@ -158,11 +177,11 @@ class LectureCreateUpdateSerializer(serializers.ModelSerializer):
                 raise serializers.ValidationError({'article_content': 'Article lectures require content.'})
 
         if lecture_type == Lecture.LectureType.VIDEO:
-            if (article_content or '').strip():
+            if article_supplied and (article_content or '').strip():
                 raise serializers.ValidationError({'article_content': 'Video lectures cannot include article content.'})
-            creating = self.instance is None
-            if creating and not video_file:
-                raise serializers.ValidationError({'video_file': 'Video lectures require a video file on creation.'})
+            # Switching an article lecture to video drops its text —
+            # `chk_lecture_payload_by_type` requires it empty for that type.
+            attrs['article_content'] = ''
 
         return attrs
 
@@ -225,12 +244,17 @@ class SectionContentSerializer(serializers.ModelSerializer):
                     'lecture_type': lecture.lecture_type,
                     'is_preview': lecture.is_preview,
                     'active_video_asset': active_video_asset,
+                    'is_awaiting_content': lecture.is_awaiting_content,
                 }
 
         elif obj.item_type == SectionContent.ItemType.QUIZ:
             quiz = quizzes.get(obj.object_id)
             if quiz:
-                return {'id': quiz.id, 'title': quiz.title}
+                return {
+                    'id': quiz.id,
+                    'title': quiz.title,
+                    'is_awaiting_content': quiz.is_awaiting_content,
+                }
 
         elif obj.item_type == SectionContent.ItemType.CODING:
             ex = coding_exercises.get(obj.object_id)
@@ -239,6 +263,7 @@ class SectionContentSerializer(serializers.ModelSerializer):
                     'id': ex.id,
                     'title': ex.title,
                     'language': ex.language,
+                    'is_awaiting_content': ex.is_awaiting_content,
                 }
 
         elif obj.item_type == SectionContent.ItemType.ASSIGNMENT:
@@ -248,6 +273,7 @@ class SectionContentSerializer(serializers.ModelSerializer):
                     'id': assignment.id,
                     'title': assignment.title,
                     'passing_score': assignment.passing_score,
+                    'is_awaiting_content': assignment.is_awaiting_content,
                 }
 
         return None

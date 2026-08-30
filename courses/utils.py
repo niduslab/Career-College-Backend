@@ -66,6 +66,22 @@ def save_authored(serializer, user, **extra):
     return serializer.save(**extra)
 
 
+def course_owner_q(user, path='course'):
+    """Q matching rows whose course the user owns: assigned instructor or creator.
+
+    `path` is the ORM path from the model being filtered to its course, e.g.
+    `'section__course'` for a Lecture or `'quiz__section__course'` for a
+    QuizQuestion. Always pair it with `.distinct()` — the `instructors` M2M
+    join duplicates rows for a user who is both instructor and creator.
+
+    Ownership is deliberately creator-inclusive: a partner institution owns
+    its courses through `created_by` and is never added to `instructors`
+    (only its experts are), so an instructors-only filter locks the
+    institution out of its own content.
+    """
+    return Q(**{f'{path}__instructors': user}) | Q(**{f'{path}__created_by': user})
+
+
 def owned_course_qs(user):
     """NidusCourse rows the user owns: assigned instructor or course creator."""
     return NidusCourse.objects.filter(Q(instructors=user) | Q(created_by=user)).distinct()

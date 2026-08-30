@@ -44,6 +44,7 @@ from courses.views import (
     AssignmentQuestionListCreateAPIView,
     AssignmentQuestionReorderAPIView,
     AssignmentRubricPreviewAPIView,
+    CourseOutlinePreviewAPIView,
     CatalogCourseDetailView,
     CatalogCourseListView,
     CodingExerciseDetailAPIView,
@@ -118,6 +119,14 @@ urlpatterns = [
     # -------------------------------------------------------------------------
     path('categories/', CourseCategoryListCreateView.as_view(), name='category-list-create'),
     path('categories/<int:pk>/', CourseCategoryDetailView.as_view(), name='category-detail'),
+
+    # -------------------------------------------------------------------------
+    # AI-assisted authoring (see docs/architecture/32-ai-course-outline-generator.md)
+    #
+    # ORDERING: literal-prefixed, declared above the `<slug:slug>/...` block and
+    # the instructor block's `path('<int:pk>/', ...)` so neither can shadow it.
+    # -------------------------------------------------------------------------
+    path('ai/outline-preview/', CourseOutlinePreviewAPIView.as_view(), name='ai-outline-preview'),
 
     # -------------------------------------------------------------------------
     # Enrollment (authenticated learner)

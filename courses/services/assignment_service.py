@@ -8,6 +8,7 @@ from courses.models import (
 )
 from courses.services.rubric_autogen import generate_rubric_from_model_answer
 from courses.services.section_service import reorder_section_content
+from courses.utils import owned_section_qs
 
 
 def _autofill_rubric(question) -> None:
@@ -26,19 +27,30 @@ def _autofill_rubric(question) -> None:
 # Ownership helpers
 # ---------------------------------------------------------------------------
 
+def _owned_section_ids(user):
+    """Section pks whose course the user owns — assigned instructor or creator.
+
+    Creator-inclusive: a partner institution owns its courses through
+    `created_by` and is never added to `instructors`.
+    """
+    return owned_section_qs(user).values('pk')
+
+
 def _get_owned_assignment(assignment_id, user) -> Assignment:
     return get_object_or_404(
-        Assignment.objects.select_related('section__course'),
+        Assignment.objects
+        .select_related('section__course')
+        .filter(section__in=_owned_section_ids(user)),
         pk=assignment_id,
-        section__course__instructors=user,
     )
 
 
 def _get_owned_question(question_id, user) -> AssignmentQuestion:
     return get_object_or_404(
-        AssignmentQuestion.objects.select_related('assignment__section__course'),
+        AssignmentQuestion.objects
+        .select_related('assignment__section__course')
+        .filter(assignment__section__in=_owned_section_ids(user)),
         pk=question_id,
-        assignment__section__course__instructors=user,
     )
 
 
@@ -89,7 +101,7 @@ def add_question(assignment_id, user, validated_data) -> AssignmentQuestion:
         .select_related('section__course')
         .filter(
             pk=assignment_id,
-            section__course__instructors=user,
+            section__in=_owned_section_ids(user),
         )
         .first()
     )

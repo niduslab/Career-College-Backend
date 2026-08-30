@@ -7,29 +7,34 @@ from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
-from core.permissions import IsEmailVerified, IsInstructorUser
+from core.permissions import IsCourseCreator, IsEmailVerified
 from courses.models import CodingExercise
 from courses.serializers import (
     CodingExerciseCreateUpdateSerializer,
     CodingExerciseSerializer,
 )
 from courses.services.code_runner import SMOKE_EVALUATION_SCRIPTS
-from courses.utils import guard_editable, save_authored
+from courses.utils import course_owner_q, guard_editable, save_authored
 
 logger = logging.getLogger(__name__)
 
 
+def _owned_exercise_qs(user):
+    return (
+        CodingExercise.objects
+        .select_related('section__course')
+        .filter(course_owner_q(user, 'section__course'))
+        .distinct()
+    )
+
+
 class CodingExerciseDetailAPIView(APIView):
     """GET / PATCH / DELETE /api/courses/coding-exercises/{exercise_id}/"""
-    permission_classes = [IsAuthenticated, IsEmailVerified, IsInstructorUser]
+    permission_classes = [IsAuthenticated, IsEmailVerified, IsCourseCreator]
     parser_classes = [JSONParser, FormParser, MultiPartParser]
 
     def _get_owned_exercise(self, request, exercise_id):
-        return get_object_or_404(
-            CodingExercise.objects.select_related('section__course'),
-            pk=exercise_id,
-            section__course__instructors=request.user,
-        )
+        return get_object_or_404(_owned_exercise_qs(request.user), pk=exercise_id)
 
     def get(self, request, exercise_id):
         exercise = self._get_owned_exercise(request, exercise_id)
@@ -89,15 +94,11 @@ class CodingExerciseRunAPIView(APIView):
     Returns 202 + {task_id}; poll GET /learn/coding-exercises/tasks/{task_id}/
     (that endpoint is IsEmailVerified-gated, not learner-only).
     """
-    permission_classes = [IsAuthenticated, IsEmailVerified, IsInstructorUser]
+    permission_classes = [IsAuthenticated, IsEmailVerified, IsCourseCreator]
     parser_classes = [JSONParser, FormParser, MultiPartParser]
 
     def post(self, request, exercise_id):
-        exercise = get_object_or_404(
-            CodingExercise.objects.select_related('section__course'),
-            pk=exercise_id,
-            section__course__instructors=request.user,
-        )
+        exercise = get_object_or_404(_owned_exercise_qs(request.user), pk=exercise_id)
 
         mode = request.data.get('mode') or 'tests'
         if mode not in ('tests', 'code'):

@@ -712,5 +712,84 @@ class AssignmentCurriculumFlowTests(AssignmentTestBase):
 
 
 # ---------------------------------------------------------------------------
+# Submission gate: an assignment must be gradable
+# ---------------------------------------------------------------------------
+
+class AssignmentSubmissionGateTests(AssignmentTestBase):
+    """An unfinished assignment used to publish silently and then grade every
+    submission to 0 — `RubricGrader` short-circuits on an empty rubric, and
+    `_autofill_rubric` only derives one from a model answer. Nothing inspected
+    assignments at submission time."""
+
+    def setUp(self):
+        self.assignment = Assignment.objects.create(
+            section=self.section, title='Reflection Essay', total_score=10, passing_score=5,
+        )
+        SectionContent.objects.create(
+            section=self.section,
+            item_type=SectionContent.ItemType.ASSIGNMENT,
+            content_type=ContentType.objects.get_for_model(Assignment),
+            object_id=self.assignment.pk,
+            position=1,
+        )
+
+    def _submit(self):
+        from django.core.exceptions import ValidationError
+        with self.assertRaises(ValidationError) as ctx:
+            self.course.transition_to('under_review')
+        return ctx.exception.message_dict
+
+    def test_assignment_with_no_questions_blocks_submission(self):
+        errors = self._submit()
+        self.assertIn('assignments', errors)
+        self.assertIn('Reflection Essay', errors['assignments'][0])
+        self.assertIn('has no questions', errors['assignments'][0])
+
+    def test_question_without_model_answer_or_rubric_blocks_submission(self):
+        AssignmentQuestion.objects.create(
+            assignment=self.assignment, question_text='Why?', position=1, points=10,
+        )
+        errors = self._submit()
+        self.assertIn('assignments', errors)
+        self.assertIn('cannot be graded', errors['assignments'][0])
+
+    def test_model_answer_alone_is_enough(self):
+        """The rubric auto-generates from it on save, so the question can score."""
+        AssignmentQuestion.objects.create(
+            assignment=self.assignment, question_text='Why?', position=1, points=10,
+            model_answer='Because gradient descent minimises the loss function.',
+        )
+        self.course.transition_to('under_review')
+        self.assertEqual(self.course.status, 'under_review')
+
+    def test_rubric_alone_is_enough(self):
+        AssignmentQuestion.objects.create(
+            assignment=self.assignment, question_text='Why?', position=1, points=10,
+            rubric=[{'type': 'keyword', 'value': 'gradient', 'points': 10}],
+        )
+        self.course.transition_to('under_review')
+        self.assertEqual(self.course.status, 'under_review')
+
+    def test_error_is_separate_from_the_quiz_and_lecture_checks(self):
+        """Each incomplete content type reports under its own key, so the
+        instructor sees every outstanding item at once rather than one at a
+        time."""
+        lecture = Lecture.objects.create(
+            section=self.section, title='Unfinished lesson',
+            lecture_type=Lecture.LectureType.VIDEO,
+        )
+        SectionContent.objects.create(
+            section=self.section,
+            item_type=SectionContent.ItemType.LECTURE,
+            content_type=ContentType.objects.get_for_model(Lecture),
+            object_id=lecture.pk,
+            position=2,
+        )
+        errors = self._submit()
+        self.assertIn('assignments', errors)
+        self.assertIn('empty_lectures', errors)
+
+
+# ---------------------------------------------------------------------------
 # Course lifecycle (status transitions + edit lock) — shared base
 # ---------------------------------------------------------------------------

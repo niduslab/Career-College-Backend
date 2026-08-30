@@ -26,6 +26,7 @@ from courses.models import (
     Quiz,
     QuizAttempt,
     SectionContent,
+    VideoAsset,
     WatchProgress,
 )
 from courses.services.dashboard_service import STREAK_WINDOW_DAYS
@@ -94,6 +95,13 @@ class _DashboardFixtureMixin:
             content_type=ContentType.objects.get_for_model(Lecture),
             object_id=lecture.pk,
             position=position,
+        )
+        # A video lecture with no VideoAsset is "awaiting content" (step 1 of
+        # two-step authoring) and is hidden from learners, so these fixtures
+        # carry a ready asset — they stand in for finished lessons.
+        VideoAsset.objects.create(
+            lecture=lecture, video_file=f'courses/dash/{lecture.pk}.mp4',
+            duration_seconds=1800, is_active=True, status=VideoAsset.Status.READY,
         )
         return lecture
 

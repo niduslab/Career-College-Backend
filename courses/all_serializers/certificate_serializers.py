@@ -85,6 +85,30 @@ class PublicCertificateSerializer(serializers.Serializer):
         return build_verification_url(obj)
 
 
+class AdminCertificateListSerializer(serializers.ModelSerializer):
+    """Row for the admin console's certificate browser.
+
+    Carries the revocation fields the learner-facing serializers omit, so an
+    admin can see why and when a credential was revoked. Still reads from the
+    frozen snapshot — never the live course or profile rows.
+    """
+
+    course = serializers.SerializerMethodField()
+
+    class Meta:
+        model = Certificate
+        fields = [
+            'certificate_uid', 'certificate_id', 'status',
+            'learner_name', 'course_title', 'issued_at', 'completion_date',
+            'revoked_at', 'revoked_reason', 'issuer_name', 'course',
+        ]
+        read_only_fields = fields
+
+    def get_course(self, obj):
+        course = obj.enrollment.course
+        return {'id': course.id, 'title': course.title, 'slug': course.slug}
+
+
 class _CertificateCourseBriefSerializer(serializers.ModelSerializer):
     """Live course card fields for the certificate row."""
 

@@ -202,3 +202,93 @@ class CertificateVerificationTests(APITestCase):
         self.assertIn(self.certificate.certificate_id,
                       response['Content-Disposition'])
         self.assertTrue(response.content.startswith(b'%PDF-'))
+
+
+class AdminCertificateListTests(APITestCase):
+    """Admin browser: search, status filter, permission gate."""
+
+    @classmethod
+    def setUpTestData(cls):
+        cls.instructor = User.objects.create_user(
+            email='adm_instructor@example.com', password='pw12345!',
+            full_name='Ada Lovelace', user_type='instructor', is_email_verified=True,
+        )
+        cls.learner = User.objects.create_user(
+            email='adm_learner@example.com', password='pw12345!',
+            full_name='Grace Hopper', user_type='learner', is_email_verified=True,
+        )
+        cls.admin = User.objects.create_user(
+            email='adm_admin@example.com', password='pw12345!',
+            full_name='Platform Admin', user_type='admin', is_email_verified=True,
+            is_staff=True,
+        )
+        cls.course = NidusCourse.objects.create(
+            created_by=cls.instructor, title='Next.js Development',
+            slug='nextjs-adminlist', description='Admin list tests.',
+            status=NidusCourse.CourseStatus.PUBLISHED, learning_hours=120,
+        )
+        cls.course.instructors.add(cls.instructor)
+
+    def setUp(self):
+        enrollment = Enrollment.objects.create(
+            user=self.learner, course=self.course,
+            completed_at=timezone.now(), progress_percent=100,
+        )
+        self.certificate = issue_certificate(enrollment)
+        self.url = reverse('courses:admin-certificate-list')
+
+    def test_requires_admin(self):
+        self.assertEqual(self.client.get(self.url).status_code,
+                         status.HTTP_401_UNAUTHORIZED)
+        self.client.force_authenticate(user=self.learner)
+        self.assertEqual(self.client.get(self.url).status_code,
+                         status.HTTP_403_FORBIDDEN)
+
+    def test_admin_sees_every_certificate(self):
+        self.client.force_authenticate(user=self.admin)
+        response = self.client.get(self.url)
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        rows = response.data['data']['results']
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]['certificate_id'],
+                         self.certificate.certificate_id)
+        self.assertEqual(rows[0]['learner_name'], 'Grace Hopper')
+        self.assertEqual(rows[0]['course']['slug'], 'nextjs-adminlist')
+
+    def test_search_matches_id_learner_and_course(self):
+        self.client.force_authenticate(user=self.admin)
+        for term in (self.certificate.certificate_id, 'grace', 'next.js'):
+            with self.subTest(term=term):
+                res = self.client.get(self.url, {'search': term})
+                self.assertEqual(res.data['data']['count'], 1)
+
+        self.assertEqual(
+            self.client.get(self.url, {'search': 'nothing-here'}).data['data']['count'], 0)
+
+    def test_single_character_search_is_ignored(self):
+        """One character matches most of the table — never a useful query."""
+        self.client.force_authenticate(user=self.admin)
+        res = self.client.get(self.url, {'search': 'z'})
+        self.assertEqual(res.data['data']['count'], 1)
+
+    def test_status_filter(self):
+        self.client.force_authenticate(user=self.admin)
+        self.assertEqual(
+            self.client.get(self.url, {'status': 'valid'}).data['data']['count'], 1)
+        self.assertEqual(
+            self.client.get(self.url, {'status': 'revoked'}).data['data']['count'], 0)
+
+        self.client.post(reverse('courses:certificate-revoke', kwargs={
+            'certificate_uid': str(self.certificate.certificate_uid)}), {'reason': 'x'})
+
+        self.assertEqual(
+            self.client.get(self.url, {'status': 'revoked'}).data['data']['count'], 1)
+        row = self.client.get(self.url, {'status': 'revoked'}).data['data']['results'][0]
+        self.assertEqual(row['revoked_reason'], 'x')
+        self.assertIsNotNone(row['revoked_at'])
+
+    def test_unknown_sort_falls_back_instead_of_erroring(self):
+        self.client.force_authenticate(user=self.admin)
+        res = self.client.get(self.url, {'sort': 'bogus'})
+        self.assertEqual(res.status_code, status.HTTP_200_OK)

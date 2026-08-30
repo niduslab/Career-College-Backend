@@ -9,6 +9,7 @@ Routes (all under /api/v1/courses/):
     POST certificates/<uuid:certificate_uid>/revoke/         -> CertificateRevokeView
     POST certificates/<uuid:certificate_uid>/restore/        -> CertificateRestoreView
     GET  certificates/verify/<str:identifier>/               -> CertificatePublicVerifyView
+    GET  admin/certificates/                                 -> AdminCertificateListView
 """
 
 import logging
@@ -24,6 +25,7 @@ from core.permissions import IsEmailVerified, IsLearnerUser, IsPlatformAdmin
 from courses.all_models.certificate_models import Certificate
 from courses.all_models.course_models import NidusCourse
 from courses.all_serializers.certificate_serializers import (
+    AdminCertificateListSerializer,
     CertificateSerializer,
     LearnerCertificateListSerializer,
     PublicCertificateSerializer,
@@ -37,6 +39,7 @@ from courses.services.certificate_service import (
     get_learner_certificates,
     restore_certificate,
     revoke_certificate,
+    search_certificates,
 )
 
 logger = logging.getLogger(__name__)
@@ -188,6 +191,31 @@ class CertificateDownloadView(APIView):
         filename = certificate.certificate_id or certificate.certificate_uid
         response['Content-Disposition'] = f'attachment; filename="certificate-{filename}.pdf"'
         return response
+
+
+class AdminCertificateListView(APIView):
+    """
+    GET /api/v1/courses/admin/certificates/
+
+    Platform-wide certificate browser for the admin console — the discovery
+    surface for revoke/restore, which otherwise require a UUID the admin has no
+    way to look up.
+
+    Query params: ?search= (certificate ID / learner / course, >= 2 chars),
+    ?status=valid|revoked, ?sort= (whitelist), plus the standard paginator's
+    ?page / ?page_size.
+    """
+
+    permission_classes = [IsAuthenticated, IsEmailVerified, IsPlatformAdmin]
+
+    def get(self, request):
+        queryset = search_certificates(request.query_params)
+        paginator = StandardResultsSetPagination()
+        page = paginator.paginate_queryset(queryset, request)
+        serializer = AdminCertificateListSerializer(page, many=True)
+        paginated_response = paginator.get_paginated_response(serializer.data)
+        paginated_response.data = {'success': True, 'data': paginated_response.data}
+        return paginated_response
 
 
 class CertificateRevokeView(APIView):

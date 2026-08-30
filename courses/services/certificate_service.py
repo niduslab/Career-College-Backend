@@ -6,6 +6,7 @@ import uuid
 from django.conf import settings
 from django.core.files.base import ContentFile
 from django.db import IntegrityError, transaction
+from django.db.models import Q
 from django.utils import timezone
 
 from courses.all_models.certificate_models import Certificate
@@ -281,6 +282,47 @@ def get_certificate_for_learner(user, course_slug: str) -> Certificate:
     if enrollment is None:
         raise PermissionError('Not enrolled.')
     return Certificate.objects.get(enrollment=enrollment)
+
+
+_ADMIN_SORT_WHITELIST = {
+    '-issued_at': ('-issued_at', '-id'),
+    'issued_at': ('issued_at', 'id'),
+    'learner_name': ('learner_name', 'id'),
+    '-learner_name': ('-learner_name', '-id'),
+    'course_title': ('course_title', 'id'),
+    '-course_title': ('-course_title', '-id'),
+}
+
+
+def search_certificates(params):
+    """Platform-wide certificate queryset for the admin console. Read-only.
+
+    Params: ``search`` (certificate_id / learner_name / course_title icontains),
+    ``status`` (valid | revoked), ``sort`` (whitelist).
+
+    Search requires >= 2 characters — a single character matches most of the
+    table and is never a useful query.
+    """
+    qs = Certificate.objects.select_related(
+        'enrollment__course', 'enrollment__user',
+    )
+
+    search = (params.get('search') or '').strip()
+    if len(search) >= 2:
+        qs = qs.filter(
+            Q(certificate_id__icontains=search)
+            | Q(learner_name__icontains=search)
+            | Q(course_title__icontains=search)
+        )
+
+    status = (params.get('status') or '').strip()
+    if status in Certificate.Status.values:
+        qs = qs.filter(status=status)
+
+    sort = params.get('sort') or '-issued_at'
+    # Unknown sort falls back to newest-first rather than 400ing: this is a
+    # browse surface, and an unordered queryset would break pagination.
+    return qs.order_by(*_ADMIN_SORT_WHITELIST.get(sort, ('-issued_at', '-id')))
 
 
 def get_learner_certificates(user):

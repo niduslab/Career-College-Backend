@@ -1,6 +1,7 @@
 from courses.all_views import (
     CourseCategoryDetailView,
     CourseCategoryListCreateView,
+    AdminCertificateListView,
     CertificateDownloadView,
     CertificatePublicVerifyView,
     CertificateRestoreView,
@@ -116,6 +117,7 @@ __all__ = [
     'CertificatePublicVerifyView',
     'CertificateRevokeView',
     'CertificateRestoreView',
+    'AdminCertificateListView',
     'LearnerDashboardSummaryView',
     'LearnerActivityFeedView',
     'LearnerUpcomingView',

@@ -187,6 +187,12 @@ implementation detail, and the prefix has to stay stable.
 | `GET certificates/<uuid>/download/` | Public | PDF |
 | `POST certificates/<uuid>/revoke/` | `IsPlatformAdmin` | Body `{reason}` |
 | `POST certificates/<uuid>/restore/` | `IsPlatformAdmin` | |
+| `GET admin/certificates/` | `IsPlatformAdmin` | Browser: `?search=` (ID/learner/course, ≥2 chars), `?status=`, `?sort=` |
+
+`admin/certificates/` is the **discovery surface** for revoke/restore, which
+otherwise need a UUID an admin has no way to look up. `search_certificates()`
+filters in SQL and falls back to newest-first on an unknown `sort` rather than
+400ing — this is a browse screen, and an unordered queryset breaks pagination.
 
 The `<str:identifier>` route is declared **after** the `<uuid:...>` routes so
 Django's typed converter wins for a bare UUID.
@@ -221,8 +227,16 @@ FRONTEND_URL + CERTIFICATE_VERIFY_PATH + certificate_id
 
 ### QR code
 
-Rendered by the frontend from `verification_url`. No backend QR generation and no
-new dependency (requirements §8).
+Rendered in **both** places, from the same `build_verification_url()` value:
+
+- **PDF** — `_draw_qr()` in `certificate_pdf.py` (the `qrcode` library, pure
+  Python, no network). The PDF is what gets printed, emailed and attached to a
+  CV, so a printed certificate without a QR would force a verifier to retype a
+  long URL by hand.
+- **Web** — the frontend's `/verify/<id>` page draws its own with `qrcode.react`.
+
+`_draw_qr` is best-effort: a QR failure logs a warning and the PDF still renders,
+because the verification URL is printed as text beside it either way.
 
 ---
 
@@ -260,7 +274,21 @@ Do not "fix" this apparent inconsistency: the two questions are different.
 ## 10. PDF generation
 
 `courses/certificate_pdf.py`, rendered on-the-fly by reportlab — nothing stored
-on disk. Landscape A4, two columns (67% content / 33% grey panel with seal).
+on disk. Landscape A4, centred symmetric layout: double frame with corner
+flourishes, wordmark and title stacked at the top, the award statement centred
+over a faint seal watermark, then instructor signature · seal · authorized
+signature, above a verification strip with the URL and a QR code.
+
+**The palette mirrors the frontend's brand tokens** (`src/app/globals.css`) so
+the PDF, the web verify page and the dashboard read as one system —
+`_PRIMARY_*` are `--primary-*` and the greys are `--gray-*` by another name.
+Change one and change the other. The older `_NAVY` / `_GOLD` names survive as
+aliases onto brand purple so the drawing helpers still read naturally.
+
+**The brand mark is bundled**, not uploaded: `courses/assets/career-college-logo.webp`,
+read from the package directory rather than through `default_storage` (it is
+application art, not user media). `_draw_wordmark` falls back to a drawn CC
+monogram if the file is missing, so a packaging mistake never breaks a PDF.
 
 Every signatory value is read from the **certificate snapshot**, never from the
 live course or profile rows. That is what makes re-downloading an old certificate
@@ -268,8 +296,19 @@ reproduce the original.
 
 - `_draw_signature_image()` opens the stored copy through the `FieldFile`, scales
   it to fit, and draws with `mask='auto'` so PNG transparency is honoured.
-- On any failure it falls back to `_draw_signature()`, the hand-drawn vector
-  flourish. **Keep that function** — it is the fallback, not dead code.
+- **When there is no stored signature, nothing is drawn.** An earlier version
+  fell back to a hand-drawn vector flourish; that was removed deliberately,
+  because an invented squiggle above a real person's name reads as *that
+  person's signature*, which it is not. Blank space above the rule is the honest
+  state and matches an unsigned paper certificate. Do not reintroduce it.
+- **The learner name is set in script** (Great Vibes, bundled, SIL OFL) and
+  title-cased — script faces are drawn for mixed case and ALL CAPS runs
+  together. Great Vibes is Latin-only, so `_is_latin()` routes a name outside
+  that range back to `_UNICODE_BOLD` (VeraBd: Latin Extended, Greek, Cyrillic)
+  in caps rather than rendering tofu. `_title_case()` leaves already-mixed
+  tokens ("McDonald", "O'Brien") alone.
+- **There is no background watermark.** The tinted disc and sunburst that used
+  to sit behind the body added texture but no meaning and fought the name.
 - Two signature columns: instructor (left) and authorized signatory (right, drawn
   only when a name is set).
 - The metadata block prints Course Duration, Learning Hours, Completion Date and

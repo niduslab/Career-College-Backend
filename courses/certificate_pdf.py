@@ -242,9 +242,13 @@ def _draw_signature_image(c, image_field, base_x, base_y, max_w=155, max_h=44):
         return False
 
 
-def _draw_signatory_column(c, x, col_w, baseline_y, name, designation, org,
+def _draw_signatory_column(c, x, col_w, baseline_y, role, name, designation, org,
                            signature_field):
-    """One centred signature column: image (or flourish), rule, name, role, org.
+    """One centred signature column: signature, rule, role, name, title, org.
+
+    `role` ("COURSE INSTRUCTOR" / "AUTHORIZED SIGNATORY") sits directly under the
+    rule and is what tells a reader which column is which — without it the two
+    are identically shaped and indistinguishable.
 
     Everything is centred inside `col_w` so the two columns balance around the
     seal regardless of how wide the names are.
@@ -267,23 +271,30 @@ def _draw_signatory_column(c, x, col_w, baseline_y, name, designation, org,
     c.setLineWidth(0.7)
     c.line(x + 12, rule_y, x + col_w - 12, rule_y)
 
+    # Role first, in brand purple caps — the one line that distinguishes the
+    # two columns from each other.
+    if role:
+        lw = _spaced_text_width(c, role, 'Helvetica-Bold', 6.5, 1.6)
+        _draw_spaced_text(c, role, mid - lw / 2, rule_y - 13,
+                          'Helvetica-Bold', 6.5, _PRIMARY_700, 1.6)
+
     if name:
         fitted, sz = _fit_text(c, name, 'Helvetica-Bold', 10.5, 8, col_w - 16)
         c.setFont('Helvetica-Bold', sz)
         c.setFillColor(_GREY_22)
-        c.drawCentredString(mid, rule_y - 14, fitted)
+        c.drawCentredString(mid, rule_y - 27, fitted)
 
     if designation:
         fitted, sz = _fit_text(c, designation, 'Helvetica', 8.5, 7, col_w - 16)
         c.setFont('Helvetica', sz)
         c.setFillColor(_GREY_77)
-        c.drawCentredString(mid, rule_y - 26, fitted)
+        c.drawCentredString(mid, rule_y - 39, fitted)
 
     if org:
         fitted, sz = _fit_text(c, org, 'Helvetica', 8.5, 7, col_w - 16)
         c.setFont('Helvetica', sz)
         c.setFillColor(_GREY_99)
-        c.drawCentredString(mid, rule_y - 37, fitted)
+        c.drawCentredString(mid, rule_y - 50, fitted)
 
 
 def _is_latin(text) -> bool:
@@ -571,24 +582,24 @@ def generate_certificate_pdf(certificate) -> bytes:
     # ── Footer: signature · seal · signature ──────────────────────────────────
     # Raised above the verification strip so the QR at bottom-right has its own
     # band and never overlaps the right-hand signature column.
-    sig_baseline = 152
+    sig_baseline = 164
     col_w = 175
     left_x = 96
     right_x = width - 96 - col_w
 
     _draw_signatory_column(
-        c, left_x, col_w, sig_baseline,
+        c, left_x, col_w, sig_baseline, 'COURSE INSTRUCTOR',
         certificate.instructor_name, certificate.instructor_designation,
         issuer, certificate.instructor_signature,
     )
 
     # Smaller than the default so it sits between the two signature columns
     # without crowding the metadata strip above.
-    _draw_seal(c, cx, sig_baseline - 14, outer=52)
+    _draw_seal(c, cx, sig_baseline - 24, outer=44)
 
     if certificate.authorized_signatory_name:
         _draw_signatory_column(
-            c, right_x, col_w, sig_baseline,
+            c, right_x, col_w, sig_baseline, 'AUTHORIZED SIGNATORY',
             certificate.authorized_signatory_name,
             certificate.authorized_signatory_designation,
             issuer, certificate.authorized_signature,

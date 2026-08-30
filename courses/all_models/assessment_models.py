@@ -55,6 +55,19 @@ class CodingExercise(AuthoredModel):
         db_table = 'coding_exercises'
         ordering = ['-created_at']
 
+    @property
+    def is_awaiting_content(self) -> bool:
+        """True while nothing has been authored inside this exercise.
+
+        Checks the three code fields, not just `evaluation_script`: an exercise
+        with starter or solution code is partly authored even though it still
+        blocks submission, and a caller replacing shells must not delete it.
+        """
+        return not any(
+            (getattr(self, field) or '').strip()
+            for field in ('evaluation_script', 'starter_code', 'solution_code')
+        )
+
     def __str__(self):
         return self.title
 
@@ -93,6 +106,17 @@ class Quiz(AuthoredModel):
         indexes = [
             models.Index(fields=['section', '-created_at'], name='idx_quiz_section_date'),
         ]
+
+    @property
+    def is_awaiting_content(self) -> bool:
+        """True while nothing has been authored inside this quiz.
+
+        Sibling of `Lecture.is_awaiting_content`. A quiz in this state is a
+        shell: it blocks course submission, and callers may replace it without
+        destroying work. Reads a prefetched `questions` when the caller
+        supplied one, so list endpoints don't N+1.
+        """
+        return not self.questions.all()
 
     def validate_related_lectures(self):
         """
@@ -295,6 +319,17 @@ class Assignment(AuthoredModel):
         indexes = [
             models.Index(fields=['section', '-created_at'], name='idx_assignment_section_date'),
         ]
+
+    @property
+    def is_awaiting_content(self) -> bool:
+        """True while nothing has been authored inside this assignment.
+
+        Deliberately *only* "no questions" — not the stricter gradability rule
+        `_validate_course_completeness` applies. This flag decides whether a
+        caller may replace the row, so it must mean "nothing would be lost"; an
+        assignment with an imperfect question still holds authored work.
+        """
+        return not self.questions.all()
 
     def __str__(self):
         return self.title

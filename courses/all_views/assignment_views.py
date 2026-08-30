@@ -11,8 +11,8 @@ from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
-from core.permissions import IsEmailVerified, IsInstructorUser
-from courses.models import Assignment, AssignmentQuestion, CourseSection
+from core.permissions import IsCourseCreator, IsEmailVerified
+from courses.models import Assignment, AssignmentQuestion
 from courses.serializers import (
     AssignmentCreateUpdateSerializer,
     AssignmentQuestionSerializer,
@@ -30,9 +30,20 @@ from courses.services.rubric_autogen import (
     DEFAULT_MAX_TERMS,
     generate_rubric_from_model_answer,
 )
-from courses.utils import guard_editable
+from courses.utils import guard_editable, owned_section_qs
 
 logger = logging.getLogger(__name__)
+
+
+def _owned_section_ids(user):
+    """Section pks the user owns, as a subquery.
+
+    Filtering with `section__in=<subquery>` instead of joining through
+    `section__course__instructors` keeps the `Sum('questions__points')`
+    annotation on the assignment querysets correct — an ownership join on a
+    multi-valued relation would multiply the aggregate.
+    """
+    return owned_section_qs(user).values('pk')
 
 
 class StrictIntegerField(serializers.IntegerField):
@@ -60,11 +71,7 @@ class AssignmentListAPIView(APIView):
     parser_classes = [JSONParser, FormParser, MultiPartParser]
 
     def _get_owned_section(self, request, section_id):
-        return get_object_or_404(
-            CourseSection.objects.select_related('course'),
-            pk=section_id,
-            course__instructors=request.user,
-        )
+        return get_object_or_404(owned_section_qs(request.user), pk=section_id)
 
     def get(self, request, section_id):
         section = self._get_owned_section(request, section_id)
@@ -90,7 +97,7 @@ class AssignmentDetailAPIView(APIView):
 
     def get_permissions(self):
         if self.request.method in ('PATCH', 'PUT', 'DELETE'):
-            return [IsAuthenticated(), IsEmailVerified(), IsInstructorUser()]
+            return [IsAuthenticated(), IsEmailVerified(), IsCourseCreator()]
         return super().get_permissions()
 
     def _get_owned_assignment(self, request, assignment_id):
@@ -98,9 +105,9 @@ class AssignmentDetailAPIView(APIView):
             Assignment.objects
             .annotate(max_score=Coalesce(Sum('questions__points'), Value(0)))
             .select_related('section__course')
-            .prefetch_related('questions'),
+            .prefetch_related('questions')
+            .filter(section__in=_owned_section_ids(request.user)),
             pk=assignment_id,
-            section__course__instructors=request.user,
         )
 
     def get(self, request, assignment_id):
@@ -177,14 +184,15 @@ class AssignmentQuestionListCreateAPIView(APIView):
 
     def get_permissions(self):
         if self.request.method == 'POST':
-            return [IsAuthenticated(), IsEmailVerified(), IsInstructorUser()]
+            return [IsAuthenticated(), IsEmailVerified(), IsCourseCreator()]
         return super().get_permissions()
 
     def _get_owned_assignment(self, request, assignment_id):
         return get_object_or_404(
-            Assignment.objects.select_related('section__course'),
+            Assignment.objects
+            .select_related('section__course')
+            .filter(section__in=_owned_section_ids(request.user)),
             pk=assignment_id,
-            section__course__instructors=request.user,
         )
 
     def get(self, request, assignment_id):
@@ -245,14 +253,15 @@ class AssignmentQuestionDetailAPIView(APIView):
 
     def get_permissions(self):
         if self.request.method in ('PATCH', 'PUT', 'DELETE'):
-            return [IsAuthenticated(), IsEmailVerified(), IsInstructorUser()]
+            return [IsAuthenticated(), IsEmailVerified(), IsCourseCreator()]
         return super().get_permissions()
 
     def _get_owned_question(self, request, question_id):
         return get_object_or_404(
-            AssignmentQuestion.objects.select_related('assignment__section__course'),
+            AssignmentQuestion.objects
+            .select_related('assignment__section__course')
+            .filter(assignment__section__in=_owned_section_ids(request.user)),
             pk=question_id,
-            assignment__section__course__instructors=request.user,
         )
 
     def get(self, request, question_id):
@@ -340,7 +349,7 @@ class AssignmentRubricPreviewAPIView(APIView):
     instructor can SEE (and then edit) the generated criteria before saving,
     rather than discovering them only after the question is persisted. Does not
     touch the database and is not tied to a specific question."""
-    permission_classes = [IsAuthenticated, IsEmailVerified, IsInstructorUser]
+    permission_classes = [IsAuthenticated, IsEmailVerified, IsCourseCreator]
     parser_classes = [JSONParser, FormParser, MultiPartParser]
 
     def post(self, request):
@@ -370,7 +379,7 @@ class AssignmentRubricPreviewAPIView(APIView):
 
 class AssignmentQuestionReorderAPIView(APIView):
     """PATCH /api/v1/courses/assignments/{assignment_id}/questions/reorder/"""
-    permission_classes = [IsAuthenticated, IsEmailVerified, IsInstructorUser]
+    permission_classes = [IsAuthenticated, IsEmailVerified, IsCourseCreator]
     parser_classes = [JSONParser, FormParser, MultiPartParser]
 
     def patch(self, request, assignment_id):
@@ -383,9 +392,10 @@ class AssignmentQuestionReorderAPIView(APIView):
         ordered_ids = input_serializer.validated_data['ordered_ids']
 
         assignment = get_object_or_404(
-            Assignment.objects.select_related('section__course'),
+            Assignment.objects
+            .select_related('section__course')
+            .filter(section__in=_owned_section_ids(request.user)),
             pk=assignment_id,
-            section__course__instructors=request.user,
         )
         if err := guard_editable(assignment.section.course, section=assignment.section):
             return err

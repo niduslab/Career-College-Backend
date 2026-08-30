@@ -17,7 +17,9 @@ logger = logging.getLogger(__name__)
 def course_thumbnail_upload_path(instance, filename):
     """Generate deterministic, URL-safe upload path for course thumbnails."""
     base_name, ext = os.path.splitext(filename)
-    slug = slugify(base_name) or 'thumbnail'
+    # The slug comes from the uploaded filename, which the user controls and
+    # can be arbitrarily long — cap it so the key stays bounded.
+    slug = (slugify(base_name) or 'thumbnail')[:60].rstrip('-') or 'thumbnail'
     unique_suffix = uuid.uuid4().hex[:10]
     return f"courses/thumbnails/{slug}_{unique_suffix}{ext.lower()}"
 
@@ -180,7 +182,12 @@ class NidusCourse(models.Model):
                    'scheduled (cohort) courses in place of fully-authored sections; '
                    'optional for self-paced courses.',
     )
-    thumbnail = models.ImageField(upload_to=course_thumbnail_upload_path, blank=True, null=True)
+    thumbnail = models.ImageField(
+        upload_to=course_thumbnail_upload_path,
+        max_length=500,
+        blank=True,
+        null=True,
+    )
     price = models.DecimalField(
         max_digits=10,
         decimal_places=2,
@@ -412,7 +419,24 @@ class NidusCourse(models.Model):
 
         #All video lectures must be done transcoding
         from courses.all_models.assessment_models import Quiz
-        from courses.all_models.content_models import VideoAsset
+        from courses.all_models.content_models import (
+            Lecture,
+            VideoAsset,
+            lectures_awaiting_content,
+        )
+
+        # A lecture created from a title alone (step 1 of the two-step
+        # authoring flow) has nothing to play. Disjoint from the
+        # `pending_videos` check below: this one is "no video was ever
+        # uploaded", that one is "a video exists but isn't ready".
+        empty_lecture_titles = list(
+            lectures_awaiting_content(Lecture.objects.filter(section__course=self))
+            .values_list('title', flat=True)
+        )
+        if empty_lecture_titles:
+            errors['empty_lectures'] = (
+                f'These lessons have no content yet: {", ".join(empty_lecture_titles)}.'
+            )
 
         pending_videos = (
             VideoAsset.objects
@@ -443,6 +467,33 @@ class NidusCourse(models.Model):
                         )
         if incomplete_quizzes:
             errors['quizzes'] = f'Incomplete quizzes: {"; ".join(incomplete_quizzes)}.'
+
+        # Every assignment must be gradable.
+        #
+        # An assignment with no questions, or a question with neither a model
+        # answer nor a rubric, grades every submission to 0: `RubricGrader`
+        # short-circuits on an empty `rubric_snapshot`, and `_autofill_rubric`
+        # only derives one when a model answer exists. Nothing used to catch
+        # this, so an unfinished assignment could reach learners and fail all
+        # of them silently.
+        from courses.all_models.assessment_models import Assignment
+
+        incomplete_assignments = []
+        for assignment in Assignment.objects.filter(section__course=self).prefetch_related('questions'):
+            questions = list(assignment.questions.all())
+            if not questions:
+                incomplete_assignments.append(f'"{assignment.title}" has no questions')
+                continue
+            for question in questions:
+                if not (question.model_answer or '').strip() and not question.rubric:
+                    incomplete_assignments.append(
+                        f'"{assignment.title}" - Q{question.position} has no model answer '
+                        'or rubric, so it cannot be graded'
+                    )
+        if incomplete_assignments:
+            errors['assignments'] = (
+                f'Incomplete assignments: {"; ".join(incomplete_assignments)}.'
+            )
 
         # Every coding exercise must carry an evaluation script
         from courses.all_models.assessment_models import CodingExercise

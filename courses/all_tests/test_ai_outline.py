@@ -272,6 +272,9 @@ class AIOutlineServiceClientTests(APITestCase):
         self.assertEqual(args[0], 'http://ai-services:8001/v1/course-outline/')
         self.assertEqual(kwargs['headers']['X-Service-Key'], 'shared-secret')
         self.assertEqual(kwargs['timeout'], REQUEST_TIMEOUT)
+        # Pinned deliberately: the read leg must stay ABOVE the AI service's own
+        # LLM timeout (40s) or Django gives up first and every slow generation
+        # looks like a 503.
         self.assertEqual(kwargs['timeout'], (5, 45))
 
     @patch('courses.services.ai_outline_service.requests.post')

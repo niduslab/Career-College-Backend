@@ -1,5 +1,4 @@
 from django.db import IntegrityError, transaction
-from django.db.models import Q
 from django.shortcuts import get_object_or_404
 from rest_framework import status
 from rest_framework.parsers import FormParser, JSONParser, MultiPartParser
@@ -7,11 +6,10 @@ from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
-from core.permissions import IsInstructorUser
+from core.permissions import IsCourseCreator
 from courses.models import (
     Assignment,
     CodingExercise,
-    CourseSection,
     Lecture,
     Quiz,
     QuizAnswer,
@@ -39,7 +37,13 @@ from courses.services import (
     get_section_lectures,
     reorder_section_content,
 )
-from courses.utils import guard_editable, owned_course_qs, owned_section_qs, save_authored
+from courses.utils import (
+    course_owner_q,
+    guard_editable,
+    owned_course_qs,
+    owned_section_qs,
+    save_authored,
+)
 
 
 # =============================================================================
@@ -161,11 +165,7 @@ class LectureListAPIView(APIView):
     parser_classes = [JSONParser, FormParser, MultiPartParser]
 
     def _get_owned_section(self, request, section_id):
-        return get_object_or_404(
-            CourseSection.objects.select_related('course'),
-            pk=section_id,
-            course__instructors=request.user,
-        )
+        return get_object_or_404(owned_section_qs(request.user), pk=section_id)
 
     def get(self, request, section_id):
         section = self._get_owned_section(request, section_id)
@@ -179,10 +179,24 @@ class LectureDetailAPIView(APIView):
     parser_classes = [JSONParser, FormParser, MultiPartParser]
 
     def _get_owned_lecture(self, request, lecture_id):
-        queryset = Lecture.objects.select_related('section__course').prefetch_related('video_assets').filter(
-            Q(section__course__instructors=request.user) | Q(section__course__created_by=request.user)
+        queryset = (
+            Lecture.objects
+            .select_related('section__course')
+            .prefetch_related('video_assets')
+            .filter(course_owner_q(request.user, 'section__course'))
+            .distinct()
         )
         return get_object_or_404(queryset, pk=lecture_id)
+
+    def _guard_section(self, lecture):
+        """Which section to guard the edit against.
+
+        A lecture still awaiting its content has never been playable, so
+        filling it in is guarded like a create (no `section`) — otherwise a
+        step-1 lecture inside an already-released section could never reach
+        step 2. Once it has content, the released-content lock applies.
+        """
+        return None if lecture.is_awaiting_content else lecture.section
 
     def get(self, request, lecture_id):
         lecture = self._get_owned_lecture(request, lecture_id)
@@ -190,7 +204,7 @@ class LectureDetailAPIView(APIView):
 
     def patch(self, request, lecture_id):
         lecture = self._get_owned_lecture(request, lecture_id)
-        if err := guard_editable(lecture.section.course, section=lecture.section): return err
+        if err := guard_editable(lecture.section.course, section=self._guard_section(lecture)): return err
         serializer = LectureCreateUpdateSerializer(
             lecture, data=request.data, partial=True, context={'section': lecture.section}
         )
@@ -210,7 +224,7 @@ class LectureDetailAPIView(APIView):
 
     def put(self, request, lecture_id):
         lecture = self._get_owned_lecture(request, lecture_id)
-        if err := guard_editable(lecture.section.course, section=lecture.section): return err
+        if err := guard_editable(lecture.section.course, section=self._guard_section(lecture)): return err
         serializer = LectureCreateUpdateSerializer(
             lecture, data=request.data, context={'section': lecture.section}
         )
@@ -230,7 +244,7 @@ class LectureDetailAPIView(APIView):
 
     def delete(self, request, lecture_id):
         lecture = self._get_owned_lecture(request, lecture_id)
-        if err := guard_editable(lecture.section.course, section=lecture.section): return err
+        if err := guard_editable(lecture.section.course, section=self._guard_section(lecture)): return err
         # GenericRelation on Lecture cascades SectionContent deletion automatically.
         lecture.delete()
         return Response({'success': True, 'message': 'Lecture deleted successfully.'}, status=status.HTTP_200_OK)
@@ -245,15 +259,11 @@ class SectionContentListCreateAPIView(APIView):
     GET  /api/sections/{section_id}/contents/  — ordered curriculum list
     POST /api/sections/{section_id}/contents/  — create lecture or quiz + slot
     """
-    permission_classes = [IsAuthenticated, IsInstructorUser]
+    permission_classes = [IsAuthenticated, IsCourseCreator]
     parser_classes = [JSONParser, FormParser, MultiPartParser]
 
     def _get_owned_section(self, request, section_id):
-        return get_object_or_404(
-            CourseSection.objects.select_related('course'),
-            pk=section_id,
-            course__instructors=request.user,
-        )
+        return get_object_or_404(owned_section_qs(request.user), pk=section_id)
 
     def get(self, request, section_id):
         section = self._get_owned_section(request, section_id)
@@ -272,11 +282,19 @@ class SectionContentListCreateAPIView(APIView):
         assignment_ids = [c.object_id for c in contents if c.item_type == SectionContent.ItemType.ASSIGNMENT]
 
         lectures = (
-            {lec.id: lec for lec in Lecture.objects.filter(id__in=lecture_ids)}
+            {
+                lec.id: lec
+                for lec in Lecture.objects.filter(id__in=lecture_ids).prefetch_related('video_assets')
+            }
             if lecture_ids else {}
         )
+        # `is_awaiting_content` reads each row's questions, so prefetch them —
+        # without this the serializer issues one query per quiz/assignment.
         quizzes = (
-            {q.id: q for q in Quiz.objects.filter(id__in=quiz_ids)}
+            {
+                q.id: q
+                for q in Quiz.objects.filter(id__in=quiz_ids).prefetch_related('questions')
+            }
             if quiz_ids else {}
         )
         coding_exercises = (
@@ -284,7 +302,10 @@ class SectionContentListCreateAPIView(APIView):
             if coding_ids else {}
         )
         assignments = (
-            {a.id: a for a in Assignment.objects.filter(id__in=assignment_ids)}
+            {
+                a.id: a
+                for a in Assignment.objects.filter(id__in=assignment_ids).prefetch_related('questions')
+            }
             if assignment_ids else {}
         )
 
@@ -495,8 +516,11 @@ class SectionContentReorderAPIView(APIView):
     parser_classes = [JSONParser, FormParser, MultiPartParser]
 
     def _get_owned_content(self, request, content_id):
-        queryset = SectionContent.objects.select_related('section__course').filter(
-            Q(section__course__instructors=request.user) | Q(section__course__created_by=request.user)
+        queryset = (
+            SectionContent.objects
+            .select_related('section__course')
+            .filter(course_owner_q(request.user, 'section__course'))
+            .distinct()
         )
         return get_object_or_404(queryset, pk=content_id)
 
@@ -546,11 +570,13 @@ class QuizDetailAPIView(APIView):
     parser_classes = [JSONParser, FormParser, MultiPartParser]
 
     def _get_owned_quiz(self, request, quiz_id):
-        return get_object_or_404(
-            Quiz.objects.select_related('section__course'),
-            pk=quiz_id,
-            section__course__instructors=request.user,
+        queryset = (
+            Quiz.objects
+            .select_related('section__course')
+            .filter(course_owner_q(request.user, 'section__course'))
+            .distinct()
         )
+        return get_object_or_404(queryset, pk=quiz_id)
 
     def get(self, request, quiz_id):
         quiz = self._get_owned_quiz(request, quiz_id)
@@ -590,11 +616,13 @@ class QuizQuestionListCreateAPIView(APIView):
     parser_classes = [JSONParser, FormParser, MultiPartParser]
 
     def _get_owned_quiz(self, request, quiz_id):
-        return get_object_or_404(
-            Quiz.objects.select_related('section__course'),
-            pk=quiz_id,
-            section__course__instructors=request.user,
+        queryset = (
+            Quiz.objects
+            .select_related('section__course')
+            .filter(course_owner_q(request.user, 'section__course'))
+            .distinct()
         )
+        return get_object_or_404(queryset, pk=quiz_id)
 
     def get(self, request, quiz_id):
         quiz = self._get_owned_quiz(request, quiz_id)
@@ -630,11 +658,13 @@ class QuizQuestionDetailAPIView(APIView):
     parser_classes = [JSONParser, FormParser, MultiPartParser]
 
     def _get_owned_question(self, request, question_id):
-        return get_object_or_404(
-            QuizQuestion.objects.select_related('quiz__section__course'),
-            pk=question_id,
-            quiz__section__course__instructors=request.user,
+        queryset = (
+            QuizQuestion.objects
+            .select_related('quiz__section__course')
+            .filter(course_owner_q(request.user, 'quiz__section__course'))
+            .distinct()
         )
+        return get_object_or_404(queryset, pk=question_id)
 
     def get(self, request, question_id):
         question = self._get_owned_question(request, question_id)
@@ -682,11 +712,13 @@ class QuizAnswerListCreateAPIView(APIView):
     parser_classes = [JSONParser, FormParser, MultiPartParser]
 
     def _get_owned_question(self, request, question_id):
-        return get_object_or_404(
-            QuizQuestion.objects.select_related('quiz__section__course'),
-            pk=question_id,
-            quiz__section__course__instructors=request.user,
+        queryset = (
+            QuizQuestion.objects
+            .select_related('quiz__section__course')
+            .filter(course_owner_q(request.user, 'quiz__section__course'))
+            .distinct()
         )
+        return get_object_or_404(queryset, pk=question_id)
 
     def get(self, request, question_id):
         question = self._get_owned_question(request, question_id)
@@ -716,9 +748,11 @@ class QuizAnswerDetailAPIView(APIView):
     parser_classes = [JSONParser, FormParser, MultiPartParser]
 
     def _get_owned_answer(self, request, answer_id):
-        queryset = QuizAnswer.objects.select_related('question__quiz__section__course').filter(
-            Q(question__quiz__section__course__instructors=request.user)
-            | Q(question__quiz__section__course__created_by=request.user)
+        queryset = (
+            QuizAnswer.objects
+            .select_related('question__quiz__section__course')
+            .filter(course_owner_q(request.user, 'question__quiz__section__course'))
+            .distinct()
         )
         return get_object_or_404(queryset, pk=answer_id)
 

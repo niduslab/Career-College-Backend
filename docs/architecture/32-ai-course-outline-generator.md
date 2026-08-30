@@ -87,7 +87,23 @@ Response `200`:
         "summary": "Core vocabulary and the supervised/unsupervised split.",
         "learning_outcomes": ["Explain the difference between supervised and unsupervised learning"],
         "topics": ["What is ML?", "Types of learning"],
-        "estimated_duration_minutes": 90
+        "estimated_duration_minutes": 90,
+        "content_plan": [
+          {
+            "item_type": "lecture",
+            "title": "What machine learning is",
+            "description": "Introduces the vocabulary and the two broad families.",
+            "estimated_duration_minutes": 20,
+            "language": null
+          },
+          {
+            "item_type": "coding",
+            "title": "Implement gradient descent",
+            "description": "Write the update step for a single-variable model.",
+            "estimated_duration_minutes": 30,
+            "language": "python"
+          }
+        ]
       }
     ],
     "outline_text": "Module 1: Foundations of Machine Learning (90 min)\n..."
@@ -97,6 +113,78 @@ Response `200`:
 
 `modules` drives the editable preview cards. `outline_text` is the same content
 flattened, ready to drop into `course_outline` with no client-side formatting.
+
+## `content_plan` — the items inside a module
+
+Each module carries 1–`MAX_PLAN_ITEMS` (10) planned content items. `item_type` is a
+`Literal` of the four types a `CourseSection` can hold, so a model that invents
+`"video"` or `"reading"` fails schema validation, gets the corrective retry, and
+then a clean `502` — an unknown type can never reach the frontend. `language` is
+likewise a `Literal` mirroring `CodingExercise.Language`, and is nulled on any
+non-coding item.
+
+**The apply creates these as real but deliberately empty rows** — a lecture with no
+video, a quiz with no questions, a coding exercise with no evaluation script, an
+assignment with no questions. That is safe *because* each of those blocks
+`_validate_course_completeness`: the plan is a to-do list the platform enforces,
+not a way to publish a hollow course. Nothing about a generated row is trusted;
+the same gates that catch hand-authored gaps catch these.
+
+A planned lecture's `description` has nowhere to land — `Lecture` has no
+description column — so it survives only in the preview and in `outline_text`. The
+other three types keep it on their own `description` field.
+
+**Token budget — set by the Groq account tier, not the model.** Groq charges
+`max_completion_tokens` against the account's tokens-per-minute allowance **up
+front**, before generating anything. Ask for more than the tier allows and every
+request fails instantly with `413 rate_limit_exceeded`, whatever the model's own
+output ceiling is (gpt-oss-120b advertises 65536). The free `on_demand` tier gives
+8000 TPM, and the prompt costs ~800, so `LLM_MAX_OUTPUT_TOKENS` is **6500**.
+
+`MAX_MODULES` (10) and `MAX_PLAN_ITEMS` (10) are a **runaway guard, not a promise
+the budget covers them**. A pathological 10 × 10 response would need roughly twice
+the 6500-token allowance and would truncate mid-object → retry → 502, spending TPM
+on the way. What keeps generations inside the budget is the prompt asking for 4–8
+items across a sensible number of modules; the schema ceiling only stops a
+runaway.
+
+**`LLM_REASONING_EFFORT` is `low`, and that is a budget decision, not a quality
+one.** gpt-oss is a reasoning model and its reasoning tokens are billed against
+the *same* output budget as the JSON. At `medium` they consumed ~1600 of ~4700
+completion tokens while producing an outline of identical shape and quality;
+dropping to `low` cut completion tokens to ~2800 and halved latency. Raising it
+back re-introduces the truncation failure below on larger courses.
+
+Measured on a 10-hour course at `low`: 5 modules × 6–7 items, 893 prompt + 2812
+completion tokens, ~6 s. Roughly 2.3× headroom under the 6500 cap — but the
+margin is the model's judgment, not a hard guarantee. A paid tier is what would
+make the worst case safe.
+
+### Reading a 503: the response time says which failure it was
+
+Django collapses every upstream failure into one friendly 503, so the timing is
+the diagnostic. Confirm against `docker logs career-college-ai-services`.
+
+| Time | Cause | Upstream |
+|---|---|---|
+| ~0.3 s | The reservation (`prompt + max_completion_tokens`) exceeds the account's **whole** TPM allowance. Misconfiguration, not load — it fails identically on an idle account. | Groq `413`, **not retried** |
+| ~10–15 s | Output cap too small for the plan: the model is cut off mid-object and Groq's JSON-mode validator rejects it. | Groq `400 json_validate_failed` |
+| +11 s per occurrence | Temporarily over TPM, e.g. a second generation inside the same minute. **The Groq SDK retries this itself** using `Retry-After`, so it self-heals — it costs latency, not a failure. | Groq `429`, retried by the SDK |
+| ~2× generation time | Valid JSON that fails the Pydantic schema on both attempts. | `InvalidLLMOutputError` |
+| fast | Service down, wrong `AI_SERVICES_BASE_URL`, or key mismatch. | — |
+
+**A truncation gets no corrective retry.** `generate_structured` retries only
+`ValueError`/`ValidationError`; a `BadRequestError` is an `APIStatusError`, which
+propagates straight out of the loop. So the token headroom above is the only
+defence against `json_validate_failed` — there is no second chance.
+
+**The plan must look like a real course, not one item per type.** The prompt
+requires *most* items to be short 5–15 minute lectures — one per distinct idea —
+with at most one quiz per module and assignment/coding only where the material
+calls for it. An earlier version simply enumerated the four types as roles, and
+the model dutifully emitted exactly one of each per module, which is not how any
+real curriculum is shaped. If the prompt is ever retuned, keep the
+lectures-dominate rule and the explicit "do NOT include one of every type".
 
 | Case | Status |
 |---|---|
@@ -118,9 +206,16 @@ Pure HTTP I/O, no business logic — the same shape as
 `payments/services/sslcommerz_service.py`:
 
 - `REQUEST_TIMEOUT = (5, 45)` as a module constant. The read leg is long because
-  generation is an LLM call; the AI service's own `LLM_TIMEOUT_SECONDS` is set
-  **below** 45 s so it gives up first and returns a real status instead of leaving
-  Django to time out.
+  generation is an LLM call; the AI service's own `LLM_TIMEOUT_SECONDS` (40 s) is
+  set **below** 45 s so it gives up first and returns a real status instead of
+  leaving Django to time out. 45 s is enough because the account's TPM limit caps
+  output at 6500 tokens, so a generation cannot run away.
+
+  > **Deployment:** gunicorn's default `--timeout` is **30 s**, below this 45 s
+  > read leg, so it must be raised (60 s is plenty) wherever this runs.
+  > `docker-compos..deploy.yml` already passes `--timeout 120`; the command in
+  > `Career_College_Backend_AWS_Production_Deployment.md` sets none. An ALB's
+  > default 60 s idle timeout is already above 45 s and needs no change.
 - `AIOutlineError(message, http_status=503)` — the `ScheduleError` / `ReviewError` /
   `PaymentError` pattern, defined in the service module (the `courses` convention;
   only `payments` keeps a separate `exceptions.py`).
@@ -137,10 +232,49 @@ Nothing here writes to the database. Two consumers, both using endpoints that
 already existed:
 
 1. **Curriculum** (the frontend's primary path): one `CourseSection` per accepted
-   module via `POST /api/v1/courses/<pk>/sections/create/`, sequentially —
-   `position` is server-ordered, so a concurrent burst would race for slots.
+   module via `POST /api/v1/courses/<pk>/sections/create/`, then one content row
+   per kept `content_plan` item via `POST /api/v1/courses/sections/<id>/contents/`.
+   All sequential — `position` is server-ordered, so a concurrent burst would race
+   for slots.
 2. **Course outline text:** the edited `outline_text` goes into `course_outline` on
    the normal `POST /api/v1/courses/create/` or `PATCH /api/v1/courses/<pk>/`.
+
+### Content items are best-effort; sections are not
+
+A failed section write stops the run and narrows the draft to the modules that did
+not land, so a retry cannot duplicate a saved row. A failed **item** write is
+counted and reported instead, and the run continues.
+
+The asymmetry is deliberate. Aborting midway through one module's items would leave
+a section that a retry then skips — it is no longer empty — stranding the rest with
+no way to resume. Since nothing is ever deleted, the worst case is a partially
+built module the instructor finishes by hand, which the toast says out loud.
+
+### Re-applying replaces unfilled shells, never authored work
+
+A reused section is rebuilt against the new plan, but only its **shells** are
+cleared: rows whose `is_awaiting_content` is true hold nothing the instructor
+made — a lecture with no video, a quiz or assignment with no questions, a coding
+exercise with no code. Those are deleted and recreated from the new plan.
+Anything with real content stays exactly where it is, whoever created it, and the
+toast reports both counts.
+
+That rule is what lets the curriculum track a regenerated outline without
+doubling on every apply. The first design skipped reused sections entirely, which
+was safe but meant a second apply silently changed only section titles while the
+lessons underneath went stale.
+
+`is_awaiting_content` is deliberately **narrower than "incomplete"** for the
+non-lecture types. An assignment with one ungradable question still blocks
+submission, but it is authored work, so it is *not* awaiting content and is never
+deleted. Likewise a coding exercise with starter or solution code but no
+evaluation script. The flag answers "would replacing this lose anything?", not
+"is this finished?" — conflating the two would destroy work.
+
+The flag is computed by a model property on each of the four types and exposed on
+`SectionContentSerializer`. The `/contents/` list prefetches `questions` for
+quizzes and assignments so it stays at a constant six queries; a regression test
+asserts the count does not move as rows are added.
 
 ### A second apply updates, it does not stack
 
@@ -229,7 +363,9 @@ Two classes, no network:
 - `AIOutlineServiceClientTests` patches `requests.post` — asserts the URL, the
   `X-Service-Key` header and the `(5, 45)` timeout actually go out, and that
   connection error / timeout / non-200 / malformed JSON each raise
-  `AIOutlineError(503)` without echoing the upstream message.
+  `AIOutlineError(503)` without echoing the upstream message. The timeout literal
+  is pinned on purpose: it must stay above the AI service's own LLM timeout, and
+  gunicorn's default is below it.
 
 Throttle counters live in the default cache, so `setUp` calls `cache.clear()`.
 
@@ -239,8 +375,16 @@ Throttle counters live in the default cache, so `setUp` calls `cache.clear()`.
   cached outline would make "Regenerate" a no-op.
 - **No streaming.** The frontend waits with a spinner. Streaming would mean an SSE
   surface on both hops for a call that takes a few seconds.
-- **No auto-creation of lectures/quizzes inside the generated sections.** Sections
-  carry a title and a summary; content authoring stays manual.
+- **No auto-*authoring* of content.** The apply creates the content rows, but every
+  one of them is empty: no AI-written article text, quiz questions, model answers,
+  rubrics or evaluation scripts. Each of those must be *complete* to be safe — a
+  quiz needs one correct answer per question, a coding exercise needs a script that
+  actually runs — and each is its own feature (`AI_SERVICES_PROJECT_STRUCTURE.md`
+  reserves `quiz_generation` and `assignment_feedback` folders). Video lectures can
+  never be AI-created at all: they need a real uploaded file that finishes
+  transcoding.
+- **No reordering or renaming of existing content from a regenerated plan.** The
+  plan describes work not yet done; it must never touch what is already authored.
 - **No per-institution prompt customization.** Would need a prompt template stored on
   `PartnerInstitutionProfile`.
 - **`learning_outcomes` are not written to `NidusCourse.learning_objectives`.** They

@@ -111,6 +111,31 @@ def load_catalog_curriculum(course) -> dict:
         ).only('id', 'title')
     } if ids_by_type[SectionContent.ItemType.ASSIGNMENT] else {}
 
+    durations = _lecture_durations(list(lectures.keys()))
+
+    # Drop lectures still awaiting their video (step 1 of two-step authoring).
+    # The catalog must not advertise a lesson with nothing behind it, and the
+    # section/course item counts are derived from `contents_by_section`, so
+    # pruning here fixes the tree and both totals at once. `durations` is keyed
+    # by lectures holding an active VideoAsset, so its keys are "has content".
+    awaiting_ids = {
+        lec_id for lec_id, lec in lectures.items()
+        if lec.lecture_type == Lecture.LectureType.VIDEO and lec_id not in durations
+    }
+    if awaiting_ids:
+        for lec_id in awaiting_ids:
+            lectures.pop(lec_id)
+        contents_by_section = {
+            section_id: [
+                row for row in rows
+                if not (
+                    row.item_type == SectionContent.ItemType.LECTURE
+                    and row.object_id in awaiting_ids
+                )
+            ]
+            for section_id, rows in contents_by_section.items()
+        }
+
     return {
         'sections': sections,
         'contents_by_section': contents_by_section,
@@ -118,7 +143,7 @@ def load_catalog_curriculum(course) -> dict:
         'quizzes': quizzes,
         'coding_exercises': coding_exercises,
         'assignments': assignments,
-        'lecture_durations': _lecture_durations(list(lectures.keys())),
+        'lecture_durations': durations,
     }
 
 

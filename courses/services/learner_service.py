@@ -247,6 +247,19 @@ def load_learner_curriculum(
                 lec = lectures.get(row.object_id)
                 if lec is None:
                     continue
+                # Step 1 of two-step authoring: the lecture exists but has no
+                # video yet, so there is nothing for a learner to open. Hidden
+                # from learners (and excluded from the progress denominator in
+                # `recalculate_progress`); instructors keep seeing it in
+                # preview so they know what is still outstanding.
+                # `durations` is keyed by lectures that have an active
+                # VideoAsset, so its keys double as "has content".
+                if (
+                    not is_instructor
+                    and lec.lecture_type == Lecture.LectureType.VIDEO
+                    and lec.id not in durations
+                ):
+                    continue
                 item['title'] = lec.title
                 item['lecture_type'] = lec.lecture_type
                 item['duration_seconds'] = durations.get(lec.id)

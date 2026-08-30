@@ -11,6 +11,12 @@ from core.validators import validate_video_file
 from courses.all_models.course_models import AuthoredModel, CourseSection, TimestampedModel
 
 
+# Course slugs are generated from the title and can run to ~100 characters.
+# The slug is in the key for human readability only — the lecture id already
+# makes it unique — so it is capped to keep the whole key bounded.
+MAX_SLUG_SEGMENT = 60
+
+
 def video_asset_upload_path(instance, filename):
     """
     Store raw lecture videos with a stable, production-grade path:
@@ -26,7 +32,7 @@ def video_asset_upload_path(instance, filename):
         section = getattr(instance.lecture, 'section', None)
         course = getattr(section, 'course', None)
         if course and getattr(course, 'slug', None):
-            course_slug = course.slug
+            course_slug = course.slug[:MAX_SLUG_SEGMENT].rstrip('-')
 
     unique_name = uuid.uuid4().hex
     return f"courses/{course_slug}/lectures/{lecture_id}/raw/{unique_name}{extension}"
@@ -167,8 +173,36 @@ class Lecture(AuthoredModel):
             if not self.article_content.strip():
                 raise ValidationError({'article_content': 'Article lectures must include content.'})
 
+    @property
+    def is_awaiting_content(self) -> bool:
+        """True while the lecture exists but has nothing to play yet.
+
+        Step 1 of the two-step authoring flow creates the row from a title
+        alone; the video arrives in step 2. Reads the prefetched
+        `video_assets` when the caller supplied one, so list endpoints don't
+        N+1. Article lectures are never awaiting content — the
+        `chk_lecture_payload_by_type` constraint forbids a blank body.
+        """
+        if self.lecture_type != self.LectureType.VIDEO:
+            return False
+        return not any(asset.is_active for asset in self.video_assets.all())
+
     def __str__(self):
         return f'{self.section.title} - {self.title}'
+
+
+def lectures_awaiting_content(queryset=None):
+    """Video lectures with no active VideoAsset — the bulk form of
+    `Lecture.is_awaiting_content`.
+
+    Such a lecture cannot be played, so it must stay out of the learner
+    curriculum, out of the progress denominator, and must block submission.
+    Pass a narrowed `queryset` (e.g. one course's lectures) to scope it.
+    """
+    base = Lecture.objects.all() if queryset is None else queryset
+    return base.filter(lecture_type=Lecture.LectureType.VIDEO).exclude(
+        video_assets__is_active=True
+    )
 
 
 class VideoAsset(TimestampedModel):
@@ -185,7 +219,14 @@ class VideoAsset(TimestampedModel):
         on_delete=models.CASCADE,
         related_name='video_assets',
     )
-    video_file = models.FileField(upload_to=video_asset_upload_path, validators=[validate_video_file])
+    # Default max_length is 100, which the generated key overruns as soon as a
+    # course slug is long — storage then raises SuspiciousFileOperation because
+    # it cannot fit a de-duplicating suffix. Matches `master_playlist` below.
+    video_file = models.FileField(
+        upload_to=video_asset_upload_path,
+        max_length=500,
+        validators=[validate_video_file],
+    )
     original_filename = models.CharField(max_length=255, blank=True, default='')
     mime_type = models.CharField(max_length=100, blank=True, default='')
     file_size = models.BigIntegerField(default=0)

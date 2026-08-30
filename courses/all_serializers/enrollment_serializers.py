@@ -14,7 +14,24 @@ from courses.models import (
     Lecture,
     NidusCourse,
     SectionContent,
+    lectures_awaiting_content,
 )
+
+
+def _visible_content_item_count(course) -> int:
+    """Content rows a learner can actually open.
+
+    Excludes lectures still awaiting their video (step 1 of two-step
+    authoring): they are hidden from the curriculum and from the progress
+    denominator, so counting them here would advertise more than the course
+    delivers. Scoped to lectures that hold a SectionContent slot, since only
+    those are in the total being reduced.
+    """
+    total = SectionContent.objects.filter(section__course=course).count()
+    awaiting = lectures_awaiting_content(
+        Lecture.objects.filter(section__course=course, section_content__isnull=False)
+    ).distinct().count()
+    return total - awaiting
 
 
 # ---------------------------------------------------------------------------
@@ -175,7 +192,7 @@ class CatalogCourseDetailSerializer(_WishlistFlagMixin, serializers.ModelSeriali
         contents_by_section = self.context.get('contents_by_section')
         if contents_by_section is not None:
             return sum(len(items) for items in contents_by_section.values())
-        return SectionContent.objects.filter(section__course=obj).count()
+        return _visible_content_item_count(obj)
 
     def get_sections(self, obj):
         sections = self.context.get('sections', [])
@@ -249,7 +266,7 @@ class _MyCourseMetaSerializer(serializers.ModelSerializer):
         return course.sections.count()
 
     def get_total_content_items(self, course):
-        return SectionContent.objects.filter(section__course=course).count()
+        return _visible_content_item_count(course)
 
 
 class MyCourseDetailSerializer(serializers.Serializer):

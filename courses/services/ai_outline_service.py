@@ -19,8 +19,12 @@ logger = logging.getLogger(__name__)
 
 COURSE_OUTLINE_ENDPOINT = '/v1/course-outline/'
 # (connect, read) seconds. The read leg is long because generation is an LLM
-# call, not a typical API round trip; the AI service's own LLM timeout is set
-# below this so it gives up first and returns a real status.
+# call, not a typical API round trip; the AI service's own LLM timeout (40s) is
+# set below this so it gives up first and returns a real status.
+#
+# 45s is enough because the AI service's output is capped well below what would
+# take longer: its `LLM_MAX_OUTPUT_TOKENS` is bounded by the Groq account's
+# tokens-per-minute limit, so a generation cannot run away.
 REQUEST_TIMEOUT = (5, 45)
 
 _SERVICE_DOWN_MSG = 'Outline generation is temporarily unavailable. Please try again.'

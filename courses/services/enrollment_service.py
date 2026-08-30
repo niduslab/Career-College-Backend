@@ -11,10 +11,12 @@ from courses.models import (
     AssignmentSubmission,
     CodingSubmission,
     Enrollment,
+    Lecture,
     NidusCourse,
     QuizAttempt,
     SectionContent,
     WatchProgress,
+    lectures_awaiting_content,
 )
 
 logger = logging.getLogger(__name__)
@@ -484,18 +486,28 @@ def recalculate_progress(enrollment: Enrollment) -> Enrollment:
         .filter(section__course=course)
         .values_list('item_type', 'object_id')
     )
-    total_items = len(content_rows)
-
-    if total_items == 0:
-        enrollment.progress_percent = 0
-        enrollment.save(update_fields=['progress_percent', 'updated_at'])
-        return enrollment
 
     lecture_ids = {
         object_id
         for item_type, object_id in content_rows
         if item_type == SectionContent.ItemType.LECTURE
     }
+    # A lecture still awaiting its video (step 1 of two-step authoring) can
+    # never be completed, so counting it would make 100% unreachable and the
+    # certificate would never issue. Drop it from the denominator entirely —
+    # it is hidden from the learner curriculum for the same reason.
+    awaiting_lecture_ids = set(
+        lectures_awaiting_content(Lecture.objects.filter(id__in=lecture_ids))
+        .values_list('id', flat=True)
+    ) if lecture_ids else set()
+    lecture_ids -= awaiting_lecture_ids
+    total_items = len(content_rows) - len(awaiting_lecture_ids)
+
+    if total_items == 0:
+        enrollment.progress_percent = 0
+        enrollment.save(update_fields=['progress_percent', 'updated_at'])
+        return enrollment
+
     if lecture_ids:
         completed_lecture_ids = set(
             WatchProgress.objects.filter(

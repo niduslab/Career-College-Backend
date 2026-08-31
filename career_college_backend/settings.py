@@ -393,6 +393,10 @@ DISCUSSION_UPVOTE_RATE_LIMIT = env('DISCUSSION_UPVOTE_RATE_LIMIT', default='30/m
 # Per-user cap on AI outline generation. Unlike the throttles above this one
 # guards real spend — every call is a paid LLM request taking several seconds.
 AI_OUTLINE_RATE_LIMIT = env('AI_OUTLINE_RATE_LIMIT', default='10/min')
+# Same reason, separate counter: article drafting happens once per lesson while
+# outlining happens once per course, so sharing a scope would let one exhaust
+# the other's budget.
+AI_ARTICLE_RATE_LIMIT = env('AI_ARTICLE_RATE_LIMIT', default='10/min')
 
 
 # AI services (FastAPI project — hosts every AI feature, not just outlines).

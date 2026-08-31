@@ -18,6 +18,23 @@ validate_document_file = FileExtensionValidator(
 )
 
 
+MAX_SIGNATURE_BYTES = 2 * 1024 * 1024
+
+
+def validate_signature_size(value):
+    """Cap signature uploads at 2 MB.
+
+    Signatures are small transparent PNGs embedded into certificate PDFs, so a
+    multi-megabyte upload is a mistake or an attempt to bloat storage.
+    """
+    try:
+        size = value.size
+    except (AttributeError, OSError):
+        return  # size unavailable in some contexts (e.g. during migrations)
+    if size > MAX_SIGNATURE_BYTES:
+        raise ValidationError('Signature image must be 2 MB or smaller.')
+
+
 def validate_pdf_file(value):
     FileExtensionValidator(
         allowed_extensions=['pdf'],

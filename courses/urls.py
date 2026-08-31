@@ -3,7 +3,11 @@ from django.urls import path
 from courses.views import (
     CourseCategoryDetailView,
     CourseCategoryListCreateView,
+    AdminCertificateListView,
     CertificateDownloadView,
+    CertificatePublicVerifyView,
+    CertificateRestoreView,
+    CertificateRevokeView,
     CertificateVerifyView,
     LearnerCertificateView,
     MyCertificateListView,
@@ -191,6 +195,15 @@ urlpatterns = [
     # -------------------------------------------------------------------------
     path('certificates/<uuid:certificate_uid>/verify/', CertificateVerifyView.as_view(), name='certificate-verify'),
     path('certificates/<uuid:certificate_uid>/download/', CertificateDownloadView.as_view(), name='certificate-download'),
+    path('certificates/<uuid:certificate_uid>/revoke/', CertificateRevokeView.as_view(), name='certificate-revoke'),
+    path('certificates/<uuid:certificate_uid>/restore/', CertificateRestoreView.as_view(), name='certificate-restore'),
+    # Accepts the human-readable certificate ID or the UUID. Declared after the
+    # <uuid:...> routes so the typed converter wins for a bare UUID.
+    path('certificates/verify/<str:identifier>/', CertificatePublicVerifyView.as_view(), name='certificate-public-verify'),
+
+    # Admin certificate browser — the discovery surface for revoke/restore,
+    # which otherwise need a UUID the admin has no way to look up.
+    path('admin/certificates/', AdminCertificateListView.as_view(), name='admin-certificate-list'),
 
     # -------------------------------------------------------------------------
     # Course reviews (slug-based → 403/404; review vote is numeric → 404)

@@ -130,7 +130,9 @@ def _enrollment_metrics(now, window_days):
 
 
 def _certificate_metrics(now):
-    base = Certificate.objects.all()
+    # Revoked certificates are excluded from the "earned" counts but stay in the
+    # issuance trend — the trend is a historical record of what was issued.
+    base = Certificate.objects.filter(status=Certificate.Status.VALID)
     month_start = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
     return {
         'total': base.count(),
@@ -313,7 +315,11 @@ def conversion_funnel():
     )
     certified = (
         Certificate.objects
-        .filter(enrollment__user__is_deleted=False, enrollment__user__user_type='learner')
+        .filter(
+            enrollment__user__is_deleted=False,
+            enrollment__user__user_type='learner',
+            status=Certificate.Status.VALID,
+        )
         .values('enrollment__user_id').distinct().count()
     )
 

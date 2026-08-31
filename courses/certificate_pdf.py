@@ -1,25 +1,35 @@
 """
 Certificate PDF generator.
 
-Produces a two-column landscape A4 PDF matching the layout in
-demo_certificate_template.html:
+Landscape A4, centred and symmetric:
 
-  Left  (67%) — off-white + diagonal texture, logo, body content, SVG signature
-  Right (33%) — grey panel, sunburst watermark, "COURSE CERTIFICATE" heading,
-                circular seal with arc text, verify block
+  Header  — brand mark, wordmark, "CERTIFICATE OF COMPLETION", ornament rule
+  Body    — award statement, learner name in script, course title, metadata strip
+  Footer  — instructor signature · seal · authorized signature
+  Strip   — verification URL and QR code
+
+Every value is read from the certificate's frozen snapshot, never the live
+course or profile rows, so re-rendering an old certificate reproduces the
+original exactly. The palette mirrors the frontend's brand tokens
+(src/app/globals.css) — keep the two in sync.
 """
 
 import io
+import logging
 import math
 import os
 
 import reportlab
-from django.conf import settings
 from reportlab.lib import colors
 from reportlab.lib.pagesizes import A4, landscape
+from reportlab.lib.utils import ImageReader
 from reportlab.pdfbase import pdfmetrics
 from reportlab.pdfbase.ttfonts import TTFont
 from reportlab.pdfgen import canvas
+
+from courses.services.certificate_service import build_verification_url
+
+logger = logging.getLogger(__name__)
 
 # Register a Unicode-capable bold font for learner name rendering.
 # VeraBd ships with every ReportLab installation and covers Latin Extended,
@@ -37,24 +47,53 @@ try:
 except Exception:
     pass
 
-# ── Palette (matching the HTML template exactly) ──────────────────────────────
-_PAPER      = colors.HexColor('#F9F9F7')
-_RIGHT_GREY = colors.HexColor('#C6C9CE')
-_NEAR_BLACK = colors.HexColor('#0D0D0D')
-_NAVY       = colors.HexColor('#1A2B4A')
-_GOLD       = colors.HexColor('#C9A84C')
-_GREY_22    = colors.HexColor('#222222')
-_GREY_3A    = colors.HexColor('#3a3a3a')
-_GREY_44    = colors.HexColor('#444444')
-_GREY_55    = colors.HexColor('#555555')
-_GREY_66    = colors.HexColor('#666666')
-_GREY_6A    = colors.HexColor('#6a6a6a')
-_GREY_77    = colors.HexColor('#777777')
-_GREY_88    = colors.HexColor('#888888')
-_GREY_99    = colors.HexColor('#999999')
-_GREY_BB    = colors.HexColor('#bbbbbb')
-_WHITE      = colors.HexColor('#FFFFFF')
-_CORNER_MK  = colors.HexColor('#b2b2b2')
+# Bundled application art — read from the package directory, not through
+# default_storage (these are shipped assets, not user-uploaded media).
+_ASSETS = os.path.join(os.path.dirname(__file__), 'assets')
+_LOGO_PATH = os.path.join(_ASSETS, 'career-college-logo.webp')
+
+# Script face for the learner name. Great Vibes, SIL OFL (see OFL-GreatVibes.txt
+# beside the font). Latin only — a name outside that range falls back to
+# _UNICODE_BOLD, which covers Latin Extended / Greek / Cyrillic.
+_SCRIPT_FONT = None
+try:
+    _gv = os.path.join(_ASSETS, 'GreatVibes-Regular.ttf')
+    if os.path.isfile(_gv):
+        pdfmetrics.registerFont(TTFont('GreatVibes', _gv))
+        _SCRIPT_FONT = 'GreatVibes'
+except Exception:
+    pass
+
+# ── Palette ───────────────────────────────────────────────────────────────────
+# Mirrors the brand tokens in the frontend's src/app/globals.css so the PDF, the
+# web verify page and the dashboard read as one system. Keep the two in sync:
+# these are --primary-* and --gray-* by another name.
+_PRIMARY_700 = colors.HexColor('#6f15ec')   # --primary-700, brand purple
+_PRIMARY_900 = colors.HexColor('#4d10a2')   # --primary-900, deep purple
+_PRIMARY_950 = colors.HexColor('#2e076e')   # --primary-950, darkest purple
+_PRIMARY_400 = colors.HexColor('#a37fff')   # --primary-400, light accent
+_PRIMARY_100 = colors.HexColor('#ece7ff')   # --primary-100, tint
+
+_PAPER      = colors.HexColor('#FCFBFF')    # near-white with a purple cast
+_NEAR_BLACK = colors.HexColor('#100d14')    # --text-title
+_GREY_22    = colors.HexColor('#101828')    # --gray-900
+_GREY_3A    = colors.HexColor('#1e2939')    # --gray-800
+_GREY_44    = colors.HexColor('#364153')    # --gray-700
+_GREY_55    = colors.HexColor('#4e4758')    # --text-paragraph
+_GREY_66    = colors.HexColor('#4a5565')    # --gray-600
+_GREY_6A    = colors.HexColor('#6a7282')    # --gray-500
+_GREY_77    = colors.HexColor('#6a7282')    # --gray-500
+_GREY_88    = colors.HexColor('#99a1af')    # --gray-400
+_GREY_99    = colors.HexColor('#99a1af')    # --gray-400
+_GREY_BB    = colors.HexColor('#d1d5dc')    # --gray-300
+_WHITE      = colors.HexColor('#ffffff')    # --text-white
+
+# Legacy aliases kept so the drawing helpers read naturally; both now resolve to
+# brand purple rather than the old navy/gold pair.
+_NAVY       = _PRIMARY_950
+_GOLD       = _PRIMARY_700
+_RIGHT_GREY = colors.HexColor('#e5e7eb')    # --gray-200
+_CORNER_MK  = _PRIMARY_400
 
 
 # ── Drawing helpers ───────────────────────────────────────────────────────────
@@ -102,13 +141,13 @@ def _arc_text(c, text, cx, cy, radius, center_angle_deg,
         cur += step * (widths[i] / radius + letter_spacing / radius)
 
 
-def _draw_seal(c, cx, cy):
+def _draw_seal(c, cx, cy, outer=85):
     """
     Circular institutional seal that mirrors the SVG in demo_certificate_template.html.
 
-    SVG viewBox 200×200, paths at r=74 → scaled so outer edge ≈ 85pt.
+    SVG viewBox 200×200, paths at r=74 → scaled so the outer edge lands on `outer`.
     """
-    scale    = 85 / 91
+    scale    = outer / 91
     r_dash   = int(91 * scale)   # outer dashed ring  ≈ 85
     r_solid  = int(82 * scale)   # outer solid ring   ≈ 76
     r_arc    = int(74 * scale)   # arc-text radius    ≈ 69
@@ -117,7 +156,7 @@ def _draw_seal(c, cx, cy):
     r_disc   = int(54 * scale)   # white disc         ≈ 51
 
     # Outer dashed ring
-    c.setStrokeColor(_GREY_6A)
+    c.setStrokeColor(_PRIMARY_700)
     c.setLineWidth(1.4)
     c.setDash(3.8, 2.4)
     c.circle(cx, cy, r_dash, fill=False, stroke=True)
@@ -129,106 +168,153 @@ def _draw_seal(c, cx, cy):
 
     # Arc text — top: "EDUCATION FOR EVERYONE"
     _arc_text(c, 'EDUCATION FOR EVERYONE', cx, cy, r_arc, 90,
-              'Helvetica-Bold', 6.5, _GREY_44, letter_spacing=2.8, top_arc=True)
+              'Helvetica-Bold', 6.5 * scale, _PRIMARY_950, letter_spacing=2.8 * scale, top_arc=True)
 
     # Separator dots at 9 o'clock (180°) and 3 o'clock (0°)
-    c.setFillColor(_GREY_6A)
+    c.setFillColor(_PRIMARY_700)
     c.circle(cx - r_arc, cy, 2.0, fill=True, stroke=False)
     c.circle(cx + r_arc, cy, 2.0, fill=True, stroke=False)
 
     # Arc text — bottom: "COURSE CERTIFICATE"
     _arc_text(c, 'COURSE CERTIFICATE', cx, cy, r_arc, 270,
-              'Helvetica-Bold', 6.5, _GREY_44, letter_spacing=2.8, top_arc=False)
+              'Helvetica-Bold', 6.5 * scale, _PRIMARY_950, letter_spacing=2.8 * scale, top_arc=False)
 
     # Inner ring + separator
-    c.setStrokeColor(_GREY_6A)
+    c.setStrokeColor(_PRIMARY_700)
     c.setLineWidth(1.4)
     c.circle(cx, cy, r_inner, fill=False, stroke=True)
     c.setLineWidth(0.4)
-    c.setStrokeColor(_GREY_99)
+    c.setStrokeColor(_PRIMARY_400)
     c.circle(cx, cy, r_sep, fill=False, stroke=True)
 
     # White centre disc
     c.setFillColor(_WHITE)
     c.circle(cx, cy, r_disc, fill=True, stroke=False)
 
-    # Brand name
-    c.setFont('Helvetica-Bold', 12)
-    c.setFillColor(_NEAR_BLACK)
-    c.drawCentredString(cx, cy + 4,  'career')
-    c.drawCentredString(cx, cy - 10, 'college')
+    # Brand name — sized off `scale` so the seal stays legible when resized.
+    c.setFont('Helvetica-Bold', 12 * scale)
+    c.setFillColor(_PRIMARY_950)
+    c.drawCentredString(cx, cy + 4 * scale,  'career')
+    c.drawCentredString(cx, cy - 10 * scale, 'college')
 
     # Small dot + "CERTIFIED" label
     c.setFillColor(_GREY_BB)
-    c.circle(cx, cy - 19, 1.2, fill=True, stroke=False)
-    c.setFont('Helvetica', 5)
+    c.circle(cx, cy - 19 * scale, 1.2 * scale, fill=True, stroke=False)
+    c.setFont('Helvetica', 5 * scale)
     c.setFillColor(_GREY_99)
-    c.drawCentredString(cx, cy - 27, 'CERTIFIED')
+    c.drawCentredString(cx, cy - 27 * scale, 'CERTIFIED')
 
 
-def _draw_sunburst(c, cx, cy):
-    """12-spoke sunburst + 3 concentric rings — used as a watermark on the right panel."""
-    c.saveState()
-    c.setStrokeColor(colors.Color(0.07, 0.07, 0.07, alpha=0.13))
-    R = 96
-    c.setLineWidth(0.7)
-    for i in range(12):
-        a = math.radians(i * 15)
-        c.line(cx + R * math.cos(a), cy + R * math.sin(a),
-               cx - R * math.cos(a), cy - R * math.sin(a))
-    c.setLineWidth(0.5)
-    for frac in (1.0, 0.67, 0.38):
-        c.circle(cx, cy, R * frac, fill=False, stroke=True)
-    c.restoreState()
+def _draw_signature_image(c, image_field, base_x, base_y, max_w=155, max_h=44):
+    """Draw a stored signature image, scaled to fit and bottom-left anchored.
 
-
-def _draw_signature(c, base_x, base_y):
+    Reads through the FieldFile so it works on S3 as well as local disk — never
+    .path(). Returns True when something was drawn; the caller falls back to the
+    hand-drawn flourish otherwise, so a missing or corrupt image never breaks
+    the PDF.
     """
-    Approximate the SVG handwriting flourish + baseline stroke from the template.
+    if not image_field:
+        return False
+    try:
+        image_field.open('rb')
+        try:
+            data = image_field.read()
+        finally:
+            image_field.close()
 
-    base_x, base_y  = bottom-left corner of the 155 × 44 pt drawing area.
-    SVG y (top-down) is converted to reportlab y (bottom-up) via (44 - svg_y).
+        reader = ImageReader(io.BytesIO(data))
+        iw, ih = reader.getSize()
+        if not iw or not ih:
+            return False
+
+        scale = min(max_w / iw, max_h / ih)
+        w, h = iw * scale, ih * scale
+        # mask='auto' honours PNG alpha so a transparent signature does not
+        # paint a white box over the certificate background.
+        c.drawImage(reader, base_x, base_y, width=w, height=h,
+                    mask='auto', preserveAspectRatio=True, anchor='sw')
+        return True
+    except Exception:
+        logger.warning(
+            'Certificate signature image could not be drawn: %s',
+            getattr(image_field, 'name', '?'), exc_info=True,
+        )
+        return False
+
+
+def _draw_signatory_column(c, x, col_w, baseline_y, role, name, designation, org,
+                           signature_field):
+    """One centred signature column: signature, rule, role, name, title, org.
+
+    `role` ("COURSE INSTRUCTOR" / "AUTHORIZED SIGNATORY") sits directly under the
+    rule and is what tells a reader which column is which — without it the two
+    are identically shaped and indistinguishable.
+
+    Everything is centred inside `col_w` so the two columns balance around the
+    seal regardless of how wide the names are.
     """
-    h = 44
+    mid = x + col_w / 2
 
-    def r(sx, sy):   # SVG point → reportlab point
-        return base_x + sx, base_y + (h - sy)
+    # The image draws from its bottom-left, so centre it by hand.
+    #
+    # Nothing is drawn when there is no stored signature. The old hand-drawn
+    # flourish fallback was removed deliberately: an invented squiggle above a
+    # real person's name reads as that person's signature, which it is not.
+    # Blank space above the rule is the honest state, and matches how a paper
+    # certificate looks before it is signed.
+    if signature_field:
+        _draw_signature_image(
+            c, signature_field, mid - 70, baseline_y, max_w=140, max_h=42)
 
-    # ── Main flourish ─────────────────────────────────────────────────────────
-    c.setStrokeColor(colors.HexColor('#2a2a2a'))
-    c.setLineWidth(1.6)
-    c.setLineCap(1)    # round
-    c.setLineJoin(1)   # round
-
-    p = c.beginPath()
-    p.moveTo(*r(6, 34))
-    p.curveTo(*r(14, 16),  *r(22, 38),  *r(34, 24))
-    p.curveTo(*r(43, 13),  *r(48, 32),  *r(60, 20))
-    p.curveTo(*r(69, 11),  *r(74, 30),  *r(88, 20))
-    p.curveTo(*r(99, 12),  *r(104, 28), *r(118, 21))
-    p.curveTo(*r(126, 17), *r(130, 26), *r(138, 23))
-    p.curveTo(*r(143, 21), *r(148, 25), *r(150, 24))
-    c.drawPath(p, fill=False, stroke=True)
-
-    # ── Baseline stroke (quadratic → cubic) ──────────────────────────────────
-    # SVG: M 6,39  Q 78,46  150,36
-    sx, sy = r(6, 39)
-    qx, qy = r(78, 46)
-    ex, ey = r(150, 36)
-    cp1x = sx + 2/3 * (qx - sx)
-    cp1y = sy + 2/3 * (qy - sy)
-    cp2x = ex + 2/3 * (qx - ex)
-    cp2y = ey + 2/3 * (qy - ey)
-
+    rule_y = baseline_y - 6
+    c.setStrokeColor(_GREY_88)
     c.setLineWidth(0.7)
-    p2 = c.beginPath()
-    p2.moveTo(sx, sy)
-    p2.curveTo(cp1x, cp1y, cp2x, cp2y, ex, ey)
-    c.drawPath(p2, fill=False, stroke=True)
+    c.line(x + 12, rule_y, x + col_w - 12, rule_y)
 
-    # Reset line cap/join to defaults
-    c.setLineCap(0)
-    c.setLineJoin(0)
+    # Role first, in brand purple caps — the one line that distinguishes the
+    # two columns from each other.
+    if role:
+        lw = _spaced_text_width(c, role, 'Helvetica-Bold', 6.5, 1.6)
+        _draw_spaced_text(c, role, mid - lw / 2, rule_y - 13,
+                          'Helvetica-Bold', 6.5, _PRIMARY_700, 1.6)
+
+    if name:
+        fitted, sz = _fit_text(c, name, 'Helvetica-Bold', 10.5, 8, col_w - 16)
+        c.setFont('Helvetica-Bold', sz)
+        c.setFillColor(_GREY_22)
+        c.drawCentredString(mid, rule_y - 27, fitted)
+
+    if designation:
+        fitted, sz = _fit_text(c, designation, 'Helvetica', 8.5, 7, col_w - 16)
+        c.setFont('Helvetica', sz)
+        c.setFillColor(_GREY_77)
+        c.drawCentredString(mid, rule_y - 39, fitted)
+
+    if org:
+        fitted, sz = _fit_text(c, org, 'Helvetica', 8.5, 7, col_w - 16)
+        c.setFont('Helvetica', sz)
+        c.setFillColor(_GREY_99)
+        c.drawCentredString(mid, rule_y - 50, fitted)
+
+
+def _is_latin(text) -> bool:
+    """True when every character is covered by the Latin-only script font."""
+    return all(ord(ch) < 0x0250 for ch in text)
+
+
+def _title_case(name) -> str:
+    """Title-case a name without mangling the parts that are already styled.
+
+    "MD. AL AMIN" → "Md. Al Amin", but "McDonald" and "O'Brien" are left alone —
+    a token that already mixes cases is assumed to be deliberate.
+    """
+    out = []
+    for word in name.split():
+        if word[1:].islower() or (any(ch.isupper() for ch in word[1:]) and not word.isupper()):
+            out.append(word)
+        else:
+            out.append(word.capitalize())
+    return ' '.join(out)
 
 
 def _fit_text(c, text, font, max_size, min_size, max_width):
@@ -258,209 +344,303 @@ def _spaced_text_width(c, text, font, size, spacing):
     return sum(c.stringWidth(ch, font, size) for ch in text) + spacing * max(0, len(text) - 1)
 
 
+def _draw_qr(c, data, x, y, size=54):
+    """Draw a QR code encoding `data`, bottom-left anchored at (x, y).
+
+    Best-effort: a QR failure must never cost the learner their PDF — the
+    verification URL is printed as text beside it either way. Returns True when
+    something was drawn so the caller can lay out around it.
+    """
+    try:
+        import qrcode
+
+        qr = qrcode.QRCode(
+            version=None,
+            error_correction=qrcode.constants.ERROR_CORRECT_M,
+            box_size=10,
+            border=0,
+        )
+        qr.add_data(data)
+        qr.make(fit=True)
+
+        buf = io.BytesIO()
+        # Brand purple (--primary-950) keeps enough contrast to scan reliably.
+        qr.make_image(fill_color='#2e076e', back_color='white').save(buf, format='PNG')
+        buf.seek(0)
+
+        c.drawImage(ImageReader(buf), x, y, width=size, height=size,
+                    mask='auto', preserveAspectRatio=True, anchor='sw')
+        return True
+    except Exception:
+        logger.warning('Certificate QR code could not be drawn.', exc_info=True)
+        return False
+
+
+def _draw_ornament(c, cx, y, width=90, color=None):
+    """Thin rule broken by a small diamond at its centre — a classic divider."""
+    color = color or _GOLD
+    half = width / 2
+    c.setStrokeColor(color)
+    c.setLineWidth(0.8)
+    c.line(cx - half, y, cx - 7, y)
+    c.line(cx + 7, y, cx + half, y)
+
+    c.setFillColor(color)
+    p = c.beginPath()
+    p.moveTo(cx, y + 3.2)
+    p.lineTo(cx + 3.2, y)
+    p.lineTo(cx, y - 3.2)
+    p.lineTo(cx - 3.2, y)
+    p.close()
+    c.drawPath(p, fill=True, stroke=False)
+
+
+def _draw_corner_flourish(c, x, y, h_sign, v_sign, color=None):
+    """Double L-bracket corner ornament, drawn just inside the gold frame."""
+    color = color or _GOLD
+    c.setStrokeColor(color)
+    for arm, lw, off in ((26, 1.4, 0), (17, 0.6, 5)):
+        c.setLineWidth(lw)
+        ox, oy = off * h_sign, off * v_sign
+        c.line(x + ox, y + oy, x + ox + h_sign * arm, y + oy)
+        c.line(x + ox, y + oy, x + ox, y + oy + v_sign * arm)
+
+
+def _draw_wordmark(c, cx, y, mark=40):
+    """Centred brand mark with the wordmark beneath it.
+
+    Uses the real logo bundled at courses/assets/. Falls back to a drawn CC
+    monogram if the file is missing or unreadable, so the PDF never breaks on a
+    packaging mistake.
+    """
+    drawn = False
+    if _LOGO_PATH and os.path.isfile(_LOGO_PATH):
+        try:
+            reader = ImageReader(_LOGO_PATH)
+            iw, ih = reader.getSize()
+            scale = mark / max(iw, ih)
+            w, h = iw * scale, ih * scale
+            c.drawImage(reader, cx - w / 2, y, width=w, height=h,
+                        mask='auto', preserveAspectRatio=True, anchor='sw')
+            drawn = True
+        except Exception:
+            logger.warning('Certificate logo could not be drawn.', exc_info=True)
+
+    if not drawn:
+        box = 34
+        c.setFillColor(_PRIMARY_950)
+        c.rect(cx - box / 2, y, box, box, fill=True, stroke=False)
+        c.setStrokeColor(_PRIMARY_400)
+        c.setLineWidth(0.7)
+        c.rect(cx - box / 2 + 3, y + 3, box - 6, box - 6, fill=False, stroke=True)
+        c.setFont('Times-Bold', 14)
+        c.setFillColor(_WHITE)
+        c.drawCentredString(cx, y + 12, 'CC')
+
+    label = 'CAREER COLLEGE'
+    lw = _spaced_text_width(c, label, 'Helvetica-Bold', 11, 3.4)
+    _draw_spaced_text(c, label, cx - lw / 2, y - 16,
+                      'Helvetica-Bold', 11, _PRIMARY_950, 3.4)
+
+
 # ── Main generator ────────────────────────────────────────────────────────────
 
 def generate_certificate_pdf(certificate) -> bytes:
     """
     Render a landscape A4 certificate PDF and return raw bytes.
 
-    Layout mirrors demo_certificate_template.html:
-      Left  67% — off-white background, diagonal stripe texture, L-corner marks,
-                  logo, issue date, learner name, course title, signature block.
-      Right 33% — grey panel (#C6C9CE), sunburst watermark, COURSE/CERTIFICATE
-                  heading, circular SVG-style seal, verify URL.
+    Centred, symmetric layout: a double gold frame with corner flourishes, the
+    wordmark and title stacked at the top, the award statement centred in the
+    body over a faint seal watermark, then a three-column footer (instructor
+    signature · seal · authorized signature) above a verification strip.
+
+    Every value comes from the certificate's frozen snapshot, never the live
+    course or profile rows — re-rendering an old certificate reproduces the
+    original exactly.
     """
     buffer = io.BytesIO()
     width, height = landscape(A4)     # 841.89 × 595.28 pt
     c = canvas.Canvas(buffer, pagesize=landscape(A4))
+    cx = width / 2
 
-    left_w  = width * 0.67            # ≈ 564 pt
-    right_w = width - left_w          # ≈ 278 pt
-    right_x = left_w
+    issuer = certificate.issuer_name or 'Career College'
 
-    # ── Column backgrounds ────────────────────────────────────────────────────
+    # ── Background ────────────────────────────────────────────────────────────
+    # Deliberately flat: the tinted disc + sunburst watermark that used to sit
+    # behind the body added texture but no meaning, and it fought the name.
     c.setFillColor(_PAPER)
-    c.rect(0, 0, left_w, height, fill=True, stroke=False)
+    c.rect(0, 0, width, height, fill=True, stroke=False)
 
-    c.setFillColor(_RIGHT_GREY)
-    c.rect(right_x, 0, right_w, height, fill=True, stroke=False)
+    # ── Double frame + corner flourishes ─────────────────────────────────────
+    # Deep purple outer, light inner — a solid brand-purple double rule reads as
+    # loud at this weight.
+    for inset, lw, col in ((22, 1.4, _PRIMARY_950), (28, 0.5, _PRIMARY_400)):
+        c.setStrokeColor(col)
+        c.setLineWidth(lw)
+        c.rect(inset, inset, width - 2 * inset, height - 2 * inset,
+               fill=False, stroke=True)
 
-    # ── Diagonal stripe texture on left column ────────────────────────────────
-    c.saveState()
-    clip = c.beginPath()
-    clip.rect(0, 0, left_w, height)
-    c.clipPath(clip, stroke=False, fill=False)
-    c.setStrokeColor(colors.Color(0, 0, 0, alpha=0.013))
-    c.setLineWidth(0.8)
-    ang = math.radians(-48)
-    dx, dy = math.cos(ang), math.sin(ang)
-    nx, ny = -dy, dx                  # perpendicular (normal) to stripe direction
-    step = 35
-    for i in range(-20, 70):
-        ox = i * step * nx
-        oy = i * step * ny
-        L = 1400
-        c.line(ox - L*dx, oy - L*dy, ox + L*dx, oy + L*dy)
-    c.restoreState()
+    f = 36
+    for fx, fy, hs, vs in ((f, height - f, +1, -1), (width - f, height - f, -1, -1),
+                           (f, f, +1, +1), (width - f, f, -1, +1)):
+        _draw_corner_flourish(c, fx, fy, hs, vs, color=_PRIMARY_950)
 
-    # ── L-shaped corner registration marks ───────────────────────────────────
-    cm = 17       # arm length
-    off = 11      # distance from page edge
-    c.setStrokeColor(_CORNER_MK)
-    c.setLineWidth(1.5)
-    for px, py, h_sign, v_sign in [
-        (off,         height - off, +1, -1),   # top-left
-        (width - off, height - off, -1, -1),   # top-right
-        (off,         off,          +1, +1),   # bottom-left
-        (width - off, off,          -1, +1),   # bottom-right
-    ]:
-        c.line(px, py, px + h_sign * cm, py)   # horizontal arm
-        c.line(px, py, px, py + v_sign * cm)   # vertical arm
+    # ── Header ────────────────────────────────────────────────────────────────
+    _draw_wordmark(c, cx, height - 88)
 
-    # ═════════════════════════════════════════════════════════════════════════
-    # LEFT COLUMN
-    # ═════════════════════════════════════════════════════════════════════════
-    pad_l = 50
-    avail_w = left_w - pad_l - 44      # usable text width
+    title = 'CERTIFICATE OF COMPLETION'
+    tw = _spaced_text_width(c, title, 'Helvetica-Bold', 20, 5.5)
+    _draw_spaced_text(c, title, cx - tw / 2, height - 148,
+                      'Helvetica-Bold', 20, _NEAR_BLACK, 5.5)
+    _draw_ornament(c, cx, height - 164, width=170)
 
-    # ── Logo ──────────────────────────────────────────────────────────────────
-    logo_sq = 42
-    logo_x  = pad_l
-    logo_y  = height - 32 - logo_sq   # bottom of square
+    # ── Body ──────────────────────────────────────────────────────────────────
+    avail = width - 200
 
-    c.setFillColor(_NAVY)
-    c.rect(logo_x, logo_y, logo_sq, logo_sq, fill=True, stroke=False)
-
-    c.setFont('Times-Bold', 16)
-    c.setFillColor(_GOLD)
-    c.drawCentredString(logo_x + logo_sq / 2, logo_y + 12, 'CC')
-
-    wm_x = logo_x + logo_sq + 11
-    c.setFont('Helvetica-Bold', 7)
-    c.setFillColor(_GREY_99)
-    # c.drawString(wm_x, logo_y + logo_sq - 11, 'School of')
-    c.setFont('Helvetica-Bold', 17)
-    c.setFillColor(_NAVY)
-    c.drawString(wm_x, logo_y + 4, 'CAREER COLLEGE')
-
-    # ── Certificate body ──────────────────────────────────────────────────────
-    # Vertically centred between logo bottom and signature top.
-    # Signature top ≈ 190pt.  Logo bottom ≈ height - 32 - 42 = height - 74.
-    # Midpoint ≈ (190 + height - 74) / 2.  Space is ~303pt; layout ~150pt tall.
-    body_top = (height - 74 + 190) / 2 + 75    # approximate centre of body
-
-    # Issue date
-    issued_date = certificate.issued_at.strftime('%B %d, %Y')
-    date_y = body_top
-    c.setFont('Helvetica', 10)
-    c.setFillColor(_GREY_99)
-    c.drawString(pad_l, date_y, issued_date)
-
-    # Learner name — large, bold, uppercase.
-    # Uses _UNICODE_BOLD (VeraBd TTF) so extended-Latin, Greek, and Cyrillic
-    # names render correctly. _fit_text truncates with ellipsis if the name
-    # still overflows at the minimum size (guards against very long names).
-    name = certificate.learner_name.upper()
-    name, name_sz = _fit_text(c, name, _UNICODE_BOLD, 32, 16, avail_w)
-    name_y = date_y - 14 - name_sz
-    c.setFont(_UNICODE_BOLD, name_sz)
-    c.setFillColor(_NEAR_BLACK)
-    c.drawString(pad_l, name_y, name)
-
-    # "has successfully completed"
-    comp_y = name_y - 26
-    c.setFont('Helvetica', 10)
+    c.setFont('Times-Italic', 11.5)
     c.setFillColor(_GREY_66)
-    c.drawString(pad_l, comp_y, 'has successfully completed')
+    c.drawCentredString(cx, height - 196, 'This is to certify that')
 
-    # Course title (serif, normal weight). Times-Roman is a Type1 font (Latin-1
-    # only) but course titles are authored by instructors on this platform and
-    # are unlikely to contain non-Latin text. Overflow is still guarded by
-    # _fit_text so an unusually long title truncates rather than bleeds off-edge.
-    course_title = certificate.course_title
+    # Learner name — the focal point, set in script (Great Vibes) and title case.
+    # Script faces are drawn for mixed case; ALL CAPS in script runs together.
+    #
+    # Great Vibes is Latin-only, so a name outside that range falls back to
+    # _UNICODE_BOLD (VeraBd: Latin Extended, Greek, Cyrillic) rather than
+    # rendering as tofu. _fit_text guards against very long names either way.
+    raw_name = certificate.learner_name.strip()
+    name_font, base_sz, min_sz = _UNICODE_BOLD, 34, 17
+    if _SCRIPT_FONT and _is_latin(raw_name):
+        raw_name = _title_case(raw_name)
+        # Script x-height is much smaller than a sans at the same point size.
+        name_font, base_sz, min_sz = _SCRIPT_FONT, 54, 26
+    else:
+        raw_name = raw_name.upper()
+
+    name, name_sz = _fit_text(c, raw_name, name_font, base_sz, min_sz, avail)
+    name_y = height - 214 - name_sz * 0.72
+    c.setFont(name_font, name_sz)
+    c.setFillColor(_PRIMARY_950)
+    c.drawCentredString(cx, name_y, name)
+
+    rule_w = min(c.stringWidth(name, name_font, name_sz) + 70, avail)
+    c.setStrokeColor(_PRIMARY_400)
+    c.setLineWidth(0.9)
+    c.line(cx - rule_w / 2, name_y - 13, cx + rule_w / 2, name_y - 13)
+
+    c.setFont('Times-Italic', 11.5)
+    c.setFillColor(_GREY_66)
+    c.drawCentredString(cx, name_y - 36, 'has successfully completed the course')
+
     course_title, title_sz = _fit_text(
-        c, course_title, 'Times-Roman', 15, 10, avail_w * 0.90
-    )
-    title_y = comp_y - title_sz - 8
-    c.setFont('Times-Roman', title_sz)
+        c, certificate.course_title, 'Times-Bold', 19, 12, avail * 0.9)
+    course_y = name_y - 50 - title_sz
+    c.setFont('Times-Bold', title_sz)
     c.setFillColor(_NEAR_BLACK)
-    c.drawString(pad_l, title_y, course_title)
+    c.drawCentredString(cx, course_y, course_title)
 
-    # Attribution
-    attr_y = title_y - 18
     c.setFont('Helvetica', 8.5)
     c.setFillColor(_GREY_88)
-    c.drawString(pad_l, attr_y,      'an online course authorized by Career College and offered')
-    c.drawString(pad_l, attr_y - 12, 'through the Career College learning platform.')
+    c.drawCentredString(
+        cx, course_y - 20,
+        f'an online course authorized by {issuer} and offered through '
+        'the Career College learning platform.')
 
-    # ── Signature block ───────────────────────────────────────────────────────
-    # sig_svg_bottom = bottom-left of the 155×44 SVG drawing area
-    sig_svg_bottom = 148
-    # _draw_signature(c, pad_l, sig_svg_bottom)
+    # ── Credential metadata strip ─────────────────────────────────────────────
+    meta = []
+    if certificate.course_duration:
+        meta.append(('COURSE DURATION', certificate.course_duration))
+    if certificate.learning_hours:
+        meta.append(('LEARNING HOURS', f'{certificate.learning_hours} Hours'))
+    if certificate.completion_date:
+        meta.append(('COMPLETION DATE',
+                     certificate.completion_date.strftime('%B %d, %Y')))
+    if certificate.certificate_id:
+        meta.append(('CERTIFICATE ID', certificate.certificate_id))
 
-    # Dotted rule (below SVG, matching .sig-rule)
-    rule_y = sig_svg_bottom - 6
-    c.setStrokeColor(_GREY_BB)
-    c.setLineWidth(1)
-    c.setDash(1, 3)
-    c.line(pad_l, rule_y, pad_l + 162, rule_y)
-    c.setDash()
+    if meta:
+        strip_y = course_y - 62
+        slot = min(185, (width - 200) / len(meta))
+        span = slot * len(meta)
+        start = cx - span / 2 + slot / 2
 
-    # Instructor name & meta
-    try:
-        instructor_name = certificate.enrollment.course.created_by.full_name
-    except Exception:
-        instructor_name = 'Career College'
-    instructor_title = 'Course Instructor'
+        for i, (label, value) in enumerate(meta):
+            col = start + i * slot
+            lw = _spaced_text_width(c, label, 'Helvetica', 6.5, 1.2)
+            _draw_spaced_text(c, label, col - lw / 2, strip_y + 9,
+                              'Helvetica', 6.5, _GREY_99, 1.2)
 
-    c.setFont('Helvetica-Bold', 10.5)
-    c.setFillColor(_GREY_22)
-    c.drawString(pad_l, rule_y - 14, instructor_name)
+            fitted, sz = _fit_text(c, value, 'Helvetica-Bold', 9.5, 7, slot - 16)
+            c.setFont('Helvetica-Bold', sz)
+            c.setFillColor(_GREY_22)
+            c.drawCentredString(col, strip_y - 5, fitted)
 
-    c.setFont('Helvetica', 9)
-    c.setFillColor(_GREY_77)
-    c.drawString(pad_l, rule_y - 26, instructor_title)
-    c.drawString(pad_l, rule_y - 38, 'Career College')
+            if i:
+                c.setStrokeColor(_GREY_BB)
+                c.setLineWidth(0.4)
+                c.line(col - slot / 2, strip_y - 10, col - slot / 2, strip_y + 15)
 
-    # ═════════════════════════════════════════════════════════════════════════
-    # RIGHT COLUMN
-    # ═════════════════════════════════════════════════════════════════════════
-    right_cx = right_x + right_w / 2
+    # ── Footer: signature · seal · signature ──────────────────────────────────
+    # Raised above the verification strip so the QR at bottom-right has its own
+    # band and never overlaps the right-hand signature column.
+    sig_baseline = 164
+    col_w = 175
+    left_x = 96
+    right_x = width - 96 - col_w
 
-    # ── Sunburst watermark ────────────────────────────────────────────────────
-    _draw_sunburst(c, right_cx, height / 2)
+    _draw_signatory_column(
+        c, left_x, col_w, sig_baseline, 'COURSE INSTRUCTOR',
+        certificate.instructor_name, certificate.instructor_designation,
+        issuer, certificate.instructor_signature,
+    )
 
-    # ── "COURSE / CERTIFICATE" heading with 4pt letter-spacing ───────────────
-    heading_font = 'Helvetica-Bold'
-    heading_sz   = 18
-    heading_sp   = 4   # inter-character spacing (pt)
+    # Smaller than the default so it sits between the two signature columns
+    # without crowding the metadata strip above.
+    _draw_seal(c, cx, sig_baseline - 24, outer=44)
 
-    for line, base_y in [('COURSE', height - 65), ('CERTIFICATE', height - 90)]:
-        lw = _spaced_text_width(c, line, heading_font, heading_sz, heading_sp)
-        _draw_spaced_text(c, line, right_cx - lw / 2, base_y,
-                          heading_font, heading_sz, _NEAR_BLACK, heading_sp)
+    if certificate.authorized_signatory_name:
+        _draw_signatory_column(
+            c, right_x, col_w, sig_baseline, 'AUTHORIZED SIGNATORY',
+            certificate.authorized_signatory_name,
+            certificate.authorized_signatory_designation,
+            issuer, certificate.authorized_signature,
+        )
 
-    # ── Seal ──────────────────────────────────────────────────────────────────
-    _draw_seal(c, right_cx, height / 2 + 10)
+    # ── Verification strip ────────────────────────────────────────────────────
+    # The URL comes from the shared helper, so the QR, the printed text and the
+    # API payload can never disagree.
+    verify_url = build_verification_url(certificate)
+    display = verify_url.replace('https://', '').replace('http://', '')
 
-    # ── Verify block (right-aligned) ──────────────────────────────────────────
-    verify_x = right_x + right_w - 16
-    verify_y  = 72
+    c.setStrokeColor(_GOLD)
+    c.setLineWidth(0.5)
+    c.line(96, 84, width - 96, 84)
 
-    frontend = getattr(settings, 'FRONTEND_URL', 'https://careercollege.com').rstrip('/')
-    domain   = frontend.replace('https://', '').replace('http://', '')
-    verify_str = f'{domain}/verify/{certificate.certificate_uid}'
+    qr_size = 46
+    qr_x = width - 96 - qr_size
+    qr_y = 42
+    has_qr = _draw_qr(c, verify_url, qr_x, qr_y, size=qr_size)
 
-    c.setFont('Helvetica-Bold', 7)
+    if has_qr:
+        c.setFont('Helvetica-Bold', 5.5)
+        c.setFillColor(_GREY_99)
+        c.drawCentredString(qr_x + qr_size / 2, qr_y - 8, 'SCAN TO VERIFY')
+
+    # Centred on the page when there is no QR; shifted left of it when there is,
+    # so the two blocks never overlap.
+    text_cx = cx - (qr_size / 2 + 14) if has_qr else cx
+
+    c.setFont('Helvetica-Bold', 7.5)
     c.setFillColor(_GREY_3A)
-    c.drawRightString(verify_x, verify_y, verify_str)
+    c.drawCentredString(text_cx, 68, display)
 
     c.setFont('Helvetica', 6.5)
     c.setFillColor(_GREY_55)
-    c.drawRightString(verify_x, verify_y - 11,
-                      'Career College has confirmed the identity of this')
-    c.drawRightString(verify_x, verify_y - 21,
-                      'individual and their participation in the course.')
+    c.drawCentredString(
+        text_cx, 56,
+        f'{issuer} has confirmed the identity of this individual')
+    c.drawCentredString(
+        text_cx, 46, 'and their participation in the course.')
 
     c.save()
     return buffer.getvalue()
+

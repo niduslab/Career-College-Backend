@@ -4,17 +4,24 @@ from django.db import models
 
 class AdminActionLog(models.Model):
     """
-    Append-only record of a sensitive admin action on a user account.
+    Append-only record of a sensitive admin action.
 
     Written inside the same transaction as the mutation (suspend / reactivate /
-    role change) so the audit trail can never drift from the action. Never
-    updated or deleted through the API.
+    role change / certificate revoke / settings change) so the audit trail can
+    never drift from the action. Never updated or deleted through the API.
+
+    target_user is null for actions that do not target an account — a platform
+    settings change, or a certificate revocation (whose subject is recorded in
+    `metadata` instead).
     """
 
     class Action(models.TextChoices):
         SUSPEND = 'suspend', 'Suspend'
         REACTIVATE = 'reactivate', 'Reactivate'
         ROLE_CHANGE = 'role_change', 'Role change'
+        CERTIFICATE_REVOKE = 'certificate_revoke', 'Certificate revoked'
+        CERTIFICATE_RESTORE = 'certificate_restore', 'Certificate restored'
+        PLATFORM_SETTINGS_UPDATE = 'platform_settings_update', 'Platform settings updated'
 
     actor = models.ForeignKey(
         settings.AUTH_USER_MODEL,

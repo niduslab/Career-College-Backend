@@ -31,3 +31,21 @@ def institution_logo_path(instance, filename):
 
 def institution_cover_path(instance, filename):
     return _slugify_upload(instance, filename, 'partner_institutions/covers')
+
+
+def instructor_signature_path(instance, filename):
+    return _slugify_upload(instance, filename, 'signatures/instructors')
+
+
+def institution_signature_path(instance, filename):
+    return _slugify_upload(instance, filename, 'signatures/authorized')
+
+
+def authorized_signature_path(instance, filename):
+    """Platform-wide authorized signatory (admin_console.PlatformSettings)."""
+    return _slugify_upload(instance, filename, 'signatures/authorized')
+
+
+def certificate_signature_path(instance, filename):
+    """Per-certificate signature copies, frozen at issuance."""
+    return _slugify_upload(instance, filename, 'certificates/signatures')

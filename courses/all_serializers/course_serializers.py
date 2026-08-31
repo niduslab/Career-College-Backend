@@ -123,7 +123,8 @@ class NidusCourseSerializer(serializers.ModelSerializer):
         model = NidusCourse
         fields = [
             'id', 'title', 'slug', 'description', 'thumbnail', 'price',
-            'language', 'level', 'duration_minutes', 'delivery_mode', 'status', 'is_published',
+            'language', 'level', 'duration_minutes', 'learning_hours',
+            'delivery_mode', 'status', 'is_published',
             'rejection_reason', 'published_at', 'created_by', 'instructors',
             'partner_institution', 'category', 'learning_objectives',
             'prerequisites', 'audiences', 'course_outline', 'created_at', 'updated_at',
@@ -142,8 +143,8 @@ class NidusCourseCreateUpdateSerializer(serializers.ModelSerializer):
         model = NidusCourse
         fields = [
             'title', 'description', 'thumbnail', 'price', 'language', 'level',
-            'duration_minutes', 'delivery_mode', 'category', 'learning_objectives',
-            'prerequisites', 'audiences', 'course_outline',
+            'duration_minutes', 'learning_hours', 'delivery_mode', 'category',
+            'learning_objectives', 'prerequisites', 'audiences', 'course_outline',
         ]
         read_only_fields = ['created_by']
         extra_kwargs = {

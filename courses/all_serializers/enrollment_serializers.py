@@ -174,7 +174,7 @@ class CatalogCourseDetailSerializer(_WishlistFlagMixin, serializers.ModelSeriali
         model = NidusCourse
         fields = [
             'id', 'title', 'slug', 'description', 'thumbnail', 'price',
-            'language', 'level', 'duration_minutes',
+            'language', 'level', 'duration_minutes', 'learning_hours',
             'instructors', 'partner_institution', 'category',
             'learning_objectives', 'prerequisites', 'audiences', 'course_outline',
             'total_sections', 'total_content_items', 'sections',
@@ -255,7 +255,8 @@ class _MyCourseMetaSerializer(serializers.ModelSerializer):
         model = NidusCourse
         fields = [
             'id', 'title', 'slug', 'description', 'thumbnail', 'price',
-            'language', 'level', 'duration_minutes', 'status', 'is_published',
+            'language', 'level', 'duration_minutes', 'learning_hours',
+            'status', 'is_published',
             'published_at', 'instructors', 'partner_institution', 'category',
             'learning_objectives', 'prerequisites', 'audiences', 'course_outline',
             'total_sections', 'total_content_items',

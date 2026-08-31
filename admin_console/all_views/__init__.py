@@ -1,4 +1,5 @@
 from admin_console.all_views.auth_views import AdminSessionView
+from admin_console.all_views.platform_settings_views import PlatformSettingsView
 from admin_console.all_views.session_views import (
     AdminSessionListView,
     AdminSessionRevokeOthersView,
@@ -24,4 +25,5 @@ __all__ = [
     'AdminUserReactivateView',
     'AdminUserRoleView',
     'AdminAuditLogListView',
+    'PlatformSettingsView',
 ]

@@ -9,6 +9,7 @@ from admin_console.all_views import (
     AdminUserReactivateView,
     AdminUserRoleView,
     AdminUserSuspendView,
+    PlatformSettingsView,
 )
 
 __all__ = [
@@ -22,4 +23,5 @@ __all__ = [
     'AdminUserReactivateView',
     'AdminUserRoleView',
     'AdminAuditLogListView',
+    'PlatformSettingsView',
 ]

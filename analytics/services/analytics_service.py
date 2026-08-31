@@ -125,8 +125,11 @@ def _enrollment_metrics(institution, now, window_days):
 
 
 def _certificate_metrics(institution, now):
+    # Revoked certificates are excluded from the "earned" counts but stay in the
+    # issuance trend — the trend is a historical record of what was issued.
     base = Certificate.objects.filter(
-        enrollment__course__partner_institution=institution
+        enrollment__course__partner_institution=institution,
+        status=Certificate.Status.VALID,
     )
     month_start = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
     return {

@@ -43,6 +43,11 @@ gunicorn==22.0.0
 
 # Certificate PDF generation
 reportlab==4.5.1
+# QR code drawn into the certificate PDF, pointing at the public verify URL.
+# qrcode ships no py.typed marker, so the stubs silence the editor warning —
+# they are type-check only and pull in nothing at runtime.
+qrcode==8.2
+types-qrcode==8.2.0.20260518
 
 # Admin-console device/session tracking: parse User-Agent → browser/os/device
 user-agents==2.2.0

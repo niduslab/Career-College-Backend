@@ -11,6 +11,7 @@ from admin_console.views import (
     AdminUserReactivateView,
     AdminUserRoleView,
     AdminUserSuspendView,
+    PlatformSettingsView,
 )
 
 app_name = 'admin_console'
@@ -29,6 +30,9 @@ urlpatterns = [
     path('users/<int:pk>/suspend/', AdminUserSuspendView.as_view(), name='user-suspend'),
     path('users/<int:pk>/reactivate/', AdminUserReactivateView.as_view(), name='user-reactivate'),
     path('users/<int:pk>/role/', AdminUserRoleView.as_view(), name='user-role'),
+
+    # Platform settings (branding + default authorized signatory)
+    path('platform-settings/', PlatformSettingsView.as_view(), name='platform-settings'),
 
     # Audit log
     path('audit/', AdminAuditLogListView.as_view(), name='audit-list'),

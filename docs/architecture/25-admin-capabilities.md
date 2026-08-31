@@ -57,7 +57,8 @@ One-line summary of the endpoints (all subclass `AdminConsoleAPIView`, own-sessi
 | `POST users/<id>/suspend/` | Suspend — sets `is_restricted_by_admin=True` + `is_active=False`, blacklists all refresh tokens, emails the user (`ACCOUNT_SUSPENDED`) |
 | `POST users/<id>/reactivate/` | Lift an admin suspension (`ACCOUNT_REACTIVATED`) |
 | `POST users/<id>/role/` | Change `user_type` (provisions the new profile) and/or `is_staff` |
-| `GET audit/` | Append-only `AdminActionLog` (actor/target/action/reason/before-after; emails snapshotted) |
+| `GET/PATCH platform-settings/` | Platform branding + the **default certificate authorized signatory** (name / designation / signature image). Singleton, always `pk=1`; read via `PlatformSettings.load()`. Multipart for the signature upload; writes a `PLATFORM_SETTINGS_UPDATE` audit row. See [14 — Certificates](14-certificate-system.md) §5 |
+| `GET audit/` | Append-only `AdminActionLog` (actor/target/action/reason/before-after; emails snapshotted). `target_user` is **nullable** — null for a settings change, the learner for a certificate revocation |
 
 > **Note on suspend (kept in sync with code):** suspend now **blacklists every outstanding refresh token** inside the suspend transaction and **dispatches an `ACCOUNT_SUSPENDED` notification** on commit; reactivate dispatches `ACCOUNT_REACTIVATED`. Both events are deliberately absent from `EVENT_TO_CATEGORY` (critical account notices — always emailed, unmutable), and `ACCOUNT_SUSPENDED` is on `send_notification_email_task`'s inactive-recipient allowlist so the email isn't dropped when the account goes inactive. The only remaining gap is that a *stateless access token* the user already holds keeps working until it expires (12 h) — nothing can revoke it mid-life; `is_active=False` blocks it on the *next* request.
 
@@ -129,7 +130,16 @@ Unlike the partner dashboard, admin **revenue is real** (`revenue.enabled: True`
 
 This is the only admin reach into the webinars app — publish/rework stay owner/host-scoped. See **[19 — Webinars](19-webinars.md)**.
 
-### 7. Django's built-in `/admin/` site
+### 7. Certificate revocation — `courses/` (JWT)
+
+| Method + path | View | Purpose |
+|---|---|---|
+| `POST /api/v1/courses/certificates/<uuid>/revoke/` | `CertificateRevokeView` | Mark a certificate revoked (body `{reason}`). Already revoked → 422 |
+| `POST /api/v1/courses/certificates/<uuid>/restore/` | `CertificateRestoreView` | Lift a revocation. Not revoked → 422 |
+
+`IsPlatformAdmin`-gated, `select_for_update` on the row, and an `AdminActionLog` row (`certificate_revoke` / `certificate_restore`) written in the same transaction. **Revocation changes only the verification verdict — never the issued snapshot**, so the certificate stays an accurate record of what was awarded. Public verification then returns 200 with `status: "revoked"` (not 404). See **[14 — Certificates](14-certificate-system.md)** §8.
+
+### 8. Django's built-in `/admin/` site
 
 `/admin/` (Django's own admin) is still mounted. `AdminActionLog` and `AdminSession` are registered there **read-only**. It shares the same hardened session cookie settings as the console (see [24](24-admin-console-auth.md) §settings), so a login there also gets recorded as a device by the `user_logged_in` signal handler. This is a low-level operational fallback, not the product back-office.
 
@@ -152,6 +162,7 @@ This is the only admin reach into the webinars app — publish/rework stay owner
 | Identity verification | [07-id-verification.md](07-id-verification.md) |
 | Institution verification + partner onboarding | [18-partner-institutions.md](18-partner-institutions.md) |
 | Platform analytics | [20-analytics-dashboard.md](20-analytics-dashboard.md) |
+| Certificates (revocation, platform signatory) | [14-certificate-system.md](14-certificate-system.md) |
 | Manual API test (console) | [../api-testing/postman-admin-console.md](../api-testing/postman-admin-console.md) |
 
 ## What's not built yet (admin-wide)

@@ -33,6 +33,7 @@ a full tour, or jump to the subsystem you're working on.
 25. `25-admin-capabilities.md` — cross-cutting map of **everything** a platform admin can do (console + course review + verification review + category mgmt + platform analytics), the two elevation mechanisms, and where each deep doc lives
 32. `32-ai-course-outline-generator.md` — LLM-drafted course outlines: the three-repo topology, the outline-preview endpoint, the spend throttle, and what the caller does with the draft
 33. `33-two-step-lecture-authoring.md` — creating a lesson vs. giving it content: the derived "awaiting content" state, the four places an empty lecture must not count, and creator-inclusive content ownership
+34. `34-ai-article-lecture-generator.md` — LLM-drafted **article** lecture bodies: the second AI service, why the HTML is rendered server-side and escaped, the never-persist rule, and why video lectures are out of scope
 
 > Entries 26–31 exist as files but were never added to this index. See the
 > directory listing for `26-discussion-qa.md`, `27-learner-dashboard.md`,

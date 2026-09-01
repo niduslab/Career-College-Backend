@@ -212,6 +212,86 @@ class QuizAnswerSerializer(serializers.ModelSerializer):
             return instance
 
 
+class QuizQuestionWithAnswersSerializer(QuizQuestionSerializer):
+    """A question and its options, so the bulk-create response needs no refetch."""
+
+    answers = QuizAnswerSerializer(many=True, read_only=True)
+
+    class Meta(QuizQuestionSerializer.Meta):
+        fields = QuizQuestionSerializer.Meta.fields + ['answers']
+
+
+# ---------------------------------------------------------------------------
+# Bulk quiz-question creation
+# ---------------------------------------------------------------------------
+
+MAX_BULK_QUESTIONS = 20
+MIN_OPTIONS_PER_QUESTION = 2
+MAX_OPTIONS_PER_QUESTION = 5
+
+
+class _BulkQuizOptionSerializer(serializers.Serializer):
+    """One answer option inside a bulk request."""
+
+    # Matches QuizAnswer.answer_text, a CharField(max_length=500).
+    answer_text = serializers.CharField(max_length=500)
+    is_correct = serializers.BooleanField()
+
+    def validate_answer_text(self, value):
+        text = value.strip()
+        if not text:
+            raise serializers.ValidationError('Answer text cannot be empty.')
+        return text
+
+
+class _BulkQuizQuestionSerializer(serializers.Serializer):
+    """One question plus its options inside a bulk request."""
+
+    question_text = serializers.CharField(max_length=1000)
+    options = _BulkQuizOptionSerializer(
+        many=True,
+        min_length=MIN_OPTIONS_PER_QUESTION,
+        max_length=MAX_OPTIONS_PER_QUESTION,
+    )
+
+    def validate_question_text(self, value):
+        text = value.strip()
+        if not text:
+            raise serializers.ValidationError('Question text cannot be empty.')
+        return text
+
+    def validate_options(self, value):
+        """Enforce what the database would otherwise catch late.
+
+        `uniq_correct_answer_per_question` refuses a second correct row, and no
+        correct answer at all blocks course submission. Duplicate options make
+        one of them wrong for no visible reason.
+        """
+        correct = sum(1 for option in value if option['is_correct'])
+        if correct != 1:
+            raise serializers.ValidationError(
+                f'Each question must have exactly one correct answer, found {correct}.'
+            )
+
+        texts = [option['answer_text'].casefold() for option in value]
+        if len(set(texts)) != len(texts):
+            raise serializers.ValidationError(
+                'Answer options within a question must be different from each other.'
+            )
+        return value
+
+
+class QuizQuestionBulkCreateSerializer(serializers.Serializer):
+    """Body for `POST quizzes/<id>/questions/bulk/`.
+
+    Shape and field validation only; the write lives in `services/quiz_service.py`.
+    """
+
+    questions = _BulkQuizQuestionSerializer(
+        many=True, min_length=1, max_length=MAX_BULK_QUESTIONS,
+    )
+
+
 # ---------------------------------------------------------------------------
 # Coding exercise serializers (instructor-facing; no learner serializers in Part 1)
 # ---------------------------------------------------------------------------

@@ -295,6 +295,28 @@ else:
         },
     }
 
+# CloudFront-signed video streaming (production only). Leave CLOUDFRONT_DOMAIN
+# blank in dev — the streaming view then falls back to the storage-relative
+# playlist URL.
+CLOUDFRONT_DOMAIN = env('CLOUDFRONT_DOMAIN', default='')
+CLOUDFRONT_KEY_ID = env('CLOUDFRONT_KEY_ID', default='')
+# The private key ships as a single-line env var with `\n` escapes; decode them
+# back to real newlines before PEM parsing.
+CLOUDFRONT_PRIVATE_KEY = env('CLOUDFRONT_PRIVATE_KEY', default='').replace('\\n', '\n')
+# Signed cookies expire after this many seconds (default 2 h — long enough for
+# a full lecture, short enough to blunt link sharing).
+CLOUDFRONT_SIGNED_URL_TTL_SECONDS = env.int('CLOUDFRONT_SIGNED_URL_TTL_SECONDS', default=7200)
+# Domain scope for the CloudFront-Policy/Signature/Key-Pair-Id cookies. Must
+# be a parent domain of both the API host and the CloudFront distribution
+# (e.g. ``.niduscareer.com`` for ``api.niduscareer.com`` + ``videos.niduscareer.com``).
+# Leave blank in dev — the fallback path serves an unsigned storage URL.
+CLOUDFRONT_COOKIE_DOMAIN = env('CLOUDFRONT_COOKIE_DOMAIN', default='')
+
+# Multipart upload guardrails for the browser-driven S3 direct upload flow.
+AWS_S3_MAX_UPLOAD_SIZE = env.int('AWS_S3_MAX_UPLOAD_SIZE', default=5 * 1024 * 1024 * 1024)  # 5 GB
+AWS_S3_MULTIPART_CHUNK_SIZE = env.int('AWS_S3_MULTIPART_CHUNK_SIZE', default=5 * 1024 * 1024)  # 5 MB
+AWS_S3_PRESIGNED_PART_URL_TTL_SECONDS = env.int('AWS_S3_PRESIGNED_PART_URL_TTL_SECONDS', default=3600)
+
 # Celery
 CELERY_BROKER_URL = env('CELERY_BROKER_URL', default='redis://127.0.0.1:6379/0')
 CELERY_RESULT_BACKEND = env('CELERY_RESULT_BACKEND', default=CELERY_BROKER_URL)
@@ -349,6 +371,10 @@ CELERY_BEAT_SCHEDULE = {
     'advance-course-schedules': {
         'task': 'courses.tasks.advance_course_schedules_task',
         'schedule': 300.0,  # every 5 min
+    },
+    'reap-stuck-video-uploads': {
+        'task': 'courses.tasks.reap_stuck_video_uploads_task',
+        'schedule': 3600.0,  # hourly
     },
 }
 

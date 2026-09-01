@@ -46,3 +46,6 @@ reportlab==4.5.1
 
 # Admin-console device/session tracking: parse User-Agent → browser/os/device
 user-agents==2.2.0
+
+# CloudFront-signed HLS URLs (RSA-SHA1 signing of the canned policy).
+cryptography==44.0.0

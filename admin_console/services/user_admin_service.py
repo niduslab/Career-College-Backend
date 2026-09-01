@@ -11,13 +11,16 @@ from django.db import transaction
 from django.db.models import Q
 
 from admin_console.all_models import AdminActionLog
-from authentication.models import User
+from authentication.models import PartnerInstitutionProfile, User
 from authentication.services.profile_service import ensure_profile_for_type
 from authentication.services.token_service import blacklist_all_refresh_tokens
 
 logger = logging.getLogger(__name__)
 
 _VALID_USER_TYPES = {choice[0] for choice in User.USER_TYPE_CHOICES}
+_VALID_INSTITUTION_TYPES = {
+    choice[0] for choice in PartnerInstitutionProfile.INSTITUTION_TYPE_CHOICES
+}
 _SORT_WHITELIST = {
     'registration_date': 'registration_date',
     '-registration_date': '-registration_date',
@@ -95,7 +98,9 @@ def search_users(params):
     flags in ``_BOOL_FILTERS``, ``include_deleted`` (bool), ``sort`` (whitelist).
     """
     include_deleted = _parse_bool(params.get('include_deleted')) is True
-    qs = User.objects.all_with_deleted() if include_deleted else User.objects.all()
+    qs = (
+        User.objects.all_with_deleted() if include_deleted else User.objects.all()
+    ).select_related('partner_institution_profile')
 
     search = (params.get('search') or '').strip()
     if search:
@@ -103,13 +108,23 @@ def search_users(params):
         # scan and matches almost everything. Require a small minimum.
         if len(search) < 2:
             raise AdminUserActionError('Search term must be at least 2 characters.', 400)
-        qs = qs.filter(Q(email__icontains=search) | Q(full_name__icontains=search))
+        qs = qs.filter(
+            Q(email__icontains=search)
+            | Q(full_name__icontains=search)
+            | Q(partner_institution_profile__institution_name__icontains=search)
+        )
 
     user_type = (params.get('user_type') or '').strip()
     if user_type:
         if user_type not in _VALID_USER_TYPES:
             raise AdminUserActionError('Invalid user_type filter.', 400)
         qs = qs.filter(user_type=user_type)
+
+    institution_type = (params.get('institution_type') or '').strip()
+    if institution_type:
+        if institution_type not in _VALID_INSTITUTION_TYPES:
+            raise AdminUserActionError('Invalid institution_type filter.', 400)
+        qs = qs.filter(partner_institution_profile__institution_type=institution_type)
 
     for field in _BOOL_FILTERS:
         parsed = _parse_bool(params.get(field))

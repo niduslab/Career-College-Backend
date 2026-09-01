@@ -5,7 +5,15 @@ from authentication.models import User
 
 
 class AdminUserListSerializer(serializers.ModelSerializer):
-    """User row for the admin list — identity + every account-state flag."""
+    """User row for the admin list — identity + every account-state flag.
+
+    ``institution_name``/``institution_type`` are populated only for
+    ``user_type='partner_institution'`` accounts (null otherwise) — the admin
+    console has no other surface that shows which institution an account is.
+    """
+
+    institution_name = serializers.SerializerMethodField()
+    institution_type = serializers.SerializerMethodField()
 
     class Meta:
         model = User
@@ -22,8 +30,18 @@ class AdminUserListSerializer(serializers.ModelSerializer):
             'is_deleted',
             'is_staff',
             'registration_date',
+            'institution_name',
+            'institution_type',
         ]
         read_only_fields = fields
+
+    def get_institution_name(self, obj):
+        profile = getattr(obj, 'partner_institution_profile', None)
+        return profile.institution_name if profile else None
+
+    def get_institution_type(self, obj):
+        profile = getattr(obj, 'partner_institution_profile', None)
+        return profile.institution_type if profile else None
 
 
 class AdminUserDetailSerializer(AdminUserListSerializer):

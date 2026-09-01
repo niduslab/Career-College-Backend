@@ -2,7 +2,7 @@ import os
 
 from django.contrib.contenttypes.models import ContentType as DjContentType
 from django.db import transaction
-from django.db.models import F, Max, QuerySet
+from django.db.models import F, Max, Q, QuerySet
 
 from courses.models import (
     CourseSection,
@@ -20,6 +20,54 @@ def get_publishable_courses() -> QuerySet[NidusCourse]:
         status=NidusCourse.CourseStatus.PUBLISHED,
         is_published=True,
     ).select_related('partner_institution').prefetch_related('instructors')
+
+
+_ADMIN_COURSE_SORT_WHITELIST = {
+    '-created_at': ('-created_at', '-id'),
+    'created_at': ('created_at', 'id'),
+    'title': ('title', 'id'),
+    '-title': ('-title', '-id'),
+}
+
+
+def search_admin_courses(params) -> QuerySet[NidusCourse]:
+    """Platform-wide course queryset for the admin console. Read-only.
+
+    Params: ``search`` (title icontains, >= 2 chars — `idx_ncourse_title_trgm`
+    backs it), ``status`` (any `NidusCourse.CourseStatus` value),
+    ``delivery_mode`` (self_paced|scheduled), ``category`` (category id),
+    ``sort`` (whitelist). Unlike `CourseAdminPendingReviewListView`, this
+    covers every status, not just `under_review` — the admin's general
+    course browser.
+    """
+    qs = (
+        NidusCourse.objects
+        .select_related('created_by', 'category', 'partner_institution')
+        .prefetch_related('instructors')
+    )
+
+    search = (params.get('search') or '').strip()
+    if len(search) >= 2:
+        qs = qs.filter(Q(title__icontains=search))
+
+    status = (params.get('status') or '').strip()
+    if status:
+        if status not in NidusCourse.CourseStatus.values:
+            raise ValueError('Invalid status filter.')
+        qs = qs.filter(status=status)
+
+    delivery_mode = (params.get('delivery_mode') or '').strip()
+    if delivery_mode:
+        if delivery_mode not in NidusCourse.DeliveryMode.values:
+            raise ValueError('Invalid delivery_mode filter.')
+        qs = qs.filter(delivery_mode=delivery_mode)
+
+    category = (params.get('category') or '').strip()
+    if category:
+        qs = qs.filter(category_id=category)
+
+    sort = params.get('sort') or '-created_at'
+    return qs.order_by(*_ADMIN_COURSE_SORT_WHITELIST.get(sort, ('-created_at', '-id')))
 
 
 def get_course_sections(course: NidusCourse) -> QuerySet[CourseSection]:

@@ -20,6 +20,7 @@ from courses.all_views.course_views import (
 )
 from courses.all_views.status_views import (
     CourseAdminCurriculumView,
+    CourseAdminListView,
     CourseAdminPendingReviewListView,
     CourseAdminReviewView,
     CourseArchiveView,
@@ -185,6 +186,7 @@ __all__ = [
     'CourseInstitutionReviewQueueView',
     'CourseInstitutionReviewView',
     'CourseAdminCurriculumView',
+    'CourseAdminListView',
     'CourseAdminPendingReviewListView',
     'CourseAdminReviewView',
     'CourseReworkView',

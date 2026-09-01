@@ -1,21 +1,27 @@
 """AI-assisted authoring endpoints.
 
 Routes (under /api/v1/courses/):
-    POST ai/outline-preview/         → CourseOutlinePreviewAPIView
-    POST ai/article-lecture-preview/ → ArticleLecturePreviewAPIView
-Both gated for instructors and partner institutions.
+    POST ai/outline-preview/          → CourseOutlinePreviewAPIView
+    POST ai/article-lecture-preview/  → ArticleLecturePreviewAPIView
+    POST ai/quiz-questions-preview/   → QuizQuestionsPreviewAPIView
+All gated for instructors and partner institutions.
 
 Every endpoint here is a **suggestion generator**: it calls the AI services
 project, returns the result, and persists nothing. The human decides what to
 keep — same rule as the rubric preview (`AssignmentRubricPreviewAPIView`).
 
-No resource id appears in these URLs, so permission denial is always 403,
-never 404 (see CLAUDE.md → 403 vs. 404 Access-Denied Policy).
+Denial status follows the URL, not the module (CLAUDE.md → 403 vs. 404
+Access-Denied Policy). The first two take no resource id, so denial is 403.
+The quiz endpoint takes a `quiz_id` in its body and scopes it by ownership like
+every other quiz view, so a quiz the caller does not own is a 404 — it reads the
+database for grounding material, and 403 there would confirm the quiz exists.
+Reading for context is still not persisting: none of these write.
 """
 
 import logging
 
 from django.conf import settings
+from django.shortcuts import get_object_or_404
 from rest_framework import status
 from rest_framework.parsers import FormParser, JSONParser, MultiPartParser
 from rest_framework.permissions import IsAuthenticated
@@ -27,9 +33,17 @@ from core.permissions import IsCourseCreator, IsEmailVerified
 from courses.all_serializers.ai_serializers import (
     ArticleLectureRequestSerializer,
     CourseOutlineRequestSerializer,
+    QuizQuestionsRequestSerializer,
 )
+from courses.models import Quiz
 from courses.services.ai_article_service import AIArticleError, generate_article_lecture
 from courses.services.ai_outline_service import AIOutlineError, generate_course_outline
+from courses.services.ai_quiz_service import AIQuizError, generate_quiz_questions
+from courses.services.quiz_service import (
+    build_quiz_source_material,
+    collect_avoid_questions,
+)
+from courses.utils import course_owner_q
 
 logger = logging.getLogger(__name__)
 
@@ -56,6 +70,17 @@ class AIArticleThrottle(UserRateThrottle):
 
     scope = 'ai_article'
     rate = getattr(settings, 'AI_ARTICLE_RATE_LIMIT', '10/min')
+
+
+class AIQuizThrottle(UserRateThrottle):
+    """Per-user rate limit for quiz-question generation.
+
+    Its own scope: questions are generated per quiz, outlines once per course,
+    articles once per lesson, so a shared counter would let one exhaust the rest.
+    """
+
+    scope = 'ai_quiz'
+    rate = getattr(settings, 'AI_QUIZ_RATE_LIMIT', '10/min')
 
 
 class CourseOutlinePreviewAPIView(APIView):
@@ -159,5 +184,88 @@ class ArticleLecturePreviewAPIView(APIView):
 
         return Response(
             {'success': True, 'message': 'Article generated.', 'data': result},
+            status=status.HTTP_200_OK,
+        )
+
+
+class QuizQuestionsPreviewAPIView(APIView):
+    """POST /api/v1/courses/ai/quiz-questions-preview/
+
+    Draft multiple-choice questions for one quiz, grounded in the lectures
+    beside it. Accepting posts to `quizzes/<id>/questions/bulk/`, which writes.
+
+    **Reads the database, writes nothing.** Never make it write: a generated
+    question nobody read is exactly what `_validate_course_completeness` cannot
+    catch, because it is complete — just possibly wrong.
+
+    The `quiz_id` and the 404 it produces are both deliberate; see
+    `QuizQuestionsRequestSerializer`.
+    """
+
+    permission_classes = [IsAuthenticated, IsEmailVerified, IsCourseCreator]
+    throttle_classes = [AIQuizThrottle]
+    parser_classes = [JSONParser, FormParser, MultiPartParser]
+
+    def post(self, request):
+        serializer = QuizQuestionsRequestSerializer(data=request.data)
+        if not serializer.is_valid():
+            return Response(
+                {'success': False, 'message': 'Validation failed.', 'errors': serializer.errors},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        data = serializer.validated_data
+        # Scoped like every other quiz view: not-yours is indistinguishable
+        # from does-not-exist.
+        queryset = (
+            Quiz.objects
+            .select_related('section__course')
+            .filter(course_owner_q(request.user, 'section__course'))
+            .distinct()
+        )
+        quiz = get_object_or_404(queryset, pk=data['quiz_id'])
+        course = quiz.section.course
+
+        source_material, grounded = build_quiz_source_material(quiz)
+
+        try:
+            result = generate_quiz_questions(
+                quiz_title=quiz.title,
+                course_title=course.title,
+                section_title=quiz.section.title,
+                quiz_description=quiz.description,
+                source_material=source_material,
+                topics=data['topics'],
+                audience=course.audiences,
+                level=course.level,
+                language=course.language,
+                question_count=data['question_count'],
+                options_per_question=data['options_per_question'],
+                difficulty=data['difficulty'],
+                avoid_questions=collect_avoid_questions(quiz, data['avoid_questions']),
+                extra_instructions=data['extra_instructions'],
+            )
+        except AIQuizError as exc:
+            return Response(
+                {'success': False, 'message': exc.message},
+                status=exc.http_status,
+            )
+        except Exception as e:
+            logger.error(
+                'Quiz question generation failed for user %s: %s', request.user.id, e,
+            )
+            return Response(
+                {'success': False, 'message': 'An unexpected error occurred. Please try again.'},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            )
+
+        # `grounded` is decided here: the AI service only knows whether it was
+        # given material, not whether the section actually has any.
+        return Response(
+            {
+                'success': True,
+                'message': 'Questions generated.',
+                'data': {**result, 'grounded': grounded},
+            },
             status=status.HTTP_200_OK,
         )

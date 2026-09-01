@@ -121,6 +121,18 @@ from courses.services.ai_article_service import (
     AIArticleError,
     generate_article_lecture,
 )
+from courses.services.ai_quiz_service import (
+    AIQuizError,
+    generate_quiz_questions,
+)
+from courses.services.quiz_service import (
+    MAX_AVOID_QUESTIONS,
+    MAX_SOURCE_CHARS,
+    build_quiz_source_material,
+    bulk_create_quiz_questions,
+    collect_avoid_questions,
+    html_to_text,
+)
 from courses.services.learning_path_service import (
     LearningPathError,
     add_milestone,
@@ -232,6 +244,14 @@ __all__ = [
     'generate_course_outline',
     'AIArticleError',
     'generate_article_lecture',
+    'AIQuizError',
+    'generate_quiz_questions',
+    'MAX_AVOID_QUESTIONS',
+    'MAX_SOURCE_CHARS',
+    'build_quiz_source_material',
+    'bulk_create_quiz_questions',
+    'collect_avoid_questions',
+    'html_to_text',
     'LearningPathError',
     'add_milestone',
     'build_milestone_progress',

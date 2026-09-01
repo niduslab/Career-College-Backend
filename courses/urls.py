@@ -94,8 +94,10 @@ from courses.views import (
     QuizAnswerDetailAPIView,
     QuizAnswerListCreateAPIView,
     QuizDetailAPIView,
+    QuizQuestionBulkCreateAPIView,
     QuizQuestionDetailAPIView,
     QuizQuestionListCreateAPIView,
+    QuizQuestionsPreviewAPIView,
     SectionContentListCreateAPIView,
     SectionContentReorderAPIView,
     LearningPathListView,
@@ -134,6 +136,7 @@ urlpatterns = [
     # -------------------------------------------------------------------------
     path('ai/outline-preview/', CourseOutlinePreviewAPIView.as_view(), name='ai-outline-preview'),
     path('ai/article-lecture-preview/', ArticleLecturePreviewAPIView.as_view(), name='ai-article-lecture-preview'),
+    path('ai/quiz-questions-preview/', QuizQuestionsPreviewAPIView.as_view(), name='ai-quiz-questions-preview'),
 
     # -------------------------------------------------------------------------
     # Enrollment (authenticated learner)
@@ -323,6 +326,8 @@ urlpatterns = [
     # Quiz questions
     # -------------------------------------------------------------------------
     path('quizzes/<int:quiz_id>/questions/', QuizQuestionListCreateAPIView.as_view(), name='quiz-question-list-create'),
+    # Transactional batch create — one request instead of N questions + N*M answers.
+    path('quizzes/<int:quiz_id>/questions/bulk/', QuizQuestionBulkCreateAPIView.as_view(), name='quiz-question-bulk-create'),
     path('quiz-questions/<int:question_id>/', QuizQuestionDetailAPIView.as_view(), name='quiz-question-detail'),
 
     # -------------------------------------------------------------------------

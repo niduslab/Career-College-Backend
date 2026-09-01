@@ -1,6 +1,7 @@
 from courses.all_views.ai_views import (
     ArticleLecturePreviewAPIView,
     CourseOutlinePreviewAPIView,
+    QuizQuestionsPreviewAPIView,
 )
 from courses.all_views.assignment_views import (
     AssignmentDetailAPIView,
@@ -126,6 +127,7 @@ from courses.all_views.content_views import (
     QuizAnswerDetailAPIView,
     QuizAnswerListCreateAPIView,
     QuizDetailAPIView,
+    QuizQuestionBulkCreateAPIView,
     QuizQuestionDetailAPIView,
     QuizQuestionListCreateAPIView,
     SectionContentListCreateAPIView,
@@ -165,6 +167,7 @@ __all__ = [
     'AssignmentRubricPreviewAPIView',
     'CourseOutlinePreviewAPIView',
     'ArticleLecturePreviewAPIView',
+    'QuizQuestionsPreviewAPIView',
     'CodingExerciseDetailAPIView',
     'CodingExerciseRunAPIView',
     'CourseListAPIView',
@@ -179,6 +182,7 @@ __all__ = [
     'SectionContentReorderAPIView',
     'QuizDetailAPIView',
     'QuizQuestionListCreateAPIView',
+    'QuizQuestionBulkCreateAPIView',
     'QuizQuestionDetailAPIView',
     'QuizAnswerListCreateAPIView',
     'QuizAnswerDetailAPIView',

@@ -83,3 +83,43 @@ class ArticleLectureRequestSerializer(serializers.Serializer):
     extra_instructions = serializers.CharField(
         required=False, allow_blank=True, default='', max_length=2000,
     )
+
+
+class QuizQuestionsRequestSerializer(serializers.Serializer):
+    """Body for the AI quiz-questions preview endpoint.
+
+    Unlike its two siblings this takes a **resource id**: the grounding material
+    and the questions already asked are server-side facts, and letting the
+    browser send them would let it choose what the model sees. Denial is
+    therefore a 404, per the project's identifier-type rule.
+
+    `**validated_data` is *not* splatted into the service — `quiz_id` is not one
+    of its arguments.
+    """
+
+    quiz_id = serializers.IntegerField(min_value=1)
+    question_count = serializers.IntegerField(
+        required=False, default=5, min_value=1, max_value=15,
+    )
+    # 2 gives true/false; the Django schema has one question type.
+    options_per_question = serializers.IntegerField(
+        required=False, default=4, min_value=2, max_value=5,
+    )
+    # What the question asks of the learner, independent of the course `level`.
+    difficulty = serializers.ChoiceField(
+        choices=['recall', 'understanding', 'application'],
+        required=False, default='understanding',
+    )
+    topics = serializers.ListField(
+        child=serializers.CharField(max_length=200),
+        required=False, default=list, max_length=12,
+    )
+    # Unsaved drafts on screen; the server cannot see them, and a regenerate
+    # would otherwise repeat them.
+    avoid_questions = serializers.ListField(
+        child=serializers.CharField(max_length=1000),
+        required=False, default=list, max_length=30,
+    )
+    extra_instructions = serializers.CharField(
+        required=False, allow_blank=True, default='', max_length=2000,
+    )

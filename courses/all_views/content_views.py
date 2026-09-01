@@ -26,11 +26,14 @@ from courses.serializers import (
     LectureSerializer,
     QuizAnswerSerializer,
     QuizCreateUpdateSerializer,
+    QuizQuestionBulkCreateSerializer,
     QuizQuestionSerializer,
+    QuizQuestionWithAnswersSerializer,
     QuizSerializer,
     SectionContentSerializer,
 )
 from courses.services import (
+    bulk_create_quiz_questions,
     create_section_content_for_object,
     get_course_sections,
     get_next_section_content_position,
@@ -699,6 +702,65 @@ class QuizQuestionDetailAPIView(APIView):
         question.delete()
         return Response(
             {'success': True, 'message': 'Question deleted successfully.'}, status=status.HTTP_200_OK
+        )
+
+
+class QuizQuestionBulkCreateAPIView(APIView):
+    """POST /api/quizzes/{quiz_id}/questions/bulk/
+
+    Append several questions, each with its options, in one transaction.
+    Row-at-a-time authoring is N + N*M requests with nothing to roll back when
+    one fails halfway.
+
+    Nothing here is AI-specific; a hand-authored paste posts the same body.
+    """
+
+    permission_classes = [IsAuthenticated]
+    parser_classes = [JSONParser, FormParser, MultiPartParser]
+
+    def post(self, request, quiz_id):
+        queryset = (
+            Quiz.objects
+            .select_related('section__course')
+            .filter(course_owner_q(request.user, 'section__course'))
+            .distinct()
+        )
+        quiz = get_object_or_404(queryset, pk=quiz_id)
+        # No `section=`: this is a create path, so the drip-release carve-out
+        # applies and new content may be added to an already-released section.
+        if err := guard_editable(quiz.section.course): return err
+
+        serializer = QuizQuestionBulkCreateSerializer(data=request.data)
+        if not serializer.is_valid():
+            return Response(
+                {'success': False, 'message': 'Validation failed.', 'errors': serializer.errors},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        try:
+            questions = bulk_create_quiz_questions(
+                quiz, serializer.validated_data['questions'], request.user,
+            )
+        except IntegrityError:
+            # Concurrent apply took the same positions; the batch rolled back.
+            return Response(
+                {
+                    'success': False,
+                    'message': (
+                        'This quiz changed while the questions were being added. '
+                        'Nothing was saved — please try again.'
+                    ),
+                },
+                status=status.HTTP_409_CONFLICT,
+            )
+
+        return Response(
+            {
+                'success': True,
+                'message': f'{len(questions)} question(s) added successfully.',
+                'data': QuizQuestionWithAnswersSerializer(questions, many=True).data,
+            },
+            status=status.HTTP_201_CREATED,
         )
 
 

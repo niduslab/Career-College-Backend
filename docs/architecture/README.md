@@ -35,6 +35,7 @@ a full tour, or jump to the subsystem you're working on.
 33. `33-two-step-lecture-authoring.md` — creating a lesson vs. giving it content: the derived "awaiting content" state, the four places an empty lecture must not count, and creator-inclusive content ownership
 34. `34-ai-article-lecture-generator.md` — LLM-drafted **article** lecture bodies: the second AI service, why the HTML is rendered server-side and escaped, the never-persist rule, and why video lectures are out of scope
 35. `35-ai-quiz-question-generator.md` — LLM-drafted **quiz questions**: the third AI service, the single-correct-answer constraint enforced in three places, why Django assembles the grounding material, the review-and-accept step, and the transactional bulk-create endpoint
+36. `36-ai-coding-exercise-generator.md` — LLM-drafted **coding exercises**: the fourth AI service, why this one is verified by execution rather than only reviewed, the per-language evaluation-script contract and the three defences behind it, and the token budget for the project's largest reply
 
 > Entries 26–31 exist as files but were never added to this index. See the
 > directory listing for `26-discussion-qa.md`, `27-learner-dashboard.md`,

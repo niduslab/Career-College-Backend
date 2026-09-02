@@ -1,5 +1,6 @@
 from courses.all_views.ai_views import (
     ArticleLecturePreviewAPIView,
+    CodingExercisePreviewAPIView,
     CourseOutlinePreviewAPIView,
     QuizQuestionsPreviewAPIView,
 )
@@ -168,6 +169,7 @@ __all__ = [
     'CourseOutlinePreviewAPIView',
     'ArticleLecturePreviewAPIView',
     'QuizQuestionsPreviewAPIView',
+    'CodingExercisePreviewAPIView',
     'CodingExerciseDetailAPIView',
     'CodingExerciseRunAPIView',
     'CourseListAPIView',

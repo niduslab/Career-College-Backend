@@ -180,7 +180,7 @@ honoured here too.
   run — the instructor is looking at the text while they replace it.
 - **No caching and no streaming.** Each call regenerates from scratch, which is
   what makes *Regenerate* work; the throttle is the spend control.
-- **No rubrics or evaluation scripts.** Each must be *complete* to be safe, and
-  each is its own feature. Quiz questions were on this list too and are now
-  built — see `35-ai-quiz-question-generator.md`.
+- **No rubrics.** Must be *complete* to be safe, and its own feature. Quiz
+  questions and coding exercises were on this list too and are now built — see
+  `35-ai-quiz-question-generator.md` and `36-ai-coding-exercise-generator.md`.
 - **No video lectures** (§2).

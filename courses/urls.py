@@ -97,6 +97,7 @@ from courses.views import (
     QuizQuestionBulkCreateAPIView,
     QuizQuestionDetailAPIView,
     QuizQuestionListCreateAPIView,
+    CodingExercisePreviewAPIView,
     QuizQuestionsPreviewAPIView,
     SectionContentListCreateAPIView,
     SectionContentReorderAPIView,
@@ -137,6 +138,7 @@ urlpatterns = [
     path('ai/outline-preview/', CourseOutlinePreviewAPIView.as_view(), name='ai-outline-preview'),
     path('ai/article-lecture-preview/', ArticleLecturePreviewAPIView.as_view(), name='ai-article-lecture-preview'),
     path('ai/quiz-questions-preview/', QuizQuestionsPreviewAPIView.as_view(), name='ai-quiz-questions-preview'),
+    path('ai/coding-exercise-preview/', CodingExercisePreviewAPIView.as_view(), name='ai-coding-exercise-preview'),
 
     # -------------------------------------------------------------------------
     # Enrollment (authenticated learner)

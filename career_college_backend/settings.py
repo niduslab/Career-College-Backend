@@ -400,6 +400,7 @@ AI_ARTICLE_RATE_LIMIT = env('AI_ARTICLE_RATE_LIMIT', default='10/min')
 # Same reason again, third counter: questions are generated per quiz, so sharing
 # a scope with outlining or article drafting would let one exhaust the others.
 AI_QUIZ_RATE_LIMIT = env('AI_QUIZ_RATE_LIMIT', default='10/min')
+AI_CODING_RATE_LIMIT = env('AI_CODING_RATE_LIMIT', default='10/min')
 
 
 # AI services (FastAPI project — hosts every AI feature, not just outlines).

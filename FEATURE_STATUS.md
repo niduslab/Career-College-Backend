@@ -26,7 +26,7 @@ gap noted, since the SRS requirement is not fully met.
 - Quiz attempts with scoring and per-question verdicts
 - Coding exercises with Docker-backed execution, multiple languages, visible/hidden test cases
 - Assignment submission with rubric-based auto-grading (deterministic)
-- HLS adaptive-bitrate video streaming (240p / 360p / 480p / 720p / 1080p)
+- HLS adaptive-bitrate video streaming (360p / 480p / 720p / 1080p, capped at the source height)
 - Learner dashboard ("My Courses"): enrolled courses, progress, completion status, earned certificates
 - Completion certificates: auto-issued at 100%, unique UUID, PDF download, public verification URL
 - Course reviews & ratings with helpful up/down votes

@@ -100,6 +100,7 @@ CHANNEL_LAYERS_URL=redis://127.0.0.1:6379/2
 # FFmpeg binaries
 FFMPEG_BINARY_PATH=ffmpeg       # or absolute path, e.g. C:\tools\ffmpeg.exe
 FFPROBE_BINARY_PATH=ffprobe
+VIDEO_ENCODER=libx264           # h264_nvenc / h264_qsv need a GPU worker host
 
 # JWT cookies (False for local HTTP)
 JWT_COOKIE_SECURE=False
@@ -241,6 +242,9 @@ For **production / shared hosts** (or any local box you want to test the gVisor 
 | `MEDIA_ROOT` | No | `media/` | Absolute or relative path |
 | `FFMPEG_BINARY_PATH` | Yes (video) | `ffmpeg` | Absolute path or command name if in PATH |
 | `FFPROBE_BINARY_PATH` | Yes (video) | `ffprobe` | |
+| `VIDEO_ENCODER` | No | `libx264` | `h264_nvenc` / `h264_qsv` need a GPU on the worker host |
+| `FFMPEG_TIMEOUT_SECONDS` | No | `10800` | Hard cap on one transcode; stops a hung ffmpeg pinning a worker |
+| `HLS_UPLOAD_CONCURRENCY` | No | `8` | Parallel HLS segment uploads to storage |
 | `JWT_COOKIE_SECURE` | No | `not DEBUG` | Set `False` for local HTTP |
 | `JWT_COOKIE_SAMESITE` | No | `Lax` | |
 | `GOOGLE_CLIENT_ID` | OAuth only | — | Google Cloud Console |
@@ -307,7 +311,7 @@ PATCH /api/v1/courses/contents/{content_id}/reorder/   body: {"position": N}
 
 1. Create a video lecture via `sections/{id}/contents/` with `lecture_type: video` and `video_file`.
 2. Backend creates a `VideoAsset` with `status: uploading` and enqueues a Celery task.
-3. Worker runs FFmpeg → produces 5 HLS renditions (240p, 360p, 480p, 720p, 1080p).
+3. Worker runs FFmpeg → produces the HLS ladder (360p, 480p, 720p, 1080p), capped at the source height so nothing is upscaled.
 4. `VideoAsset.status` transitions: `uploading → processing → ready` (or `failed`; auto-retries ×3).
 5. On ready: `Lecture.stream_master_playlist` and `stream_renditions` are populated.
 6. Poll `GET /api/v1/courses/lectures/{lecture_id}/` and check `active_video_asset.status`.

@@ -190,18 +190,24 @@ Pattern: define dedicated `Learner*Serializer` classes that simply don't declare
 
 1. Client uploads raw video → `VideoAsset` created with status `uploading`
 2. Celery task `transcode_video_asset_task` (`courses/tasks.py`) picks it up
-3. FFmpeg (`courses/transcoding.py`) produces 5 HLS renditions: 240p, 360p, 480p, 720p, 1080p
+3. FFmpeg (`courses/transcoding.py`) produces the HLS ladder — up to 4 renditions (360p/480p/720p/1080p), **capped at the source height** so nothing is upscaled
 4. Output uploaded to storage under `courses/{course_slug}/lectures/{lecture_id}/hls/{video_asset_id}/`
 5. `VideoAsset.status` transitions: `uploading → processing → ready | failed`
 6. `VideoProcessingJob` tracks per-job metadata
 
 **Storage-agnostic by design** — `transcoding.py` never assumes a local filesystem. The source video is read via `video_asset.video_file.open('rb')` (falls back to a temp-file copy when the storage backend's `.path()` raises `NotImplementedError`, e.g. S3), and ffmpeg's output (playlists + `.ts` segments) is generated into a temp dir, then pushed through `default_storage.save()` — so it lands wherever `STORAGES['default']` points (local disk in dev, S3 in production). Never write transcoding output directly under `settings.MEDIA_ROOT` — that bypasses the storage backend and breaks the moment `MEDIA_URL` points at S3/CDN instead of local disk.
 
-`FFMPEG_BINARY_PATH` and `FFPROBE_BINARY_PATH` env vars must point to installed binaries. See *Object Storage (S3)* below for the storage backend switch.
+**The whole ladder is one FFmpeg invocation** — the source is decoded once, `split=N` fans the decoded frames out, and every rendition is encoded in that same process. Do not go back to one run per rendition: that re-decoded the source N times. Other invariants that are easy to break:
 
-**Browser uploads go direct to S3** (`courses/all_views/video_upload_views.py`): `initiate-upload` → `part-url` × N → `complete-upload`, with the bytes PUT straight to presigned URLs. Two invariants, both load-bearing — do not regress them: (1) **the object key is never read from the request** — `initiate` stamps it on `VideoAsset.video_file` and later steps read it via `_object_key()`, because a client-supplied key lets one asset be finalised onto another's object and lets a forged `uploadId` find a key it matches; (2) **`file_size` is only a claim** — the bytes bypass Django, so `complete` re-measures with `head_object` and 422s on mismatch, otherwise `AWS_S3_MAX_UPLOAD_SIZE` enforces nothing. Recoverable S3 rejections (`NoSuchUpload`, `InvalidPart`, …) are 422, not 500. The bucket's CORS rule **must** set `ExposeHeaders: ["ETag"]` or every upload fails at `complete`. The older single-request `PATCH lectures/<id>/` with `video_file` still works and remains the non-browser path.
+- **`_probe_source` raises, never degrades.** Its `has_audio` result decides whether `-map a:0` is emitted, so a swallowed probe failure would produce a video-only ladder and still report success.
+- **360p is the ladder floor**, and `_select_ladder` never returns an empty list: a source shorter than 360p gets a single rendition at its own (even-rounded) height rather than an upscaled 360p.
+- **`_copy_remote_to` hands the destination path to boto3's `download_file`** when the backend exposes an `.obj`. Reading through `FieldFile.open('rb')` instead would make the S3 backend spool the whole object to its own temp file first, so the source lands on disk twice. The buffered-copy fallback keeps every other backend working.
+- **The master playlist's `BANDWIDTH` is measured, not declared.** The ladder runs capped CRF, so FFmpeg's own `BANDWIDTH` (derived from the VBV ceiling) overstates a lecture recording by a wide margin, and players pick renditions off that number. `_rewrite_master_playlist` replaces it with the peak measured from the finished segments and adds `AVERAGE-BANDWIDTH`; `RESOLUTION` and `CODECS` stay as FFmpeg wrote them, and the same measured value is what lands in `VideoAsset.renditions[].bandwidth`. Never write a nominal bitrate into either place.
+- **GOP is `round(fps × SEGMENT_SECONDS)`** — one keyframe per segment, scene detection off. Every rendition shares it, so segment boundaries align and players can switch quality mid-stream.
+- **`_run_ffmpeg_command` folds the stderr tail into the raised message.** `CalledProcessError.__str__` drops stderr, and `transcode_video_asset_task` stores `str(exc)` on `Lecture.transcoding_error` — without this the instructor sees a bare exit code.
+- Uploads fan out `HLS_UPLOAD_CONCURRENCY` at a time. Safe because `S3Boto3Storage` keeps its boto3 connection in a `threading.local()`. There is deliberately no `exists()` probe before `delete()` — deleting a missing key is a no-op on both backends, and the probe doubled the request count across hundreds of segments.
 
-**Playback goes through `GET /api/v1/courses/lectures/<id>/stream/` (`LectureStreamUrlView`) — never construct a URL from `stream_master_playlist`.** That field is a storage-relative key; behind CloudFront the object is private, so an unsigned request gets a `403` that reaches the browser as a CORS error. The endpoint returns the playback URL *and* sets three `CloudFront-*` signed cookies (`courses/cloudfront_signer.py`) scoped to that one video's directory, so the master playlist, every rendition playlist and every `.ts` segment authorize off one policy. The client must fetch it with credentials, send credentials on every segment request (hls.js `xhrSetup` → `xhr.withCredentials = true`; Safari native → `<video crossOrigin="use-credentials">`), and re-fetch before `CLOUDFRONT_SIGNED_URL_TTL_SECONDS` to refresh the cookies. Access matches `LearnerLectureDetailView` plus platform admins (they review video before approving a course); instructors and admins bypass drip release, learners don't. With `CLOUDFRONT_DOMAIN` unset the signer returns `None` and the view falls back to an unsigned `default_storage.url()` for local dev. Details and the required CloudFront CORS/cache configuration are in `docs/architecture/05-lectures-and-video-pipeline.md` → *Playback: CloudFront-signed HLS*.
+`FFMPEG_BINARY_PATH` and `FFPROBE_BINARY_PATH` env vars must point to installed binaries. `VIDEO_ENCODER` selects a profile from `ENCODER_PROFILES` (`libx264` default; `h264_nvenc`/`h264_qsv` are opt-in and need a GPU on the worker host — each rendition opens its own encoder session, and consumer NVENC cards cap concurrent sessions). One ffmpeg run now saturates every core, so pin video workers to `--concurrency=1`. See *Object Storage (S3)* below for the storage backend switch.
 
 ### Identity Verification State Machine
 
@@ -683,6 +689,9 @@ Critical ones not obvious from the code:
 |----------|-------|
 | `FFMPEG_BINARY_PATH` | Absolute path to `ffmpeg` binary |
 | `FFPROBE_BINARY_PATH` | Absolute path to `ffprobe` binary |
+| `VIDEO_ENCODER` | `libx264` (default, CPU) · `h264_nvenc` (NVIDIA) · `h264_qsv` (Intel QSV). Unknown value falls back to `libx264` with a warning |
+| `FFMPEG_TIMEOUT_SECONDS` | Hard cap on one ladder run (default `10800`). Without it a hung ffmpeg pins a Celery worker forever — `acks_late` only redelivers once the worker dies |
+| `HLS_UPLOAD_CONCURRENCY` | Parallel segment uploads to storage (default `8`) |
 | `CELERY_BROKER_URL` | Redis URL, e.g. `redis://127.0.0.1:6379/0` |
 | `JWT_COOKIE_SECURE` | `False` for local HTTP dev |
 | `GOOGLE_CLIENT_ID` / `GOOGLE_CLIENT_SECRET` | From Google Cloud Console |

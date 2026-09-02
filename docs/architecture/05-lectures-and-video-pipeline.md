@@ -1,5 +1,8 @@
 # 05) Lectures And Video Pipeline
 
+> For a plain-language tour of the same journey — upload through playback, written for
+> the whole team — see [`36-video-upload-and-playback-explained.md`](36-video-upload-and-playback-explained.md).
+
 ## Key files
 
 | File | Purpose |
@@ -215,30 +218,42 @@ transcode_video_asset_task(self, video_asset_id, job_id)
 transcode_video_asset(video_asset)
   [courses/transcoding.py]
          │
-         ├─ Locate input file: video_asset.video_file.path
-         ├─ ffprobe: probe duration_seconds from raw file
-         ├─ Build output path:
-         │    MEDIA_ROOT/courses/{slug}/lectures/{id}/hls/{asset_id}/
+         ├─ Locate input file (temp copy when storage has no local path;
+         │    S3 goes through boto3 download_file, not a read-and-recopy)
+         ├─ ffprobe ONCE: width, height, duration, fps, has_audio
+         │    → raises if unreadable; has_audio drives -map, so a swallowed
+         │      probe failure would ship a silently video-less ladder
+         ├─ Select ladder: drop every rendition taller than the source
+         │    (a 480p upload produces 360p/480p, never 720p/1080p; a source
+         │     below 360p gets one rendition at its own height)
          │
-         └─ For each rendition (5 total), run FFmpeg:
+         └─ Run ONE FFmpeg command for the whole ladder:
                ┌─────────────────────────────────────────────────────┐
-               │  Rendition   Video bitrate  Audio bitrate  Height   │
-               │  240p        400k           64k            240px    │
-               │  360p        800k           96k            360px    │
-               │  480p        1400k          128k           480px    │
-               │  720p        2500k          128k           720px    │
-               │  1080p       5000k          192k           1080px   │
+               │  Rendition   VBV ceiling   Audio bitrate   Height   │
+               │  360p        800k          96k             360px    │
+               │  480p        1400k         128k            480px    │
+               │  720p        2500k         128k            720px    │
+               │  1080p       5000k         192k            1080px   │
                └─────────────────────────────────────────────────────┘
-               FFmpeg settings per rendition:
-               • Codec: H.264 (profile:main), CRF=20
-               • Audio: AAC, 48kHz sample rate
+               • Decode once, `split=N` the decoded frames, encode all
+                 renditions in the same process — not N full passes
+               • Codec: H.264 via settings.VIDEO_ENCODER (libx264 default;
+                 h264_nvenc / h264_qsv are opt-in and need a GPU host)
+               • Preset veryfast, capped CRF 21 (maxrate = VBV ceiling)
+               • profile:v — main below 720p, high at 720p and above
+               • Audio: AAC, 48kHz, one track per rendition
                • Scale: -2:{height} (preserves aspect ratio)
-               • Keyframe: 48-frame GOP, scene detection disabled
-               • HLS: 6-second segments, VOD playlist type
-               • Output: {name}.m3u8 + {name}_000.ts, {name}_001.ts, ...
+               • Keyframe: GOP = round(fps × 6) = one per segment, scene
+                 detection off, so boundaries align across the ladder
+               • HLS: 6-second segments, VOD, independent_segments
+               • Output: {name}.m3u8 + {name}_000.ts, … + master.m3u8
          │
-         ├─ ffprobe first segment: detect actual width×height
-         ├─ Write master.m3u8 (EXT-X-STREAM-INF with bandwidth + resolution)
+         ├─ Rewrite master.m3u8: replace FFmpeg's BANDWIDTH (derived from the
+         │    VBV ceiling, which capped CRF rarely reaches) with the peak
+         │    measured from the finished segments, add AVERAGE-BANDWIDTH.
+         │    RESOLUTION and CODECS stay as FFmpeg wrote them.
+         ├─ Upload the whole tree via default_storage, HLS_UPLOAD_CONCURRENCY
+         │    files at a time
          ├─ Return (master_relative_path, renditions_list, duration_seconds)
          │
          ▼
@@ -270,25 +285,28 @@ After successful transcoding, the following files exist on disk:
 MEDIA_ROOT/
 └── courses/{course_slug}/lectures/{lecture_id}/hls/{video_asset_id}/
     ├── master.m3u8          ← main playlist (referenced in stream_master_playlist)
-    ├── 240p.m3u8            ← per-rendition playlist
-    ├── 240p_000.ts
-    ├── 240p_001.ts
-    ├── ...
-    ├── 360p.m3u8
+    ├── 360p.m3u8            ← per-rendition playlist
     ├── 360p_000.ts
+    ├── 360p_001.ts
+    ├── ...
+    ├── 480p.m3u8
+    ├── 480p_000.ts
     ├── ...
     ├── 720p.m3u8
     ├── 720p_000.ts
     └── ...
 ```
 
-The `master.m3u8` contains `#EXT-X-STREAM-INF` entries for each rendition:
+The `master.m3u8` contains `#EXT-X-STREAM-INF` entries for each rendition. The
+bandwidth figures are measured from the finished segments, not declared up
+front — see `_rewrite_master_playlist`:
 ```m3u8
 #EXTM3U
-#EXT-X-STREAM-INF:BANDWIDTH=400000,RESOLUTION=426x240
-240p.m3u8
-#EXT-X-STREAM-INF:BANDWIDTH=800000,RESOLUTION=640x360
+#EXT-X-VERSION:6
+#EXT-X-STREAM-INF:BANDWIDTH=654240,AVERAGE-BANDWIDTH=641803,RESOLUTION=640x360,CODECS="avc1.4d401e,mp4a.40.2"
 360p.m3u8
+#EXT-X-STREAM-INF:BANDWIDTH=1324272,AVERAGE-BANDWIDTH=1298110,RESOLUTION=854x480,CODECS="avc1.4d401e,mp4a.40.2"
+480p.m3u8
 ...
 ```
 

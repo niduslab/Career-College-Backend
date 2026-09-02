@@ -31,6 +31,16 @@ a full tour, or jump to the subsystem you're working on.
 23. `23-scheduled-course-lifecycle.md` — scheduled-course user journey paired with the backend flow at each step
 24. `24-admin-console-auth.md` — admin console: session login, device/session tracking + remote logout, user management + audit log
 25. `25-admin-capabilities.md` — cross-cutting map of **everything** a platform admin can do (console + course review + verification review + category mgmt + platform analytics), the two elevation mechanisms, and where each deep doc lives
+32. `32-ai-course-outline-generator.md` — LLM-drafted course outlines: the three-repo topology, the outline-preview endpoint, the spend throttle, and what the caller does with the draft
+33. `33-two-step-lecture-authoring.md` — creating a lesson vs. giving it content: the derived "awaiting content" state, the four places an empty lecture must not count, and creator-inclusive content ownership
+34. `34-ai-article-lecture-generator.md` — LLM-drafted **article** lecture bodies: the second AI service, why the HTML is rendered server-side and escaped, the never-persist rule, and why video lectures are out of scope
+35. `35-ai-quiz-question-generator.md` — LLM-drafted **quiz questions**: the third AI service, the single-correct-answer constraint enforced in three places, why Django assembles the grounding material, the review-and-accept step, and the transactional bulk-create endpoint
+36. `36-video-upload-and-playback-explained.md` — plain-language walkthrough of the whole video journey (upload → transcode → storage → playback → progress), written for the whole team; the *why* behind `05`, plus the open access-control and cleanup gaps
+
+> Entries 26–31 exist as files but were never added to this index. See the
+> directory listing for `26-discussion-qa.md`, `27-learner-dashboard.md`,
+> `28-learning-paths.md`, `29-instructor-dashboard-analytics.md`,
+> `30-instructor-students.md`, `31-instructor-revenue.md`.
 
 ## Scope
 

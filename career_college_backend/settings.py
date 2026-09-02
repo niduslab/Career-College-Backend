@@ -253,6 +253,10 @@ MEDIA_ROOT = Path(env('MEDIA_ROOT', default=str(BASE_DIR / 'media')))
 FFMPEG_BINARY_PATH = env('FFMPEG_BINARY_PATH', default='ffmpeg')
 FFPROBE_BINARY_PATH = env('FFPROBE_BINARY_PATH', default='ffprobe')
 
+VIDEO_ENCODER = env('VIDEO_ENCODER', default='libx264')
+FFMPEG_TIMEOUT_SECONDS = env.int('FFMPEG_TIMEOUT_SECONDS', default=10800)  # 3 h
+HLS_UPLOAD_CONCURRENCY = env.int('HLS_UPLOAD_CONCURRENCY', default=8)
+
 # Object storage (S3). Set AWS_STORAGE_BUCKET_NAME to switch default/staticfiles
 # storage from local disk to S3 — used in production, unset for local dev.
 AWS_STORAGE_BUCKET_NAME = env('AWS_STORAGE_BUCKET_NAME', default='')

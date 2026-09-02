@@ -1,19 +1,27 @@
 """AI-assisted authoring endpoints.
 
 Routes (under /api/v1/courses/):
-    POST ai/outline-preview/  → CourseOutlinePreviewAPIView  (instructor/institution)
+    POST ai/outline-preview/          → CourseOutlinePreviewAPIView
+    POST ai/article-lecture-preview/  → ArticleLecturePreviewAPIView
+    POST ai/quiz-questions-preview/   → QuizQuestionsPreviewAPIView
+All gated for instructors and partner institutions.
 
 Every endpoint here is a **suggestion generator**: it calls the AI services
 project, returns the result, and persists nothing. The human decides what to
 keep — same rule as the rubric preview (`AssignmentRubricPreviewAPIView`).
 
-No resource id appears in these URLs, so permission denial is always 403,
-never 404 (see CLAUDE.md → 403 vs. 404 Access-Denied Policy).
+Denial status follows the URL, not the module (CLAUDE.md → 403 vs. 404
+Access-Denied Policy). The first two take no resource id, so denial is 403.
+The quiz endpoint takes a `quiz_id` in its body and scopes it by ownership like
+every other quiz view, so a quiz the caller does not own is a 404 — it reads the
+database for grounding material, and 403 there would confirm the quiz exists.
+Reading for context is still not persisting: none of these write.
 """
 
 import logging
 
 from django.conf import settings
+from django.shortcuts import get_object_or_404
 from rest_framework import status
 from rest_framework.parsers import FormParser, JSONParser, MultiPartParser
 from rest_framework.permissions import IsAuthenticated
@@ -22,8 +30,20 @@ from rest_framework.throttling import UserRateThrottle
 from rest_framework.views import APIView
 
 from core.permissions import IsCourseCreator, IsEmailVerified
-from courses.all_serializers.ai_serializers import CourseOutlineRequestSerializer
+from courses.all_serializers.ai_serializers import (
+    ArticleLectureRequestSerializer,
+    CourseOutlineRequestSerializer,
+    QuizQuestionsRequestSerializer,
+)
+from courses.models import Quiz
+from courses.services.ai_article_service import AIArticleError, generate_article_lecture
 from courses.services.ai_outline_service import AIOutlineError, generate_course_outline
+from courses.services.ai_quiz_service import AIQuizError, generate_quiz_questions
+from courses.services.quiz_service import (
+    build_quiz_source_material,
+    collect_avoid_questions,
+)
+from courses.utils import course_owner_q
 
 logger = logging.getLogger(__name__)
 
@@ -38,6 +58,29 @@ class AIOutlineThrottle(UserRateThrottle):
 
     scope = 'ai_outline'
     rate = getattr(settings, 'AI_OUTLINE_RATE_LIMIT', '10/min')
+
+
+class AIArticleThrottle(UserRateThrottle):
+    """Per-user rate limit for article-lecture generation.
+
+    Its own scope, not shared with the outline throttle: the two are used at
+    different points in the build (once per course vs. once per lesson), so one
+    counter would let outlining exhaust a writing session's budget.
+    """
+
+    scope = 'ai_article'
+    rate = getattr(settings, 'AI_ARTICLE_RATE_LIMIT', '10/min')
+
+
+class AIQuizThrottle(UserRateThrottle):
+    """Per-user rate limit for quiz-question generation.
+
+    Its own scope: questions are generated per quiz, outlines once per course,
+    articles once per lesson, so a shared counter would let one exhaust the rest.
+    """
+
+    scope = 'ai_quiz'
+    rate = getattr(settings, 'AI_QUIZ_RATE_LIMIT', '10/min')
 
 
 class CourseOutlinePreviewAPIView(APIView):
@@ -83,5 +126,146 @@ class CourseOutlinePreviewAPIView(APIView):
 
         return Response(
             {'success': True, 'message': 'Outline generated.', 'data': result},
+            status=status.HTTP_200_OK,
+        )
+
+
+class ArticleLecturePreviewAPIView(APIView):
+    """POST /api/v1/courses/ai/article-lecture-preview/
+
+    Draft the body of one **article** lecture from its title and the context
+    around it. Returns `article_html` ready for the builder's rich-text editor,
+    plus the structure it was rendered from and a word/reading-time count.
+
+    Stateless: nothing is written here. The instructor edits the draft in the
+    editor and saves it through the lecture endpoint that already exists —
+    `PATCH /api/v1/courses/lectures/<id>/` with `lecture_type='article'` and
+    `article_content`. **Never make this endpoint write**: an AI body saved
+    without a human reading it would satisfy `chk_lecture_payload_by_type` and
+    sail through submission validation, which is exactly the check that stops a
+    hollow lecture reaching learners.
+
+    Video lectures are out of scope by construction — they need a real uploaded
+    file that must finish transcoding.
+
+    Gated with `IsCourseCreator` (not the verified variant) so it matches the
+    lecture-authoring endpoints: authoring must work before identity
+    verification completes, and it must cover partner institutions as well as
+    instructors.
+    """
+
+    permission_classes = [IsAuthenticated, IsEmailVerified, IsCourseCreator]
+    throttle_classes = [AIArticleThrottle]
+    parser_classes = [JSONParser, FormParser, MultiPartParser]
+
+    def post(self, request):
+        serializer = ArticleLectureRequestSerializer(data=request.data)
+        if not serializer.is_valid():
+            return Response(
+                {'success': False, 'message': 'Validation failed.', 'errors': serializer.errors},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        try:
+            result = generate_article_lecture(**serializer.validated_data)
+        except AIArticleError as exc:
+            return Response(
+                {'success': False, 'message': exc.message},
+                status=exc.http_status,
+            )
+        except Exception as e:
+            logger.error(
+                'Article generation failed for user %s: %s', request.user.id, e,
+            )
+            return Response(
+                {'success': False, 'message': 'An unexpected error occurred. Please try again.'},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            )
+
+        return Response(
+            {'success': True, 'message': 'Article generated.', 'data': result},
+            status=status.HTTP_200_OK,
+        )
+
+
+class QuizQuestionsPreviewAPIView(APIView):
+    """POST /api/v1/courses/ai/quiz-questions-preview/
+
+    Draft multiple-choice questions for one quiz, grounded in the lectures
+    beside it. Accepting posts to `quizzes/<id>/questions/bulk/`, which writes.
+
+    **Reads the database, writes nothing.** Never make it write: a generated
+    question nobody read is exactly what `_validate_course_completeness` cannot
+    catch, because it is complete — just possibly wrong.
+
+    The `quiz_id` and the 404 it produces are both deliberate; see
+    `QuizQuestionsRequestSerializer`.
+    """
+
+    permission_classes = [IsAuthenticated, IsEmailVerified, IsCourseCreator]
+    throttle_classes = [AIQuizThrottle]
+    parser_classes = [JSONParser, FormParser, MultiPartParser]
+
+    def post(self, request):
+        serializer = QuizQuestionsRequestSerializer(data=request.data)
+        if not serializer.is_valid():
+            return Response(
+                {'success': False, 'message': 'Validation failed.', 'errors': serializer.errors},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        data = serializer.validated_data
+        # Scoped like every other quiz view: not-yours is indistinguishable
+        # from does-not-exist.
+        queryset = (
+            Quiz.objects
+            .select_related('section__course')
+            .filter(course_owner_q(request.user, 'section__course'))
+            .distinct()
+        )
+        quiz = get_object_or_404(queryset, pk=data['quiz_id'])
+        course = quiz.section.course
+
+        source_material, grounded = build_quiz_source_material(quiz)
+
+        try:
+            result = generate_quiz_questions(
+                quiz_title=quiz.title,
+                course_title=course.title,
+                section_title=quiz.section.title,
+                quiz_description=quiz.description,
+                source_material=source_material,
+                topics=data['topics'],
+                audience=course.audiences,
+                level=course.level,
+                language=course.language,
+                question_count=data['question_count'],
+                options_per_question=data['options_per_question'],
+                difficulty=data['difficulty'],
+                avoid_questions=collect_avoid_questions(quiz, data['avoid_questions']),
+                extra_instructions=data['extra_instructions'],
+            )
+        except AIQuizError as exc:
+            return Response(
+                {'success': False, 'message': exc.message},
+                status=exc.http_status,
+            )
+        except Exception as e:
+            logger.error(
+                'Quiz question generation failed for user %s: %s', request.user.id, e,
+            )
+            return Response(
+                {'success': False, 'message': 'An unexpected error occurred. Please try again.'},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            )
+
+        # `grounded` is decided here: the AI service only knows whether it was
+        # given material, not whether the section actually has any.
+        return Response(
+            {
+                'success': True,
+                'message': 'Questions generated.',
+                'data': {**result, 'grounded': grounded},
+            },
             status=status.HTTP_200_OK,
         )

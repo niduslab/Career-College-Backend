@@ -48,6 +48,7 @@ from courses.views import (
     AssignmentQuestionListCreateAPIView,
     AssignmentQuestionReorderAPIView,
     AssignmentRubricPreviewAPIView,
+    ArticleLecturePreviewAPIView,
     CourseOutlinePreviewAPIView,
     CatalogCourseDetailView,
     CatalogCourseListView,
@@ -94,8 +95,10 @@ from courses.views import (
     QuizAnswerDetailAPIView,
     QuizAnswerListCreateAPIView,
     QuizDetailAPIView,
+    QuizQuestionBulkCreateAPIView,
     QuizQuestionDetailAPIView,
     QuizQuestionListCreateAPIView,
+    QuizQuestionsPreviewAPIView,
     SectionContentListCreateAPIView,
     SectionContentReorderAPIView,
     LearningPathListView,
@@ -126,12 +129,15 @@ urlpatterns = [
     path('categories/<int:pk>/', CourseCategoryDetailView.as_view(), name='category-detail'),
 
     # -------------------------------------------------------------------------
-    # AI-assisted authoring (see docs/architecture/32-ai-course-outline-generator.md)
+    # AI-assisted authoring (see docs/architecture/32-ai-course-outline-generator.md
+    # and docs/architecture/34-ai-article-lecture-generator.md)
     #
     # ORDERING: literal-prefixed, declared above the `<slug:slug>/...` block and
     # the instructor block's `path('<int:pk>/', ...)` so neither can shadow it.
     # -------------------------------------------------------------------------
     path('ai/outline-preview/', CourseOutlinePreviewAPIView.as_view(), name='ai-outline-preview'),
+    path('ai/article-lecture-preview/', ArticleLecturePreviewAPIView.as_view(), name='ai-article-lecture-preview'),
+    path('ai/quiz-questions-preview/', QuizQuestionsPreviewAPIView.as_view(), name='ai-quiz-questions-preview'),
 
     # -------------------------------------------------------------------------
     # Enrollment (authenticated learner)
@@ -322,6 +328,8 @@ urlpatterns = [
     # Quiz questions
     # -------------------------------------------------------------------------
     path('quizzes/<int:quiz_id>/questions/', QuizQuestionListCreateAPIView.as_view(), name='quiz-question-list-create'),
+    # Transactional batch create — one request instead of N questions + N*M answers.
+    path('quizzes/<int:quiz_id>/questions/bulk/', QuizQuestionBulkCreateAPIView.as_view(), name='quiz-question-bulk-create'),
     path('quiz-questions/<int:question_id>/', QuizQuestionDetailAPIView.as_view(), name='quiz-question-detail'),
 
     # -------------------------------------------------------------------------

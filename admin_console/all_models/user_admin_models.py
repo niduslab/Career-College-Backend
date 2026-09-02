@@ -22,6 +22,10 @@ class AdminActionLog(models.Model):
         CERTIFICATE_REVOKE = 'certificate_revoke', 'Certificate revoked'
         CERTIFICATE_RESTORE = 'certificate_restore', 'Certificate restored'
         PLATFORM_SETTINGS_UPDATE = 'platform_settings_update', 'Platform settings updated'
+        PAYOUT_ACCOUNT_VERIFY = 'payout_account_verify', 'Payout account verified'
+        PAYOUT_APPROVE = 'payout_approve', 'Payout approved'
+        PAYOUT_REJECT = 'payout_reject', 'Payout rejected'
+        PAYOUT_MARK_PAID = 'payout_mark_paid', 'Payout marked paid'
 
     actor = models.ForeignKey(
         settings.AUTH_USER_MODEL,

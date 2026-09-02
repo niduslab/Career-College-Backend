@@ -68,6 +68,7 @@ INSTALLED_APPS = [
     'analytics.apps.AnalyticsConfig',
     'payments.apps.PaymentsConfig',
     'admin_console.apps.AdminConsoleConfig',
+    'payouts.apps.PayoutsConfig',
 ]
 
 MIDDLEWARE = [

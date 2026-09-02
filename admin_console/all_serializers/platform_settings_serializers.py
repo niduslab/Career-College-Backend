@@ -17,6 +17,7 @@ class PlatformSettingsSerializer(serializers.ModelSerializer):
             'authorized_signatory_name',
             'authorized_signatory_designation',
             'authorized_signature',
+            'default_commission_pct',
             'updated_at',
         ]
         read_only_fields = ['updated_at']
@@ -26,3 +27,8 @@ class PlatformSettingsSerializer(serializers.ModelSerializer):
         if not cleaned:
             raise serializers.ValidationError('Organization name cannot be blank.')
         return cleaned
+
+    def validate_default_commission_pct(self, value):
+        if value < 0 or value > 100:
+            raise serializers.ValidationError('Commission percentage must be between 0 and 100.')
+        return value

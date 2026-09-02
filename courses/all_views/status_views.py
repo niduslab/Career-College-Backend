@@ -30,6 +30,7 @@ from courses.models import NidusCourse
 from courses.serializers import NidusCourseSerializer
 from courses.services.curriculum_service import load_admin_review_curriculum
 from courses.services.schedule_service import activate_schedule
+from courses.services.section_service import search_admin_courses
 
 logger = logging.getLogger(__name__)
 
@@ -323,6 +324,37 @@ class CourseAdminPendingReviewListView(APIView):
         queryset, error = _filter_by_delivery_mode(queryset, request)
         if error:
             return error
+
+        paginator = StandardResultsSetPagination()
+        page = paginator.paginate_queryset(queryset, request)
+        serializer = NidusCourseSerializer(page, many=True)
+        paginated_response = paginator.get_paginated_response(serializer.data)
+        paginated_response.data = {'success': True, 'data': paginated_response.data}
+        return paginated_response
+
+
+class CourseAdminListView(APIView):
+    """
+    GET /api/v1/courses/admin/
+
+    Platform-wide course browser for the admin console — every status, not
+    just under_review (that's CourseAdminPendingReviewListView's job).
+
+    Query params: ?search= (title, >= 2 chars), ?status=, ?delivery_mode=,
+    ?category=, ?sort= (whitelist), plus the standard paginator's ?page /
+    ?page_size.
+    """
+
+    permission_classes = [IsAuthenticated, IsEmailVerified, IsPlatformAdmin]
+
+    def get(self, request):
+        try:
+            queryset = search_admin_courses(request.query_params)
+        except ValueError as exc:
+            return Response(
+                {'success': False, 'message': str(exc)},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
 
         paginator = StandardResultsSetPagination()
         page = paginator.paginate_queryset(queryset, request)

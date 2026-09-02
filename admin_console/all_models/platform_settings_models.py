@@ -1,3 +1,5 @@
+from decimal import Decimal
+
 from django.db import models
 
 from authentication.utils.upload_helpers import authorized_signature_path
@@ -24,6 +26,10 @@ class PlatformSettings(models.Model):
         upload_to=authorized_signature_path, blank=True, null=True,
         validators=[validate_image_file, validate_signature_size],
         help_text='Transparent PNG preferred. Copied onto certificates at issuance.',
+    )
+    default_commission_pct = models.DecimalField(
+        max_digits=5, decimal_places=2, default=Decimal('20.00'),
+        help_text='Platform-wide payout commission percentage, snapshotted onto each Payout at generation time.',
     )
     updated_at = models.DateTimeField(auto_now=True)
 

@@ -81,8 +81,16 @@ def build_signed_hls_cookies(storage_relative_key: str) -> Optional[StreamContex
     if not (domain and key_id and private_key_pem):
         return None
 
-    aws_location = getattr(settings, 'AWS_LOCATION', '') or ''
-    prefix_parts = [p for p in (aws_location.strip('/'), storage_relative_key.strip('/')) if p]
+    # Normalise: if the stored key already starts with the AWS_LOCATION
+    # prefix, drop it before re-joining. Callers vary — the transcoder
+    # writes the storage-relative key (no prefix), but test fixtures and
+    # some legacy rows carry the prefix baked in. Handle both without
+    # double-prefixing.
+    aws_location = (getattr(settings, 'AWS_LOCATION', '') or '').strip('/')
+    key = storage_relative_key.strip('/')
+    if aws_location and (key == aws_location or key.startswith(aws_location + '/')):
+        key = key[len(aws_location):].lstrip('/')
+    prefix_parts = [p for p in (aws_location, key) if p]
     object_path = '/'.join(prefix_parts)
 
     # Wildcard covers every sibling playlist + .ts segment under the same

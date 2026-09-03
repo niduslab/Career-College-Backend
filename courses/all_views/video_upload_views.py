@@ -725,6 +725,11 @@ class LectureStreamUrlView(APIView):
                     httponly=True,
                     samesite='None',
                 )
+            logger.info(
+                'video-stream signed: lecture=%s user=%s ttl=%ss cookie_domain=%s url=%s',
+                lecture.id, request.user.id, ttl_seconds,
+                stream['cookie_domain'] or '(host-scoped)', stream['playback_url'],
+            )
             return response
 
         # No signed context — CloudFront isn't configured. Fall back to the
@@ -732,6 +737,17 @@ class LectureStreamUrlView(APIView):
         if lecture.stream_master_playlist:
             from django.core.files.storage import default_storage
             fallback = default_storage.url(lecture.stream_master_playlist)
+            # Loud on purpose. The player sends credentialed requests for HLS
+            # segments, and an unsigned URL carries no CloudFront cookies — so
+            # in any deployed environment this path ends as a CORS failure in
+            # the browser, not as working playback. Only local dev should
+            # ever reach it.
+            logger.warning(
+                'video-stream UNSIGNED fallback: lecture=%s user=%s url=%s — CloudFront signing is '
+                'not configured (need CLOUDFRONT_DOMAIN + CLOUDFRONT_KEY_ID + CLOUDFRONT_PRIVATE_KEY). '
+                'Playback will fail CORS unless this is local dev.',
+                lecture.id, request.user.id, fallback,
+            )
             return Response(
                 {'success': True, 'message': 'Stream URL generated.', 'data': {'streamUrl': fallback}},
                 status=status.HTTP_200_OK,

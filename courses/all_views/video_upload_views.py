@@ -18,16 +18,18 @@ import uuid
 from typing import Optional
 
 import boto3
+from botocore.exceptions import ClientError
 from django.conf import settings
 from django.db import transaction
 from django.db.models import Q
+from django.utils import timezone
 from rest_framework import status
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.throttling import UserRateThrottle
 from rest_framework.views import APIView
 
-from core.permissions import IsCourseCreator, IsEmailVerified
+from core.permissions import IsCourseCreator, IsEmailVerified, is_platform_admin
 from core.validators import validate_video_file
 from courses.all_models.content_models import Lecture, VideoAsset, VideoProcessingJob
 from courses.utils import guard_editable
@@ -91,6 +93,26 @@ def _aws_location_prefix() -> str:
 
 
 # ---------------------------------------------------------------------------
+# Logging. The bytes never touch this process, so these lines are the only
+# server-side record that an upload happened at all — every stage carries
+# `asset=<id>` so one upload can be followed end to end with a single grep,
+# through to the transcoding task, which logs the same id.
+# ---------------------------------------------------------------------------
+
+def _human_size(num_bytes: int) -> str:
+    size = float(num_bytes)
+    for unit in ('B', 'KB', 'MB', 'GB'):
+        if size < 1024 or unit == 'GB':
+            return f'{size:.1f}{unit}'
+        size /= 1024
+    return f'{size:.1f}GB'
+
+
+def _elapsed_seconds(video_asset) -> float:
+    return (timezone.now() - video_asset.created_at).total_seconds()
+
+
+# ---------------------------------------------------------------------------
 # Owner-scoped lookups — one query each. `Q(instructors=user) |
 # Q(created_by=user)` matches roster instructors and partner-institution
 # owners in the same shot. `.distinct()` because the M2M `instructors` join
@@ -133,6 +155,49 @@ def _video_asset_not_found():
     return Response(
         {'success': False, 'message': 'Video asset not found.'},
         status=status.HTTP_404_NOT_FOUND,
+    )
+
+
+def _object_key(video_asset) -> str:
+    """Storage-relative S3 key for an in-flight upload, read from the DB.
+
+    ``initiate`` builds the key and stores it on the row; every later step
+    reads it back from here and ignores whatever key the client sends. A
+    client-supplied key lets one asset's row be finalised onto a *different*
+    asset's object — S3 accepts that, because the ``uploadId`` and key it was
+    handed still match each other. Deriving the key server-side also means a
+    forged ``uploadId`` can no longer pair with a key it belongs to, so S3
+    rejects it outright.
+    """
+    return (video_asset.video_file.name or '').strip()
+
+
+def _upload_not_initiated_response():
+    return Response(
+        {'success': False, 'message': 'No upload is in progress for this video asset.'},
+        status=status.HTTP_422_UNPROCESSABLE_ENTITY,
+    )
+
+
+# S3 rejections that mean "the client's upload session is unusable", not "the
+# server broke". Anything else stays a 500.
+_S3_CLIENT_ERROR_MESSAGES = {
+    'NoSuchUpload': 'This upload session has expired or was already finalised. Start the upload again.',
+    'InvalidPart': 'One or more parts are missing or were corrupted in transit. Start the upload again.',
+    'InvalidPartOrder': 'Upload parts arrived out of order. Start the upload again.',
+    'EntityTooSmall': 'Every part except the last must be at least 5 MB.',
+}
+
+
+def _s3_client_error_response(exc: ClientError):
+    """Map a recoverable S3 rejection to 422, or None to fall through to 500."""
+    code = exc.response.get('Error', {}).get('Code', '')
+    message = _S3_CLIENT_ERROR_MESSAGES.get(code)
+    if message is None:
+        return None
+    return Response(
+        {'success': False, 'message': message},
+        status=status.HTTP_422_UNPROCESSABLE_ENTITY,
     )
 
 
@@ -225,8 +290,13 @@ class LectureMultipartUploadInitiateView(APIView):
         # Create the row *inactive* — a concurrent initiate/complete on the
         # same lecture would otherwise hit uniq_active_videoasset_per_lecture.
         # It flips active on complete.
+        #
+        # `video_file` is stamped with the key now, not on complete: it is the
+        # server's record of which object this row owns, and every later step
+        # reads it instead of trusting a key from the request. See _object_key.
         video_asset = VideoAsset.objects.create(
             lecture=lecture,
+            video_file=storage_relative_key,
             original_filename=filename,
             mime_type=content_type,
             file_size=file_size,
@@ -250,6 +320,11 @@ class LectureMultipartUploadInitiateView(APIView):
             )
 
         part_size = int(getattr(settings, 'AWS_S3_MULTIPART_CHUNK_SIZE', 5 * 1024 * 1024))
+        logger.info(
+            'video-upload initiated: asset=%s lecture=%s user=%s declared=%s parts~%s key=%s',
+            video_asset.id, lecture.id, request.user.id, _human_size(file_size),
+            max(1, -(-file_size // part_size)), s3_key,
+        )
         return Response(
             {
                 'success': True,
@@ -278,7 +353,6 @@ class LectureMultipartUploadPartUrlView(APIView):
             return _video_asset_not_found()
 
         upload_id = (request.data.get('uploadId') or '').strip()
-        object_key = (request.data.get('objectKey') or '').strip()
         try:
             part_number = int(request.data.get('partNumber') or 0)
         except (TypeError, ValueError):
@@ -287,8 +361,6 @@ class LectureMultipartUploadPartUrlView(APIView):
         errors = {}
         if not upload_id:
             errors['uploadId'] = 'This field is required.'
-        if not object_key:
-            errors['objectKey'] = 'This field is required.'
         if not (1 <= part_number <= 10_000):
             errors['partNumber'] = 'Must be between 1 and 10000.'
         if errors:
@@ -296,6 +368,10 @@ class LectureMultipartUploadPartUrlView(APIView):
                 {'success': False, 'message': 'Validation failed.', 'errors': errors},
                 status=status.HTTP_400_BAD_REQUEST,
             )
+
+        object_key = _object_key(video_asset)
+        if not object_key:
+            return _upload_not_initiated_response()
 
         try:
             bucket = _bucket()
@@ -320,6 +396,9 @@ class LectureMultipartUploadPartUrlView(APIView):
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR,
             )
 
+        # DEBUG, not INFO — one line per part would bury the stage transitions
+        # (a 2 GB file at the default 5 MB part size is 400 of these).
+        logger.debug('video-upload part signed: asset=%s part=%s', video_asset_id, part_number)
         return Response(
             {
                 'success': True,
@@ -341,14 +420,11 @@ class LectureMultipartUploadCompleteView(APIView):
             return _video_asset_not_found()
 
         upload_id = (request.data.get('uploadId') or '').strip()
-        object_key = (request.data.get('objectKey') or '').strip()
         parts = request.data.get('parts') or []
 
         errors = {}
         if not upload_id:
             errors['uploadId'] = 'This field is required.'
-        if not object_key:
-            errors['objectKey'] = 'This field is required.'
         if not isinstance(parts, list) or not parts:
             errors['parts'] = 'Provide the list of uploaded parts with their ETags.'
         if errors:
@@ -356,6 +432,10 @@ class LectureMultipartUploadCompleteView(APIView):
                 {'success': False, 'message': 'Validation failed.', 'errors': errors},
                 status=status.HTTP_400_BAD_REQUEST,
             )
+
+        object_key = _object_key(video_asset)
+        if not object_key:
+            return _upload_not_initiated_response()
 
         try:
             formatted_parts = [
@@ -378,27 +458,79 @@ class LectureMultipartUploadCompleteView(APIView):
         except _UploadNotConfigured:
             return _not_configured_response()
 
-        try:
-            _s3_client().complete_multipart_upload(
-                Bucket=bucket,
-                Key=f'{_aws_location_prefix()}{object_key}',
-                UploadId=upload_id,
-                MultipartUpload={'Parts': formatted_parts},
-            )
-        except Exception:
-            logger.exception('S3 complete_multipart_upload failed for asset=%s', video_asset_id)
+        s3_key = f'{_aws_location_prefix()}{object_key}'
+
+        def _fail(message, http_status):
             video_asset.status = VideoAsset.Status.FAILED
             video_asset.save(update_fields=['status', 'updated_at'])
             return Response(
-                {'success': False, 'message': 'Could not finalise upload. Please retry.'},
-                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                {'success': False, 'message': message},
+                status=http_status,
             )
 
+        try:
+            _s3_client().complete_multipart_upload(
+                Bucket=bucket,
+                Key=s3_key,
+                UploadId=upload_id,
+                MultipartUpload={'Parts': formatted_parts},
+            )
+        except ClientError as exc:
+            recoverable = _s3_client_error_response(exc)
+            if recoverable is None:
+                logger.exception('S3 complete_multipart_upload failed for asset=%s', video_asset_id)
+                return _fail(
+                    'Could not finalise upload. Please retry.',
+                    status.HTTP_500_INTERNAL_SERVER_ERROR,
+                )
+            # A bad upload session is the client's problem, not a server
+            # fault — 422 with a message that says how to recover.
+            logger.warning(
+                'S3 rejected complete_multipart_upload for asset=%s: %s',
+                video_asset_id, exc.response.get('Error', {}).get('Code', ''),
+            )
+            video_asset.status = VideoAsset.Status.FAILED
+            video_asset.save(update_fields=['status', 'updated_at'])
+            return recoverable
+        except Exception:
+            logger.exception('S3 complete_multipart_upload failed for asset=%s', video_asset_id)
+            return _fail(
+                'Could not finalise upload. Please retry.',
+                status.HTTP_500_INTERNAL_SERVER_ERROR,
+            )
+
+        # Enforce the declared size against what actually landed. `file_size`
+        # from `initiate` is only a client claim — the bytes go browser → S3
+        # without passing through here, so AWS_S3_MAX_UPLOAD_SIZE means
+        # nothing until the finished object is measured.
+        stored_size = None
+        try:
+            actual_size = _s3_client().head_object(Bucket=bucket, Key=s3_key)['ContentLength']
+        except Exception:
+            # A transient HEAD failure must not throw away an upload that
+            # genuinely succeeded. Logged so a systematic failure is visible.
+            logger.warning(
+                'Could not verify uploaded size for asset=%s key=%s; accepting.',
+                video_asset_id, s3_key,
+            )
+        else:
+            stored_size = actual_size
+            if actual_size != video_asset.file_size:
+                logger.warning(
+                    'Upload size mismatch for asset=%s: declared %s, stored %s. Discarding.',
+                    video_asset_id, video_asset.file_size, actual_size,
+                )
+                try:
+                    _s3_client().delete_object(Bucket=bucket, Key=s3_key)
+                except Exception:
+                    logger.exception('Could not delete oversized object %s', s3_key)
+                return _fail(
+                    'The uploaded file does not match the size declared when the upload started.',
+                    status.HTTP_422_UNPROCESSABLE_ENTITY,
+                )
+
         with transaction.atomic():
-            # Point the FileField at the raw upload so the transcoder can
-            # open it via default_storage. Storage prepends AWS_LOCATION
-            # itself, so we store the storage-relative key.
-            video_asset.video_file.name = object_key
+            # `video_file` already carries the key (stamped at initiate).
             # Deactivate any prior active asset for this lecture, then
             # activate this one. Ordering matters — the uniq constraint is
             # filtered on is_active=True.
@@ -407,7 +539,7 @@ class LectureMultipartUploadCompleteView(APIView):
             ).exclude(pk=video_asset.pk).update(is_active=False)
             video_asset.is_active = True
             video_asset.status = VideoAsset.Status.PROCESSING
-            video_asset.save(update_fields=['video_file', 'is_active', 'status', 'updated_at'])
+            video_asset.save(update_fields=['is_active', 'status', 'updated_at'])
 
             lecture = video_asset.lecture
             lecture.stream_master_playlist = ''
@@ -432,6 +564,15 @@ class LectureMultipartUploadCompleteView(APIView):
 
         transaction.on_commit(_enqueue)
 
+        # The line to grep for. The object is in S3 and complete at this point;
+        # everything after it is transcoding, which logs under the same asset id.
+        logger.info(
+            'video-upload completed: asset=%s lecture=%s user=%s parts=%s stored=%s '
+            'verified=%s elapsed=%.1fs key=%s job=%s',
+            video_asset.id, lecture.id, request.user.id, len(formatted_parts),
+            _human_size(stored_size if stored_size is not None else video_asset.file_size),
+            stored_size is not None, _elapsed_seconds(video_asset), s3_key, job.id,
+        )
         return Response(
             {
                 'success': True,
@@ -453,18 +594,19 @@ class LectureMultipartUploadAbortView(APIView):
             return _video_asset_not_found()
 
         upload_id = (request.data.get('uploadId') or '').strip()
-        object_key = (request.data.get('objectKey') or '').strip()
-
-        errors = {}
         if not upload_id:
-            errors['uploadId'] = 'This field is required.'
-        if not object_key:
-            errors['objectKey'] = 'This field is required.'
-        if errors:
             return Response(
-                {'success': False, 'message': 'Validation failed.', 'errors': errors},
+                {
+                    'success': False,
+                    'message': 'Validation failed.',
+                    'errors': {'uploadId': 'This field is required.'},
+                },
                 status=status.HTTP_400_BAD_REQUEST,
             )
+
+        object_key = _object_key(video_asset)
+        if not object_key:
+            return _upload_not_initiated_response()
 
         try:
             bucket = _bucket()
@@ -486,6 +628,13 @@ class LectureMultipartUploadAbortView(APIView):
         video_asset.status = VideoAsset.Status.FAILED
         video_asset.save(update_fields=['status', 'updated_at'])
 
+        # WARNING, not INFO: an abort means an instructor's upload did not
+        # land. A run of these points at a client-side or network problem.
+        logger.warning(
+            'video-upload aborted: asset=%s lecture=%s user=%s after=%.1fs key=%s',
+            video_asset.id, video_asset.lecture_id, request.user.id,
+            _elapsed_seconds(video_asset), f'{_aws_location_prefix()}{object_key}',
+        )
         return Response(
             {'success': True, 'message': 'Upload aborted.'},
             status=status.HTTP_200_OK,
@@ -503,8 +652,9 @@ class LectureStreamUrlView(APIView):
 
     Access mirrors ``LearnerLectureDetailView``: course instructors always
     pass, learners need an active enrollment or the lecture must be a
-    preview. Numeric ID → 404 on no-access. Drip release (cohort start
-    date / section ``unlocks_at``) → 422 with a timing message.
+    preview. Platform admins pass too — they review video content before
+    approving a course. Numeric ID → 404 on no-access. Drip release (cohort
+    start date / section ``unlocks_at``) → 422 with a timing message.
     """
 
     permission_classes = [IsAuthenticated, IsEmailVerified]
@@ -533,14 +683,15 @@ class LectureStreamUrlView(APIView):
         )
 
         is_instructor, enrollment = resolve_course_access(request.user, lecture.section.course)
-        if not is_instructor and enrollment is None and not lecture.is_preview:
+        privileged = is_instructor or is_platform_admin(request.user)
+        if not privileged and enrollment is None and not lecture.is_preview:
             return Response(
                 {'success': False, 'message': 'Lecture not found.'},
                 status=status.HTTP_404_NOT_FOUND,
             )
 
-        # Instructor preview bypasses drip release; learners don't.
-        if not is_instructor:
+        # Instructor/admin preview bypasses drip release; learners don't.
+        if not privileged:
             try:
                 assert_content_released(enrollment, lecture.section)
             except ContentNotReleasedError as exc:

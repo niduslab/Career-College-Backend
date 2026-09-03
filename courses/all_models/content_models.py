@@ -180,8 +180,11 @@ class Lecture(AuthoredModel):
         ready, or CloudFront is not configured (dev — caller falls back
         to the plain storage URL). Access mirrors LearnerLectureDetailView:
         course instructors always pass; learners need an active enrollment
-        or the lecture must be marked ``is_preview``.
+        or the lecture must be marked ``is_preview``. Platform admins also
+        pass — they review course content before approving it, and behind
+        CloudFront an unsigned URL is unplayable.
         """
+        from core.permissions import is_platform_admin
         from courses.cloudfront_signer import build_signed_hls_cookies
         from courses.services.learner_service import resolve_course_access
 
@@ -190,7 +193,8 @@ class Lecture(AuthoredModel):
 
         course = self.section.course
         is_instructor, enrollment = resolve_course_access(user, course)
-        if not is_instructor and enrollment is None and not self.is_preview:
+        privileged = is_instructor or is_platform_admin(user)
+        if not privileged and enrollment is None and not self.is_preview:
             return None
 
         video_asset = self.video_assets.filter(

@@ -1,5 +1,8 @@
 # 05) Lectures And Video Pipeline
 
+> For a plain-language tour of the same journey — upload through playback, written for
+> the whole team — see [`36-video-upload-and-playback-explained.md`](36-video-upload-and-playback-explained.md).
+
 ## Key files
 
 | File | Purpose |
@@ -85,7 +88,76 @@ Tracks a learner's playback position and completion status per lecture.
 
 ---
 
+## Upload: direct-to-S3 multipart
+
+The browser PUTs the file straight to S3 through presigned part URLs. Django brokers signatures and
+never streams the bytes, so request timeouts and proxy body limits stop being the real ceiling on
+lecture size.
+
+```
+POST lectures/{id}/video/initiate-upload/   { filename, content_type, file_size }
+  validates extension + video/* MIME + declared size
+  builds the key:  courses/{slug}/lectures/{id}/raw/{uuid}.{ext}
+  VideoAsset(video_file=<key>, is_active=False, status=uploading)
+  S3 create_multipart_upload
+  ← { videoAssetId, uploadId, objectKey, partSize, maxParts }
+         │
+         ▼  per part, 4 in parallel
+POST video-assets/{id}/part-url/   { uploadId, partNumber }
+  ← { presignedUrl }
+PUT  <presignedUrl>   body = file.slice(...)          browser → S3, no Django
+  ← 200, header  ETag: "d41d8c…"
+         │
+         ▼
+POST video-assets/{id}/complete-upload/   { uploadId, parts: [{partNumber, etag}] }
+  S3 complete_multipart_upload  →  head_object size check
+  is_active=True, status=processing, VideoProcessingJob(pending)
+  transaction.on_commit → transcode_video_asset_task.delay(...)
+```
+
+**The object key is never taken from the request.** `initiate` stamps it on `VideoAsset.video_file`
+and every later step reads it back via `_object_key(video_asset)`; a client-supplied key is ignored.
+Two reasons: an instructor holding two in-flight uploads could otherwise finalise asset X onto asset
+Y's object (S3 accepts — the `uploadId` and key it was handed still match each other), and deriving
+the key server-side means a forged `uploadId` can no longer be paired with the key it belongs to, so
+S3 rejects it outright.
+
+**`file_size` is a claim until it is measured.** The bytes bypass Django, so nothing enforces
+`AWS_S3_MAX_UPLOAD_SIZE` at upload time — a client can declare 1 KB and push 50 GB. `complete` runs
+`head_object` and compares `ContentLength` against the declared size; a mismatch deletes the object,
+fails the asset and returns 422. A `head_object` that itself errors logs a warning and accepts, so a
+transient S3 blip cannot discard an upload that genuinely succeeded.
+
+**Dead upload sessions are 422, not 500.** `NoSuchUpload` / `InvalidPart` / `InvalidPartOrder` /
+`EntityTooSmall` map to a 422 telling the client to restart the upload
+(`_S3_CLIENT_ERROR_MESSAGES`); anything else stays a 500.
+
+`reap_stuck_video_uploads_task` (hourly) flips assets stranded in `uploading` for over 24 h to
+`failed`, so a browser that vanished mid-upload doesn't leave a lecture showing "uploading…" forever.
+S3's own lifecycle rule reaps the orphaned parts.
+
+**Required bucket CORS** — without `ExposeHeaders: ["ETag"]` the browser hides the header from JS,
+the client has no ETags to send, and every upload fails at `complete`:
+
+```json
+[{
+  "AllowedOrigins": ["https://<frontend-origin>"],
+  "AllowedMethods": ["PUT", "GET", "HEAD"],
+  "AllowedHeaders": ["*"],
+  "ExposeHeaders": ["ETag"],
+  "MaxAgeSeconds": 3000
+}]
+```
+
+Tests: `courses/all_tests/test_video_upload.py`.
+
+---
+
 ## Video upload and transcoding pipeline
+
+> The multipart flow above is how the browser uploads today. The single-request path below is still
+> wired (`PATCH lectures/{id}/` with a `video_file`) and remains the entry point for any non-browser
+> client; both converge on the same `VideoAsset` row and the same transcoding task.
 
 ### Full flow diagram
 
@@ -146,30 +218,42 @@ transcode_video_asset_task(self, video_asset_id, job_id)
 transcode_video_asset(video_asset)
   [courses/transcoding.py]
          │
-         ├─ Locate input file: video_asset.video_file.path
-         ├─ ffprobe: probe duration_seconds from raw file
-         ├─ Build output path:
-         │    MEDIA_ROOT/courses/{slug}/lectures/{id}/hls/{asset_id}/
+         ├─ Locate input file (temp copy when storage has no local path;
+         │    S3 goes through boto3 download_file, not a read-and-recopy)
+         ├─ ffprobe ONCE: width, height, duration, fps, has_audio
+         │    → raises if unreadable; has_audio drives -map, so a swallowed
+         │      probe failure would ship a silently video-less ladder
+         ├─ Select ladder: drop every rendition taller than the source
+         │    (a 480p upload produces 360p/480p, never 720p/1080p; a source
+         │     below 360p gets one rendition at its own height)
          │
-         └─ For each rendition (5 total), run FFmpeg:
+         └─ Run ONE FFmpeg command for the whole ladder:
                ┌─────────────────────────────────────────────────────┐
-               │  Rendition   Video bitrate  Audio bitrate  Height   │
-               │  240p        400k           64k            240px    │
-               │  360p        800k           96k            360px    │
-               │  480p        1400k          128k           480px    │
-               │  720p        2500k          128k           720px    │
-               │  1080p       5000k          192k           1080px   │
+               │  Rendition   VBV ceiling   Audio bitrate   Height   │
+               │  360p        800k          96k             360px    │
+               │  480p        1400k         128k            480px    │
+               │  720p        2500k         128k            720px    │
+               │  1080p       5000k         192k            1080px   │
                └─────────────────────────────────────────────────────┘
-               FFmpeg settings per rendition:
-               • Codec: H.264 (profile:main), CRF=20
-               • Audio: AAC, 48kHz sample rate
+               • Decode once, `split=N` the decoded frames, encode all
+                 renditions in the same process — not N full passes
+               • Codec: H.264 via settings.VIDEO_ENCODER (libx264 default;
+                 h264_nvenc / h264_qsv are opt-in and need a GPU host)
+               • Preset veryfast, capped CRF 21 (maxrate = VBV ceiling)
+               • profile:v — main below 720p, high at 720p and above
+               • Audio: AAC, 48kHz, one track per rendition
                • Scale: -2:{height} (preserves aspect ratio)
-               • Keyframe: 48-frame GOP, scene detection disabled
-               • HLS: 6-second segments, VOD playlist type
-               • Output: {name}.m3u8 + {name}_000.ts, {name}_001.ts, ...
+               • Keyframe: GOP = round(fps × 6) = one per segment, scene
+                 detection off, so boundaries align across the ladder
+               • HLS: 6-second segments, VOD, independent_segments
+               • Output: {name}.m3u8 + {name}_000.ts, … + master.m3u8
          │
-         ├─ ffprobe first segment: detect actual width×height
-         ├─ Write master.m3u8 (EXT-X-STREAM-INF with bandwidth + resolution)
+         ├─ Rewrite master.m3u8: replace FFmpeg's BANDWIDTH (derived from the
+         │    VBV ceiling, which capped CRF rarely reaches) with the peak
+         │    measured from the finished segments, add AVERAGE-BANDWIDTH.
+         │    RESOLUTION and CODECS stay as FFmpeg wrote them.
+         ├─ Upload the whole tree via default_storage, HLS_UPLOAD_CONCURRENCY
+         │    files at a time
          ├─ Return (master_relative_path, renditions_list, duration_seconds)
          │
          ▼
@@ -201,25 +285,28 @@ After successful transcoding, the following files exist on disk:
 MEDIA_ROOT/
 └── courses/{course_slug}/lectures/{lecture_id}/hls/{video_asset_id}/
     ├── master.m3u8          ← main playlist (referenced in stream_master_playlist)
-    ├── 240p.m3u8            ← per-rendition playlist
-    ├── 240p_000.ts
-    ├── 240p_001.ts
-    ├── ...
-    ├── 360p.m3u8
+    ├── 360p.m3u8            ← per-rendition playlist
     ├── 360p_000.ts
+    ├── 360p_001.ts
+    ├── ...
+    ├── 480p.m3u8
+    ├── 480p_000.ts
     ├── ...
     ├── 720p.m3u8
     ├── 720p_000.ts
     └── ...
 ```
 
-The `master.m3u8` contains `#EXT-X-STREAM-INF` entries for each rendition:
+The `master.m3u8` contains `#EXT-X-STREAM-INF` entries for each rendition. The
+bandwidth figures are measured from the finished segments, not declared up
+front — see `_rewrite_master_playlist`:
 ```m3u8
 #EXTM3U
-#EXT-X-STREAM-INF:BANDWIDTH=400000,RESOLUTION=426x240
-240p.m3u8
-#EXT-X-STREAM-INF:BANDWIDTH=800000,RESOLUTION=640x360
+#EXT-X-VERSION:6
+#EXT-X-STREAM-INF:BANDWIDTH=654240,AVERAGE-BANDWIDTH=641803,RESOLUTION=640x360,CODECS="avc1.4d401e,mp4a.40.2"
 360p.m3u8
+#EXT-X-STREAM-INF:BANDWIDTH=1324272,AVERAGE-BANDWIDTH=1298110,RESOLUTION=854x480,CODECS="avc1.4d401e,mp4a.40.2"
+480p.m3u8
 ...
 ```
 
@@ -310,7 +397,8 @@ get_consumption_lecture(user, lecture_id)  ← learner_service.py
          │
          ▼
 LearnerLectureDetailSerializer:
-  • VIDEO: stream_master_playlist (HLS URL), stream_renditions
+  • VIDEO: stream_master_playlist (storage key — NOT playable, see
+           "Playback: CloudFront-signed HLS" below), stream_renditions
   • ARTICLE: article_content
   • progress: { watched_seconds, is_completed, last_watched_at }
   • duration_seconds (from active VideoAsset)
@@ -332,6 +420,62 @@ WatchProgress post_save signal → recalculate_progress if is_completed changed
          ▼
 200 OK — { success: true, data: { watched_seconds, is_completed, last_watched_at } }
 ```
+
+---
+
+## Playback: CloudFront-signed HLS
+
+`stream_master_playlist` is a **storage-relative key, not a playable URL**. Behind CloudFront the
+object is private; requesting it unsigned returns `403`, which the browser reports to the client as a
+CORS error (an error response carries no `Access-Control-Allow-Origin`). Clients must never build a
+playback URL from that field.
+
+```
+GET /api/v1/courses/lectures/{lecture_id}/stream/     ← LectureStreamUrlView
+  Permission: IsAuthenticated + IsEmailVerified, then object-level:
+    course instructor / platform admin  → always
+    learner                             → active enrollment, or lecture.is_preview
+  404 on no-access (numeric ID). 422 while the video is still transcoding.
+  Drip release (cohort start / section unlocks_at) → 422; instructors and
+  admins bypass it.
+         │
+         ▼
+Lecture.get_stream_context(user) → build_signed_hls_cookies(master_playlist)
+  [courses/cloudfront_signer.py]
+         │
+         ▼
+200 OK  body:    { data: { streamUrl: "https://<cdn>/media/.../master.m3u8" } }
+        headers: Set-Cookie × 3 — CloudFront-Policy / -Signature / -Key-Pair-Id
+                 Path=/media/courses/<slug>/lectures/<id>/hls/<asset>/
+                 Domain=CLOUDFRONT_COOKIE_DOMAIN; Secure; HttpOnly; SameSite=None
+```
+
+Signed **cookies**, not signed URLs: one policy authorizes the master playlist, every rendition
+playlist and every `.ts` segment under the same directory. A signed URL would only cover the master
+playlist. The policy is a wildcard over that directory, so the cookie set for one video cannot
+authorize another lecture.
+
+### Client contract — all three parts are required
+
+1. Fetch `/stream/` with credentials (`fetch(..., { credentials: "include" })`), or the browser
+   discards the `Set-Cookie` headers.
+2. Send the cookies back on every segment request. With hls.js that is
+   `new Hls({ xhrSetup: (xhr) => { xhr.withCredentials = true; } })`; for Safari's native HLS path,
+   `<video crossOrigin="use-credentials">`.
+3. Re-fetch before `CLOUDFRONT_SIGNED_URL_TTL_SECONDS` (default 2 h) elapses — the response re-sets
+   the cookies, which is what keeps a long viewing session alive. The URL is stable, so re-fetching
+   does not restart playback.
+
+Because the cookies travel cross-site, CloudFront must return `Access-Control-Allow-Origin` set to
+the **exact** frontend origin (`*` is illegal with credentials) plus
+`Access-Control-Allow-Credentials: true`, and must include `Origin` in the cache key — otherwise a
+response cached without those headers is served to every viewer. `CLOUDFRONT_DOMAIN` has to be a
+CNAME under `CLOUDFRONT_COOKIE_DOMAIN`; cookies scoped to the API's parent domain are never sent to
+`*.cloudfront.net`.
+
+**Local dev fallback:** with `CLOUDFRONT_DOMAIN` unset the signer returns `None` and the view falls
+back to `default_storage.url(...)` — a root-relative `/media/...` path, no cookies. Clients resolve
+it against the API origin, since relative to the page it would point at the frontend.
 
 ---
 

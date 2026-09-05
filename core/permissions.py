@@ -12,17 +12,27 @@ from rest_framework.permissions import BasePermission
 _ADMIN_LOGIN_AT_SESSION_KEY = 'admin_login_at'
 
 
+def is_platform_admin(user) -> bool:
+    """Platform-admin predicate for service/model code that isn't a DRF gate.
+
+    Same rule as ``IsPlatformAdmin``, callable where a permission class
+    doesn't fit (inside a service, or an access branch that also has to
+    consider enrollment).
+    """
+    return bool(
+        user
+        and getattr(user, 'is_authenticated', False)
+        and (user.is_staff or getattr(user, 'user_type', None) == 'admin')
+    )
+
+
 class IsPlatformAdmin(BasePermission):
     """Allow access only to platform admin/staff users."""
 
     message = 'Only administrators can perform this action.'
 
     def has_permission(self, request, view):
-        return bool(
-            request.user
-            and request.user.is_authenticated
-            and (request.user.is_staff or request.user.user_type == 'admin')
-        )
+        return is_platform_admin(request.user)
 
 
 class IsRecentlyAuthenticatedAdmin(IsPlatformAdmin):

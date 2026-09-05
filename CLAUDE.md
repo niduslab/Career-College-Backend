@@ -200,7 +200,7 @@ The following fields **must remain instructor-only** in any learner-facing respo
 
 | Field                                           | Audience                                                                                                                                                  | Status                                                                                                                                                                                                                          |
 | ----------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `Lecture.stream_master_playlist` (full HLS URL) | Exposed on `/learn/lectures/<id>/` for any caller with access; on `/catalog/` only when `Lecture.is_preview=True`                                         | Done                                                                                                                                                                                                                            |
+| `Lecture.stream_master_playlist` (storage key, not a playable URL — see *Video Pipeline*) | Exposed on `/learn/lectures/<id>/` for any caller with access; on `/catalog/` only when `Lecture.is_preview=True`                                         | Done                                                                                                                                                                                                                            |
 | `QuizAnswer.is_correct`                         | Instructor only (omit from learner payload pre-submit; score server-side; reveal the correct answer in the post-submit response only for wrong questions) | Done — `_LearnerQuizAnswerOptionSerializer` simply doesn't declare it; `build_quiz_attempt_result` controls reveal-on-wrong                                                                                                     |
 | `AssignmentQuestion.model_answer`               | Instructor only (omit from learner attempt payload; reveal in submission detail only when `status in (passed, failed)`)                                   | Done — `_LearnerAssignmentQuestionSerializer` doesn't declare it; `build_assignment_submission_result` controls reveal-on-graded; authoring `AssignmentQuestionSerializer.to_representation` strips it for non-instructors      |
 | `AssignmentQuestion.rubric`                     | Instructor only (grading-rule definition; never exposed to learners pre- or post-submit, including the snapshotted copy on submission rows)               | Done — `_LearnerAssignmentQuestionSerializer` doesn't declare it; authoring serializer strips it for non-instructors; `rubric_snapshot` on `AssignmentSubmissionAnswer` is consumed by the grader, never serialized to learners |
@@ -213,14 +213,24 @@ Pattern: define dedicated `Learner*Serializer` classes that simply don't declare
 
 1. Client uploads raw video → `VideoAsset` created with status `uploading`
 2. Celery task `transcode_video_asset_task` (`courses/tasks.py`) picks it up
-3. FFmpeg (`courses/transcoding.py`) produces 5 HLS renditions: 240p, 360p, 480p, 720p, 1080p
+3. FFmpeg (`courses/transcoding.py`) produces the HLS ladder — up to 4 renditions (360p/480p/720p/1080p), **capped at the source height** so nothing is upscaled
 4. Output uploaded to storage under `courses/{course_slug}/lectures/{lecture_id}/hls/{video_asset_id}/`
 5. `VideoAsset.status` transitions: `uploading → processing → ready | failed`
 6. `VideoProcessingJob` tracks per-job metadata
 
 **Storage-agnostic by design** — `transcoding.py` never assumes a local filesystem. The source video is read via `video_asset.video_file.open('rb')` (falls back to a temp-file copy when the storage backend's `.path()` raises `NotImplementedError`, e.g. S3), and ffmpeg's output (playlists + `.ts` segments) is generated into a temp dir, then pushed through `default_storage.save()` — so it lands wherever `STORAGES['default']` points (local disk in dev, S3 in production). Never write transcoding output directly under `settings.MEDIA_ROOT` — that bypasses the storage backend and breaks the moment `MEDIA_URL` points at S3/CDN instead of local disk.
 
-`FFMPEG_BINARY_PATH` and `FFPROBE_BINARY_PATH` env vars must point to installed binaries. See _Object Storage (S3)_ below for the storage backend switch.
+**The whole ladder is one FFmpeg invocation** — the source is decoded once, `split=N` fans the decoded frames out, and every rendition is encoded in that same process. Do not go back to one run per rendition: that re-decoded the source N times. Other invariants that are easy to break:
+
+- **`_probe_source` raises, never degrades.** Its `has_audio` result decides whether `-map a:0` is emitted, so a swallowed probe failure would produce a video-only ladder and still report success.
+- **360p is the ladder floor**, and `_select_ladder` never returns an empty list: a source shorter than 360p gets a single rendition at its own (even-rounded) height rather than an upscaled 360p.
+- **`_copy_remote_to` hands the destination path to boto3's `download_file`** when the backend exposes an `.obj`. Reading through `FieldFile.open('rb')` instead would make the S3 backend spool the whole object to its own temp file first, so the source lands on disk twice. The buffered-copy fallback keeps every other backend working.
+- **The master playlist's `BANDWIDTH` is measured, not declared.** The ladder runs capped CRF, so FFmpeg's own `BANDWIDTH` (derived from the VBV ceiling) overstates a lecture recording by a wide margin, and players pick renditions off that number. `_rewrite_master_playlist` replaces it with the peak measured from the finished segments and adds `AVERAGE-BANDWIDTH`; `RESOLUTION` and `CODECS` stay as FFmpeg wrote them, and the same measured value is what lands in `VideoAsset.renditions[].bandwidth`. Never write a nominal bitrate into either place.
+- **GOP is `round(fps × SEGMENT_SECONDS)`** — one keyframe per segment, scene detection off. Every rendition shares it, so segment boundaries align and players can switch quality mid-stream.
+- **`_run_ffmpeg_command` folds the stderr tail into the raised message.** `CalledProcessError.__str__` drops stderr, and `transcode_video_asset_task` stores `str(exc)` on `Lecture.transcoding_error` — without this the instructor sees a bare exit code.
+- Uploads fan out `HLS_UPLOAD_CONCURRENCY` at a time. Safe because `S3Boto3Storage` keeps its boto3 connection in a `threading.local()`. There is deliberately no `exists()` probe before `delete()` — deleting a missing key is a no-op on both backends, and the probe doubled the request count across hundreds of segments.
+
+`FFMPEG_BINARY_PATH` and `FFPROBE_BINARY_PATH` env vars must point to installed binaries. `VIDEO_ENCODER` selects a profile from `ENCODER_PROFILES` (`libx264` default; `h264_nvenc`/`h264_qsv` are opt-in and need a GPU on the worker host — each rendition opens its own encoder session, and consumer NVENC cards cap concurrent sessions). One ffmpeg run now saturates every core, so pin video workers to `--concurrency=1`. See *Object Storage (S3)* below for the storage backend switch.
 
 ### Identity Verification State Machine
 
@@ -767,29 +777,27 @@ except ValidationError as e:
 
 Critical ones not obvious from the code:
 
-| Variable                                                        | Notes                                                                                                                                                                                                                                                         |
-| --------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `FFMPEG_BINARY_PATH`                                            | Absolute path to `ffmpeg` binary                                                                                                                                                                                                                              |
-| `FFPROBE_BINARY_PATH`                                           | Absolute path to `ffprobe` binary                                                                                                                                                                                                                             |
-| `CELERY_BROKER_URL`                                             | Redis URL, e.g. `redis://127.0.0.1:6379/0`                                                                                                                                                                                                                    |
-| `JWT_COOKIE_SECURE`                                             | `False` for local HTTP dev                                                                                                                                                                                                                                    |
-| `GOOGLE_CLIENT_ID` / `GOOGLE_CLIENT_SECRET`                     | From Google Cloud Console                                                                                                                                                                                                                                     |
-| `LINKEDIN_CLIENT_ID` / `LINKEDIN_CLIENT_SECRET`                 | From LinkedIn Developer portal                                                                                                                                                                                                                                |
-| `FRONTEND_GOOGLE_CALLBACK` / `FRONTEND_LINKEDIN_CALLBACK`       | Frontend redirect after OAuth                                                                                                                                                                                                                                 |
-| `SSLCOMMERZ_STORE_ID` / `SSLCOMMERZ_STORE_PASSWORD`             | Sandbox store credentials from developer.sslcommerz.com                                                                                                                                                                                                       |
-| `SSLCOMMERZ_SANDBOX`                                            | `True` → sandbox base URL; `False` → live `securepay` host                                                                                                                                                                                                    |
-| `BACKEND_URL`                                                   | Public base URL used to build gateway callback URLs (IPN needs it reachable)                                                                                                                                                                                  |
-| `FRONTEND_PAYMENT_SUCCESS_PATH` / `_FAIL_PATH` / `_CANCEL_PATH` | Frontend paths the payment callbacks 302 to                                                                                                                                                                                                                   |
-| `AWS_STORAGE_BUCKET_NAME`                                       | Set in production to switch `default`/`staticfiles` storage to S3 (`storages.backends.s3boto3.S3Boto3Storage`/`S3StaticStorage`); blank/unset → local `FileSystemStorage`, the local-dev default                                                              |
-| `AWS_S3_CUSTOM_DOMAIN`                                          | Public domain (CloudFront/custom domain) media/static URLs are built from — must match what `MEDIA_URL` serves                                                                                                                                                |
-| `AWS_LOCATION`                                                  | Key prefix inside the bucket for the `default` (media) storage, e.g. `media`                                                                                                                                                                                  |
-| `AWS_S3_REGION_NAME`                                            | Bucket's AWS region; omit to let boto3 resolve it (e.g. from the EC2 instance region)                                                                                                                                                                         |
-| `AWS_S3_OBJECT_PARAMETERS`                                      | JSON dict of extra S3 object params, e.g. `{"CacheControl": "max-age=86400"}`                                                                                                                                                                                 |
-| `AI_SERVICES_BASE_URL`                                          | Base URL of the `Career-College-AI-Services` FastAPI project, e.g. `http://localhost:8001`. Covers **every** AI feature — a new one adds a path, not a var. Must not be publicly reachable                                                                    |
-| `AI_SERVICES_KEY`                                               | Shared secret sent as `X-Service-Key`; must equal that project's `SERVICE_API_KEY`. A mismatch shows up as a **503**, never a 401 — the upstream reason is never forwarded                                                                                    |
-| `AI_OUTLINE_RATE_LIMIT`                                         | Per-user cap on `ai/outline-preview/` (default `10/min`). Guards spend, not data — every call is a paid LLM request                                                                                                                                           |
-| `AI_ARTICLE_RATE_LIMIT`                                         | Per-user cap on `ai/article-lecture-preview/` (default `10/min`). Separate counter from the outline throttle — used once per lesson, not once per course |
-| `CERTIFICATE_VERIFY_PATH`                                       | Frontend path certificate verification URLs are built on (default `/verify/`), joined onto `FRONTEND_URL`. **`FRONTEND_URL` must be the production domain in production** — its value is printed verbatim on every certificate PDF and encoded in the QR code |
+| Variable | Notes |
+|----------|-------|
+| `FFMPEG_BINARY_PATH` | Absolute path to `ffmpeg` binary |
+| `FFPROBE_BINARY_PATH` | Absolute path to `ffprobe` binary |
+| `VIDEO_ENCODER` | `libx264` (default, CPU) · `h264_nvenc` (NVIDIA) · `h264_qsv` (Intel QSV). Unknown value falls back to `libx264` with a warning |
+| `FFMPEG_TIMEOUT_SECONDS` | Hard cap on one ladder run (default `10800`). Without it a hung ffmpeg pins a Celery worker forever — `acks_late` only redelivers once the worker dies |
+| `HLS_UPLOAD_CONCURRENCY` | Parallel segment uploads to storage (default `8`) |
+| `CELERY_BROKER_URL` | Redis URL, e.g. `redis://127.0.0.1:6379/0` |
+| `JWT_COOKIE_SECURE` | `False` for local HTTP dev |
+| `GOOGLE_CLIENT_ID` / `GOOGLE_CLIENT_SECRET` | From Google Cloud Console |
+| `LINKEDIN_CLIENT_ID` / `LINKEDIN_CLIENT_SECRET` | From LinkedIn Developer portal |
+| `FRONTEND_GOOGLE_CALLBACK` / `FRONTEND_LINKEDIN_CALLBACK` | Frontend redirect after OAuth |
+| `SSLCOMMERZ_STORE_ID` / `SSLCOMMERZ_STORE_PASSWORD` | Sandbox store credentials from developer.sslcommerz.com |
+| `SSLCOMMERZ_SANDBOX` | `True` → sandbox base URL; `False` → live `securepay` host |
+| `BACKEND_URL` | Public base URL used to build gateway callback URLs (IPN needs it reachable) |
+| `FRONTEND_PAYMENT_SUCCESS_PATH` / `_FAIL_PATH` / `_CANCEL_PATH` | Frontend paths the payment callbacks 302 to |
+| `AWS_STORAGE_BUCKET_NAME` | Set in production to switch `default`/`staticfiles` storage to S3 (`storages.backends.s3boto3.S3Boto3Storage`/`S3StaticStorage`); blank/unset → local `FileSystemStorage`, the local-dev default |
+| `AWS_S3_CUSTOM_DOMAIN` | Public domain (CloudFront/custom domain) media/static URLs are built from — must match what `MEDIA_URL` serves |
+| `AWS_LOCATION` | Key prefix inside the bucket for the `default` (media) storage, e.g. `media` |
+| `AWS_S3_REGION_NAME` | Bucket's AWS region; omit to let boto3 resolve it (e.g. from the EC2 instance region) |
+| `AWS_S3_OBJECT_PARAMETERS` | JSON dict of extra S3 object params, e.g. `{"CacheControl": "max-age=86400"}` |
 
 For local dev, `EMAIL_BACKEND=django.core.mail.backends.console.EmailBackend` prints OTP emails to the terminal instead of sending them.
 

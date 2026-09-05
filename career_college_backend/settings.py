@@ -257,6 +257,10 @@ MEDIA_ROOT = Path(env('MEDIA_ROOT', default=str(BASE_DIR / 'media')))
 FFMPEG_BINARY_PATH = env('FFMPEG_BINARY_PATH', default='ffmpeg')
 FFPROBE_BINARY_PATH = env('FFPROBE_BINARY_PATH', default='ffprobe')
 
+VIDEO_ENCODER = env('VIDEO_ENCODER', default='libx264')
+FFMPEG_TIMEOUT_SECONDS = env.int('FFMPEG_TIMEOUT_SECONDS', default=10800)  # 3 h
+HLS_UPLOAD_CONCURRENCY = env.int('HLS_UPLOAD_CONCURRENCY', default=8)
+
 # Object storage (S3). Set AWS_STORAGE_BUCKET_NAME to switch default/staticfiles
 # storage from local disk to S3 — used in production, unset for local dev.
 AWS_STORAGE_BUCKET_NAME = env('AWS_STORAGE_BUCKET_NAME', default='')
@@ -298,6 +302,28 @@ else:
             'BACKEND': 'django.contrib.staticfiles.storage.StaticFilesStorage',
         },
     }
+
+# CloudFront-signed video streaming (production only). Leave CLOUDFRONT_DOMAIN
+# blank in dev — the streaming view then falls back to the storage-relative
+# playlist URL.
+CLOUDFRONT_DOMAIN = env('CLOUDFRONT_DOMAIN', default='')
+CLOUDFRONT_KEY_ID = env('CLOUDFRONT_KEY_ID', default='')
+# The private key ships as a single-line env var with `\n` escapes; decode them
+# back to real newlines before PEM parsing.
+CLOUDFRONT_PRIVATE_KEY = env('CLOUDFRONT_PRIVATE_KEY', default='').replace('\\n', '\n')
+# Signed cookies expire after this many seconds (default 2 h — long enough for
+# a full lecture, short enough to blunt link sharing).
+CLOUDFRONT_SIGNED_URL_TTL_SECONDS = env.int('CLOUDFRONT_SIGNED_URL_TTL_SECONDS', default=7200)
+# Domain scope for the CloudFront-Policy/Signature/Key-Pair-Id cookies. Must
+# be a parent domain of both the API host and the CloudFront distribution
+# (e.g. ``.niduscareer.com`` for ``api.niduscareer.com`` + ``videos.niduscareer.com``).
+# Leave blank in dev — the fallback path serves an unsigned storage URL.
+CLOUDFRONT_COOKIE_DOMAIN = env('CLOUDFRONT_COOKIE_DOMAIN', default='')
+
+# Multipart upload guardrails for the browser-driven S3 direct upload flow.
+AWS_S3_MAX_UPLOAD_SIZE = env.int('AWS_S3_MAX_UPLOAD_SIZE', default=5 * 1024 * 1024 * 1024)  # 5 GB
+AWS_S3_MULTIPART_CHUNK_SIZE = env.int('AWS_S3_MULTIPART_CHUNK_SIZE', default=5 * 1024 * 1024)  # 5 MB
+AWS_S3_PRESIGNED_PART_URL_TTL_SECONDS = env.int('AWS_S3_PRESIGNED_PART_URL_TTL_SECONDS', default=3600)
 
 # Celery
 CELERY_BROKER_URL = env('CELERY_BROKER_URL', default='redis://127.0.0.1:6379/0')
@@ -353,6 +379,10 @@ CELERY_BEAT_SCHEDULE = {
     'advance-course-schedules': {
         'task': 'courses.tasks.advance_course_schedules_task',
         'schedule': 300.0,  # every 5 min
+    },
+    'reap-stuck-video-uploads': {
+        'task': 'courses.tasks.reap_stuck_video_uploads_task',
+        'schedule': 3600.0,  # hourly
     },
 }
 

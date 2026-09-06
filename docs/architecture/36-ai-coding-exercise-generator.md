@@ -48,35 +48,27 @@ first learner who clicks Submit, as an `evaluate (load)` error carrying a
 traceback. Nothing downstream catches it. (Docs 34 and 35 both said such a
 script "blocks submission" — it does not; that claim is corrected here.)
 
-### The two runs
+### The run
 
-Both go through the endpoint that already exists, with `mode='tests'`:
+One run, through the endpoint that already exists, with `mode='tests'`:
 
 | Run | Code sent | Must be |
 |---|---|---|
 | Solution | `solution_code` | every test **passed** — it is solvable and the script runs |
-| Starter | `starter_code` | tests actually ran and at least one did **not pass** |
 
-The second check catches the most common worthless result: starter code that
-already passes, which looks complete and is not an exercise.
+**The starter code is not executed.** Nothing checks that it fails the tests, or
+that it compiles at all. The prompt requires a starter that builds and fails
+(a Java or C++ `// TODO` stub with no `return` does not compile, so it must
+return a placeholder) and the schema rejects `starter_code == solution_code`,
+but both are string-level defences. A starter that already passes leaves the
+learner nothing to do while looking complete; reading the starter pane is the
+only check on that. The verified banner says as much.
 
-**"Did not pass" is not the same as "did not run."** A stub that returns `None`
-errors inside each test — a `TypeError`, not an assertion failure — and that is
-the healthy shape. But a starter that fails to *load or compile* also produces a
-non-passing run, and would sail through a naive check while handing the learner
-a file that is already broken. Every harness names that case `evaluate (load)`
-(Django synthesises `evaluation` when the container emits nothing at all), so a
-starter run consisting only of those markers is **not** verified, and the banner
-says which of the three failures it is. Java and C++ are where this bites: a
-`// TODO` stub with no `return` does not compile. The prompt therefore requires
-a starter that builds and fails, returning a placeholder where the language
-needs one.
-
-**The loop lives in the browser.** The review modal dispatches both runs and
-polls `getCodingTaskStatus`, exactly as the builder's Run tests button does.
-Django stays one fast request per AI call like its three siblings — folding an
-LLM call plus two container runs into a single request would put ~10 s of work
-behind a 45 s read timeout and hold a worker for all of it.
+**The loop lives in the browser.** The review modal dispatches the run and polls
+`getCodingTaskStatus`, exactly as the builder's Run tests button does. Django
+stays one fast request per AI call like its three siblings — folding an LLM call
+plus a container run into a single request would put ~10 s of work behind a 45 s
+read timeout and hold a worker for all of it.
 
 **Degradation.** If the runner is unavailable the verdict is *unknown*, shown as
 a plain warning, and accepting still works behind a second click. A draft nobody
@@ -111,6 +103,24 @@ Three defences, in order:
 
 `language` is read from the stored exercise, never the request body — it decides
 which contract applies, so a client-supplied one is ignored.
+
+**Expected values are the other failure mode.** A script in the right shape can
+still assert a number the model guessed at — `assertAlmostEqual(b, 0.0)` where
+the intercept is really 2/3. Only the sandbox catches that, and only after
+spending a container, so the prompt attacks it directly: choose the answer
+first and pick inputs that produce it exactly, never round an awkward float to
+something tidier, derive any non-obvious expectation in a one-line comment, and
+assert a property rather than a value where the numbers would be ugly.
+`MAX_TESTS` is 5 for the same reason — a few exact tests beat many guessed
+ones.
+
+**The mirror image is a test that is right and a solution that is not.** Asked
+for a boundary case, the model will invent one the description never promised —
+a sigmoid probed at z = -750, which overflows the straightforward
+`1 / (1 + exp(-z))` every learner writes. The prompt therefore ties test inputs
+back to the contract: only inputs the reference solution handles, and any
+boundary needing extra work (overflow guards, empty input, division by zero)
+must be stated in the description and implemented in `solution_code`.
 
 ---
 
@@ -154,8 +164,8 @@ inbound ceiling rather than a budgeting figure — four blocks at that size woul
 be ~4 000 output tokens on its own, and no request needs to reserve that.
 
 Measured on the free 8 000 TPM tier, the worst case (Java, challenge, every
-inbound field at its cap) reserves 4 581 output tokens against a 3 019-token
-prompt — 7 600 total — and still keeps 5 819 characters of lecture text.
+inbound field at its cap) reserves 4 582 output tokens against a 3 018-token
+prompt — 7 600 total — and still keeps 4 421 characters of lecture text.
 `tests/test_coding_generator.py` asserts the sum for every language/difficulty
 pair, so the guard cannot silently rot.
 

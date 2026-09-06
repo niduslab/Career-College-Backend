@@ -69,7 +69,7 @@ Header: `Authorization: {{instructor_token}}`
 | `starter_code` | A signature plus a TODO — must **not** solve it |
 | `solution_code` | A working implementation, different from the starter |
 | `evaluation_script` | A stdlib `unittest` module importing from `exercise` |
-| `test_names[]` | 3–8 plain-English lines |
+| `test_names[]` | 3–5 plain-English lines |
 | `language` | `python` — from the stored exercise |
 | `grounded` | `true` |
 
@@ -135,7 +135,7 @@ Send `{"exercise_id": {{exercise_id}}}`. **200**, with `difficulty` defaulting t
 
 ## 5. Verification — the point of the feature
 
-Two runs against the endpoint that already exists. Neither saves anything.
+One run against the endpoint that already exists. It saves nothing.
 
 **Solution must pass:**
 
@@ -154,16 +154,10 @@ Two runs against the endpoint that already exists. Neither saves anything.
 `state` is `SUCCESS`. Expect `result.status = "passed"` and
 `passed_tests == total_tests`.
 
-**Starter must fail:** the same call with `code` set to `starter_code`. Expect
-`result.status` **not** `"passed"`, with real per-test results. A stub returning
-`None` errors inside each test (`TypeError`, not an assertion failure) — that is
-the healthy shape, and `status` is `error` rather than `failed`.
-
-What must **not** happen is a single result named `evaluate (load)` or
-`evaluation`: that means the starter never compiled, so the learner would open a
-broken file. The UI treats it as **Not verified** even though the run did not
-pass. Worth checking explicitly on a Java or C++ exercise, where a `// TODO`
-stub with no `return` does not build.
+The starter code is **not** run — the verdict is the solution run alone. Read
+the starter pane by hand: it must compile and leave something to do. Worth a
+manual run with `code` set to `starter_code` on a Java or C++ exercise, where a
+`// TODO` stub with no `return` does not build.
 
 Then confirm the exercise is still untouched:
 `GET .../coding-exercises/{{exercise_id}}/` shows empty code fields.
@@ -175,7 +169,6 @@ Then confirm the exercise is still untouched:
 | Change | Expect |
 |---|---|
 | Break the solution (delete its `return`) and re-run | Solution run `failed`; the UI verdict is **Not verified** |
-| Set `code` to the solution for *both* runs | Starter run passes; verdict **Not verified**, "nothing for the learner to do" |
 | Stop Docker (`docker compose stop`) and run | The task errors; verdict **Unknown**, and accepting is still allowed behind a second click |
 
 ---
@@ -226,4 +219,5 @@ reason is in the Django log only.
 3. As an enrolled learner,
    `GET {{base_url}}/courses/learn/coding-exercises/{{exercise_id}}/` — the
    payload contains **neither** `solution_code` **nor** `evaluation_script`.
-4. Submit the starter code as that learner — it fails, exactly as §5 predicted.
+4. Submit the starter code as that learner — it must fail. Nothing verified
+   that for you; §5 covers only the solution.

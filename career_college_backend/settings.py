@@ -1,5 +1,6 @@
 import os
 import sys
+import tempfile
 from datetime import timedelta
 from pathlib import Path
 
@@ -254,6 +255,22 @@ STATIC_ROOT = Path(env('STATIC_ROOT', default=str(BASE_DIR / 'staticfiles')))
 # Media files (user uploads)
 MEDIA_URL = env('MEDIA_URL', default='/media/')
 MEDIA_ROOT = Path(env('MEDIA_ROOT', default=str(BASE_DIR / 'media')))
+
+# Scratch space for large files. Two consumers, both of which can need
+# gigabytes per video: Django buffers any upload over
+# FILE_UPLOAD_MAX_MEMORY_SIZE to disk here, and courses.transcoding stages the
+# whole HLS ladder here before shipping it to storage. The OS default lands on
+# the system drive, which on a dev box is rarely the drive with room -- point
+# this at one that has space. Unset keeps the OS default.
+FILE_UPLOAD_TEMP_DIR = env('FILE_UPLOAD_TEMP_DIR', default=None)
+if FILE_UPLOAD_TEMP_DIR:
+    FILE_UPLOAD_TEMP_DIR = str(Path(FILE_UPLOAD_TEMP_DIR))
+    Path(FILE_UPLOAD_TEMP_DIR).mkdir(parents=True, exist_ok=True)
+    # tempfile.tempdir, not just the Django setting: mkstemp/TemporaryDirectory
+    # in courses.transcoding read this, and the Celery worker imports settings
+    # the same way the web process does.
+    tempfile.tempdir = FILE_UPLOAD_TEMP_DIR
+
 FFMPEG_BINARY_PATH = env('FFMPEG_BINARY_PATH', default='ffmpeg')
 FFPROBE_BINARY_PATH = env('FFPROBE_BINARY_PATH', default='ffprobe')
 

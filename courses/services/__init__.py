@@ -127,11 +127,18 @@ from courses.services.ai_quiz_service import (
 )
 from courses.services.quiz_service import (
     MAX_AVOID_QUESTIONS,
-    MAX_SOURCE_CHARS,
     build_quiz_source_material,
     bulk_create_quiz_questions,
     collect_avoid_questions,
+)
+from courses.services.section_context_service import (
+    MAX_SOURCE_CHARS,
+    build_section_source_material,
     html_to_text,
+)
+from courses.services.ai_coding_service import (
+    AICodingError,
+    generate_coding_exercise,
 )
 from courses.services.learning_path_service import (
     LearningPathError,
@@ -248,6 +255,9 @@ __all__ = [
     'generate_quiz_questions',
     'MAX_AVOID_QUESTIONS',
     'MAX_SOURCE_CHARS',
+    'AICodingError',
+    'generate_coding_exercise',
+    'build_section_source_material',
     'build_quiz_source_material',
     'bulk_create_quiz_questions',
     'collect_avoid_questions',

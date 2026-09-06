@@ -32,11 +32,10 @@ from courses.services.ai_quiz_service import (
     generate_quiz_questions,
 )
 from courses.services.quiz_service import (
-    MAX_SOURCE_CHARS,
     build_quiz_source_material,
     collect_avoid_questions,
-    html_to_text,
 )
+from courses.services.section_context_service import MAX_SOURCE_CHARS, html_to_text
 
 URL = reverse('courses:ai-quiz-questions-preview')
 

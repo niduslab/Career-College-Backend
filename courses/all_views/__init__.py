@@ -1,5 +1,6 @@
 from courses.all_views.ai_views import (
     ArticleLecturePreviewAPIView,
+    CodingExercisePreviewAPIView,
     CourseOutlinePreviewAPIView,
     QuizQuestionsPreviewAPIView,
 )
@@ -146,6 +147,13 @@ from courses.all_views.learning_path_views import (
     LearningPathProgressView,
     MyLearningPathsView,
 )
+from courses.all_views.video_upload_views import (
+    LectureMultipartUploadAbortView,
+    LectureMultipartUploadCompleteView,
+    LectureMultipartUploadInitiateView,
+    LectureMultipartUploadPartUrlView,
+    LectureStreamUrlView,
+)
 
 __all__ = [
     'CourseInstructorInviteCreateView',
@@ -169,6 +177,7 @@ __all__ = [
     'CourseOutlinePreviewAPIView',
     'ArticleLecturePreviewAPIView',
     'QuizQuestionsPreviewAPIView',
+    'CodingExercisePreviewAPIView',
     'CodingExerciseDetailAPIView',
     'CodingExerciseRunAPIView',
     'CourseListAPIView',
@@ -258,4 +267,9 @@ __all__ = [
     'LearningPathMilestoneCreateView',
     'LearningPathMilestoneDetailView',
     'LearningPathMilestoneReorderView',
+    'LectureMultipartUploadInitiateView',
+    'LectureMultipartUploadPartUrlView',
+    'LectureMultipartUploadCompleteView',
+    'LectureMultipartUploadAbortView',
+    'LectureStreamUrlView',
 ]

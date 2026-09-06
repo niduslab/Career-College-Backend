@@ -123,3 +123,30 @@ class QuizQuestionsRequestSerializer(serializers.Serializer):
     extra_instructions = serializers.CharField(
         required=False, allow_blank=True, default='', max_length=2000,
     )
+
+
+class CodingExerciseRequestSerializer(serializers.Serializer):
+    """Body for the AI coding-exercise preview endpoint.
+
+    Takes an `exercise_id` for the same reasons as the quiz preview, plus one of
+    its own: `language` decides which evaluation-script contract the generated
+    script must satisfy, so it is read from the stored exercise and a
+    client-supplied one is ignored. Denial is a 404 per the identifier-type rule.
+    """
+
+    exercise_id = serializers.IntegerField(min_value=1)
+    difficulty = serializers.ChoiceField(
+        choices=['intro', 'core', 'challenge'],
+        required=False, default='core',
+    )
+    topic_hint = serializers.CharField(
+        required=False, allow_blank=True, default='', max_length=200,
+    )
+    # Other exercises in the module, so a regenerate is a different problem.
+    avoid_titles = serializers.ListField(
+        child=serializers.CharField(max_length=200),
+        required=False, default=list, max_length=10,
+    )
+    extra_instructions = serializers.CharField(
+        required=False, allow_blank=True, default='', max_length=2000,
+    )

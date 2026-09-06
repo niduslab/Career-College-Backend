@@ -38,7 +38,7 @@ The application is **not** a single process. Production needs at minimum:
 5. **Redis** — Celery broker/result backend **and** Channels channel layer (same URL today).
 6. **PostgreSQL** — with `pg_trgm` extension (trigram GIN indexes on `User.email/full_name` and `NidusCourse`).
 7. **Docker daemon + gVisor** — the coding-exercise runner (`courses/services/code_runner.py`) calls `docker.from_env()` and runs one container per submission with `runtime=runsc` in production (`RUNNER_RUNTIME_PROD`), ulimits, and per-language images (`RUNNER_IMAGE_PYTHON/JAVASCRIPT/CPP/JAVA`).
-8. **FFmpeg/FFprobe binaries** — video transcoding (`courses/transcoding.py`) produces 5 HLS renditions (240p–1080p).
+8. **FFmpeg/FFprobe binaries** — video transcoding (`courses/transcoding.py`) produces the HLS ladder (360p–1080p, capped at the source height) in a single FFmpeg run.
 
 ### 1.3 Database usage
 
@@ -85,7 +85,7 @@ Covered in 1.2 — Celery worker + beat are mandatory (video transcoding, assign
 From `.env.example` + `settings.py`:
 
 - **Secrets** (must live in a secret store, never in AMI/user-data/repo): `SECRET_KEY`, `DB_PASSWORD`, `EMAIL_HOST_PASSWORD`, `GOOGLE_CLIENT_SECRET`, `LINKEDIN_CLIENT_SECRET`, `SSLCOMMERZ_STORE_PASSWORD`.
-- **Config** (Parameter Store): `ALLOWED_HOSTS`, `DEBUG`, `DB_*`, `EMAIL_*`, `CELERY_BROKER_URL`, `FRONTEND_URL` + callback paths, `JWT_COOKIE_*`, `BACKEND_URL`, `FFMPEG_BINARY_PATH`, `FFPROBE_BINARY_PATH`, `RUNNER_IMAGE_*`, `RUNNER_RUNTIME_PROD`, rate limits, `TIME_ZONE`.
+- **Config** (Parameter Store): `ALLOWED_HOSTS`, `DEBUG`, `DB_*`, `EMAIL_*`, `CELERY_BROKER_URL`, `FRONTEND_URL` + callback paths, `JWT_COOKIE_*`, `BACKEND_URL`, `FFMPEG_BINARY_PATH`, `FFPROBE_BINARY_PATH`, `VIDEO_ENCODER`, `FFMPEG_TIMEOUT_SECONDS`, `HLS_UPLOAD_CONCURRENCY`, `RUNNER_IMAGE_*`, `RUNNER_RUNTIME_PROD`, rate limits, `TIME_ZONE`.
 - ⚠️ `TIME_ZONE = env('TIME_ZONE')` has **no default** — the app crashes at boot if unset. Same for `DB_ENGINE`/`DB_NAME`/`DB_USER`/`DB_PASSWORD`.
 
 ### 1.10 Potential deployment risks

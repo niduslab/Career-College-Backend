@@ -98,6 +98,7 @@ from courses.views import (
     QuizQuestionBulkCreateAPIView,
     QuizQuestionDetailAPIView,
     QuizQuestionListCreateAPIView,
+    CodingExercisePreviewAPIView,
     QuizQuestionsPreviewAPIView,
     SectionContentListCreateAPIView,
     SectionContentReorderAPIView,
@@ -111,6 +112,11 @@ from courses.views import (
     LearningPathMilestoneCreateView,
     LearningPathMilestoneDetailView,
     LearningPathMilestoneReorderView,
+    LectureMultipartUploadAbortView,
+    LectureMultipartUploadCompleteView,
+    LectureMultipartUploadInitiateView,
+    LectureMultipartUploadPartUrlView,
+    LectureStreamUrlView,
 )
 
 app_name = 'courses'
@@ -138,6 +144,7 @@ urlpatterns = [
     path('ai/outline-preview/', CourseOutlinePreviewAPIView.as_view(), name='ai-outline-preview'),
     path('ai/article-lecture-preview/', ArticleLecturePreviewAPIView.as_view(), name='ai-article-lecture-preview'),
     path('ai/quiz-questions-preview/', QuizQuestionsPreviewAPIView.as_view(), name='ai-quiz-questions-preview'),
+    path('ai/coding-exercise-preview/', CodingExercisePreviewAPIView.as_view(), name='ai-coding-exercise-preview'),
 
     # -------------------------------------------------------------------------
     # Enrollment (authenticated learner)
@@ -318,6 +325,35 @@ urlpatterns = [
     # -------------------------------------------------------------------------
     path('sections/<int:section_id>/lectures/', LectureListAPIView.as_view(), name='lecture-list'),
     path('lectures/<int:lecture_id>/', LectureDetailAPIView.as_view(), name='lecture-detail'),
+
+    # -------------------------------------------------------------------------
+    # Lecture video: direct-to-S3 multipart upload + CloudFront stream URL
+    # -------------------------------------------------------------------------
+    path(
+        'lectures/<int:lecture_id>/video/initiate-upload/',
+        LectureMultipartUploadInitiateView.as_view(),
+        name='lecture-video-initiate-upload',
+    ),
+    path(
+        'lectures/<int:lecture_id>/stream/',
+        LectureStreamUrlView.as_view(),
+        name='lecture-stream-url',
+    ),
+    path(
+        'video-assets/<int:video_asset_id>/part-url/',
+        LectureMultipartUploadPartUrlView.as_view(),
+        name='lecture-video-part-url',
+    ),
+    path(
+        'video-assets/<int:video_asset_id>/complete-upload/',
+        LectureMultipartUploadCompleteView.as_view(),
+        name='lecture-video-complete-upload',
+    ),
+    path(
+        'video-assets/<int:video_asset_id>/abort-upload/',
+        LectureMultipartUploadAbortView.as_view(),
+        name='lecture-video-abort-upload',
+    ),
 
     # -------------------------------------------------------------------------
     # Quizzes

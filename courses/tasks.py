@@ -585,6 +585,26 @@ def reap_stuck_coding_submissions_task(stale_minutes: int = 5):
 
 
 @shared_task
+def reap_stuck_video_uploads_task(stale_hours: int = 24):
+    """Flip abandoned VideoAsset rows stuck in UPLOADING to FAILED.
+
+    Direct-to-S3 multipart uploads that were initiated but never completed
+    leave a VideoAsset in UPLOADING and dangling S3 parts (the bucket
+    lifecycle rule aborts the parts after ~7 days; this task just tidies
+    the DB side sooner so lecture UIs don't show a permanent "uploading…").
+    Runs hourly via CELERY_BEAT_SCHEDULE.
+    """
+    cutoff = timezone.now() - timedelta(hours=stale_hours)
+    count = VideoAsset.objects.filter(
+        status=VideoAsset.Status.UPLOADING,
+        updated_at__lt=cutoff,
+    ).update(status=VideoAsset.Status.FAILED)
+    if count:
+        logger.warning('reap_stuck_video_uploads_task: reaped %d stuck upload(s).', count)
+    return {'reaped': count}
+
+
+@shared_task
 def expire_instructor_invites_task():
     """Mark pending invites past their expiry date as expired. Runs hourly via CELERY_BEAT_SCHEDULE."""
     from courses.models import CourseInstructorInvite

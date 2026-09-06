@@ -190,6 +190,41 @@ class Lecture(AuthoredModel):
     def __str__(self):
         return f'{self.section.title} - {self.title}'
 
+    def get_stream_context(self, user):
+        """Return CloudFront signed-cookie context for HLS playback, or None.
+
+        The returned dict carries the playback URL + three CloudFront-*
+        cookies + the Path/Domain the caller should Set-Cookie with.
+
+        Returns None when the caller has no access, the video is not
+        ready, or CloudFront is not configured (dev — caller falls back
+        to the plain storage URL). Access mirrors LearnerLectureDetailView:
+        course instructors always pass; learners need an active enrollment
+        or the lecture must be marked ``is_preview``. Platform admins also
+        pass — they review course content before approving it, and behind
+        CloudFront an unsigned URL is unplayable.
+        """
+        from core.permissions import is_platform_admin
+        from courses.cloudfront_signer import build_signed_hls_cookies
+        from courses.services.learner_service import resolve_course_access
+
+        if self.lecture_type != self.LectureType.VIDEO:
+            return None
+
+        course = self.section.course
+        is_instructor, enrollment = resolve_course_access(user, course)
+        privileged = is_instructor or is_platform_admin(user)
+        if not privileged and enrollment is None and not self.is_preview:
+            return None
+
+        video_asset = self.video_assets.filter(
+            is_active=True, status=VideoAsset.Status.READY
+        ).order_by('-created_at').first()
+        if not video_asset or not video_asset.master_playlist:
+            return None
+
+        return build_signed_hls_cookies(video_asset.master_playlist)
+
 
 def lectures_awaiting_content(queryset=None):
     """Video lectures with no active VideoAsset — the bulk form of

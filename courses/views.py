@@ -96,6 +96,7 @@ from courses.all_views import (
     QuizQuestionBulkCreateAPIView,
     QuizQuestionDetailAPIView,
     QuizQuestionListCreateAPIView,
+    CodingExercisePreviewAPIView,
     QuizQuestionsPreviewAPIView,
     SectionContentListCreateAPIView,
     SectionContentReorderAPIView,
@@ -109,6 +110,11 @@ from courses.all_views import (
     LearningPathMilestoneCreateView,
     LearningPathMilestoneDetailView,
     LearningPathMilestoneReorderView,
+    LectureMultipartUploadAbortView,
+    LectureMultipartUploadCompleteView,
+    LectureMultipartUploadInitiateView,
+    LectureMultipartUploadPartUrlView,
+    LectureStreamUrlView,
 )
 
 __all__ = [
@@ -157,6 +163,7 @@ __all__ = [
     'CourseOutlinePreviewAPIView',
     'ArticleLecturePreviewAPIView',
     'QuizQuestionsPreviewAPIView',
+    'CodingExercisePreviewAPIView',
     'CodingExerciseDetailAPIView',
     'CodingExerciseRunAPIView',
     'CourseListAPIView',
@@ -217,4 +224,9 @@ __all__ = [
     'LearningPathMilestoneCreateView',
     'LearningPathMilestoneDetailView',
     'LearningPathMilestoneReorderView',
+    'LectureMultipartUploadInitiateView',
+    'LectureMultipartUploadPartUrlView',
+    'LectureMultipartUploadCompleteView',
+    'LectureMultipartUploadAbortView',
+    'LectureStreamUrlView',
 ]
